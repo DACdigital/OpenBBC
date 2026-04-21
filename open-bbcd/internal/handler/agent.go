@@ -8,7 +8,7 @@ import (
 )
 
 type AgentRepository interface {
-	Create(ctx context.Context, input types.CreateAgentInput) (*types.Agent, error)
+	Create(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error)
 	GetByID(ctx context.Context, id string) (*types.Agent, error)
 	List(ctx context.Context) ([]*types.Agent, error)
 }
@@ -22,13 +22,13 @@ func NewAgentHandler(repo AgentRepository) *AgentHandler {
 }
 
 func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var input types.CreateAgentInput
-	if err := DecodeJSON(r, &input); err != nil {
+	var opts types.CreateAgentOpts
+	if err := DecodeJSON(r, &opts); err != nil {
 		Error(w, err)
 		return
 	}
 
-	agent, err := h.repo.Create(r.Context(), input)
+	agent, err := h.repo.Create(r.Context(), opts)
 	if err != nil {
 		Error(w, err)
 		return

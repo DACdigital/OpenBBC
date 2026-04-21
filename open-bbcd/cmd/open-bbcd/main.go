@@ -13,7 +13,10 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/database"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/handler"
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
+)
+
+const (
+	ShutdownTimeout = 10 * time.Second
 )
 
 func main() {
@@ -37,34 +40,13 @@ func run() error {
 	defer db.Close()
 	log.Printf("database connected")
 
-	agentRepo := repository.NewAgentRepository(db)
-	resourceRepo := repository.NewResourceRepository(db)
-
-	agentHandler := handler.NewAgentHandler(agentRepo)
-	resourceHandler := handler.NewResourceHandler(resourceRepo)
-
-	mux := http.NewServeMux()
-
-	// Health
-	mux.HandleFunc("GET /health", handler.Health)
-
-	// Agents
-	mux.HandleFunc("POST /agents", agentHandler.Create)
-	mux.HandleFunc("GET /agents", agentHandler.List)
-	mux.HandleFunc("GET /agents/{id}", agentHandler.Get)
-
-	// Resources
-	mux.HandleFunc("POST /resources", resourceHandler.Create)
-	mux.HandleFunc("GET /resources/{id}", resourceHandler.Get)
-	mux.HandleFunc("GET /agents/{agent_id}/resources", resourceHandler.ListByAgent)
-
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Handler:      handler.NewAPI(db),
+		ReadTimeout:  handler.ReadTimeout,
+		WriteTimeout: handler.WriteTimeout,
+		IdleTimeout:  handler.IdleTimeout,
 	}
 
 	done := make(chan os.Signal, 1)
@@ -80,7 +62,7 @@ func run() error {
 	<-done
 	log.Printf("shutting down...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 	defer cancel()
 
 	return server.Shutdown(ctx)

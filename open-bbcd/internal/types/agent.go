@@ -13,22 +13,22 @@ type Agent struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-type CreateAgentInput struct {
+type CreateAgentOpts struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Prompt      string `json:"prompt"`
 }
 
-func NewAgent(input CreateAgentInput) (*Agent, error) {
-	if input.Name == "" {
+func NewAgent(opts CreateAgentOpts) (*Agent, error) {
+	if opts.Name == "" {
 		return nil, ErrNameRequired
 	}
-	if input.Prompt == "" {
+	if opts.Prompt == "" {
 		return nil, ErrPromptRequired
 	}
 	return &Agent{
-		Name:        input.Name,
-		Description: input.Description,
-		Prompt:      input.Prompt,
+		Name:        opts.Name,
+		Description: opts.Description,
+		Prompt:      opts.Prompt,
 	}, nil
 }

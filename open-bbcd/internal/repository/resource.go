@@ -15,8 +15,8 @@ func NewResourceRepository(db *sql.DB) *ResourceRepository {
 	return &ResourceRepository{db: db}
 }
 
-func (r *ResourceRepository) Create(ctx context.Context, input types.CreateResourceInput) (*types.Resource, error) {
-	resource, err := types.NewResource(input)
+func (r *ResourceRepository) Create(ctx context.Context, opts types.CreateResourceOpts) (*types.Resource, error) {
+	resource, err := types.NewResource(opts)
 	if err != nil {
 		return nil, err
 	}

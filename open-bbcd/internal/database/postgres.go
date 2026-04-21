@@ -8,6 +8,13 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// Connection pool settings
+const (
+	MaxOpenConns    = 25
+	MaxIdleConns    = 5
+	ConnMaxLifetime = 5 * time.Minute
+)
+
 func NewPostgres(url string) (*sql.DB, error) {
 	if url == "" {
 		return nil, errors.New("database URL is required")
@@ -18,9 +25,9 @@ func NewPostgres(url string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetMaxOpenConns(MaxOpenConns)
+	db.SetMaxIdleConns(MaxIdleConns)
+	db.SetConnMaxLifetime(ConnMaxLifetime)
 
 	if err := db.Ping(); err != nil {
 		db.Close()

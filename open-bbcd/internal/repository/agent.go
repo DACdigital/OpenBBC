@@ -15,8 +15,8 @@ func NewAgentRepository(db *sql.DB) *AgentRepository {
 	return &AgentRepository{db: db}
 }
 
-func (r *AgentRepository) Create(ctx context.Context, input types.CreateAgentInput) (*types.Agent, error) {
-	agent, err := types.NewAgent(input)
+func (r *AgentRepository) Create(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error) {
+	agent, err := types.NewAgent(opts)
 	if err != nil {
 		return nil, err
 	}

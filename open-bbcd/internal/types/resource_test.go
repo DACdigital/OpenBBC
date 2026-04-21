@@ -5,24 +5,24 @@ import (
 )
 
 func TestNewResource_Valid(t *testing.T) {
-	input := CreateResourceInput{
+	opts := CreateResourceOpts{
 		AgentID: "agent-123",
 		Name:    "get_users",
 		Prompt:  "Fetches users from API",
 	}
 
-	resource, err := NewResource(input)
+	resource, err := NewResource(opts)
 	if err != nil {
 		t.Fatalf("NewResource() error = %v", err)
 	}
-	if resource.Name != input.Name {
-		t.Errorf("Name = %q, want %q", resource.Name, input.Name)
+	if resource.Name != opts.Name {
+		t.Errorf("Name = %q, want %q", resource.Name, opts.Name)
 	}
 }
 
 func TestNewResource_MissingAgentID(t *testing.T) {
-	input := CreateResourceInput{Name: "test", Prompt: "test"}
-	_, err := NewResource(input)
+	opts := CreateResourceOpts{Name: "test", Prompt: "test"}
+	_, err := NewResource(opts)
 	if err != ErrAgentRequired {
 		t.Errorf("error = %v, want %v", err, ErrAgentRequired)
 	}

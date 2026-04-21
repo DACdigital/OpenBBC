@@ -12,13 +12,13 @@ import (
 )
 
 type mockResourceRepo struct {
-	createFn func(ctx context.Context, input types.CreateResourceInput) (*types.Resource, error)
+	createFn func(ctx context.Context, opts types.CreateResourceOpts) (*types.Resource, error)
 	getFn    func(ctx context.Context, id string) (*types.Resource, error)
 	listFn   func(ctx context.Context, agentID string) ([]*types.Resource, error)
 }
 
-func (m *mockResourceRepo) Create(ctx context.Context, input types.CreateResourceInput) (*types.Resource, error) {
-	return m.createFn(ctx, input)
+func (m *mockResourceRepo) Create(ctx context.Context, opts types.CreateResourceOpts) (*types.Resource, error) {
+	return m.createFn(ctx, opts)
 }
 
 func (m *mockResourceRepo) GetByID(ctx context.Context, id string) (*types.Resource, error) {
@@ -31,12 +31,12 @@ func (m *mockResourceRepo) ListByAgentID(ctx context.Context, agentID string) ([
 
 func TestResourceHandler_Create_Success(t *testing.T) {
 	h := NewResourceHandler(&mockResourceRepo{
-		createFn: func(ctx context.Context, input types.CreateResourceInput) (*types.Resource, error) {
+		createFn: func(ctx context.Context, opts types.CreateResourceOpts) (*types.Resource, error) {
 			return &types.Resource{
 				ID:      "res-id",
-				AgentID: input.AgentID,
-				Name:    input.Name,
-				Prompt:  input.Prompt,
+				AgentID: opts.AgentID,
+				Name:    opts.Name,
+				Prompt:  opts.Prompt,
 			}, nil
 		},
 	})
@@ -61,7 +61,7 @@ func TestResourceHandler_Create_Success(t *testing.T) {
 
 func TestResourceHandler_Create_ValidationError(t *testing.T) {
 	h := NewResourceHandler(&mockResourceRepo{
-		createFn: func(ctx context.Context, input types.CreateResourceInput) (*types.Resource, error) {
+		createFn: func(ctx context.Context, opts types.CreateResourceOpts) (*types.Resource, error) {
 			return nil, types.ErrNameRequired
 		},
 	})

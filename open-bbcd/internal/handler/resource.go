@@ -8,7 +8,7 @@ import (
 )
 
 type ResourceRepository interface {
-	Create(ctx context.Context, input types.CreateResourceInput) (*types.Resource, error)
+	Create(ctx context.Context, opts types.CreateResourceOpts) (*types.Resource, error)
 	GetByID(ctx context.Context, id string) (*types.Resource, error)
 	ListByAgentID(ctx context.Context, agentID string) ([]*types.Resource, error)
 }
@@ -22,13 +22,13 @@ func NewResourceHandler(repo ResourceRepository) *ResourceHandler {
 }
 
 func (h *ResourceHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var input types.CreateResourceInput
-	if err := DecodeJSON(r, &input); err != nil {
+	var opts types.CreateResourceOpts
+	if err := DecodeJSON(r, &opts); err != nil {
 		Error(w, err)
 		return
 	}
 
-	resource, err := h.repo.Create(r.Context(), input)
+	resource, err := h.repo.Create(r.Context(), opts)
 	if err != nil {
 		Error(w, err)
 		return

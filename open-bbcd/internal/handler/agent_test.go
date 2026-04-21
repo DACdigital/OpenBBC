@@ -12,13 +12,13 @@ import (
 )
 
 type mockAgentRepo struct {
-	createFn func(ctx context.Context, input types.CreateAgentInput) (*types.Agent, error)
+	createFn func(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error)
 	getFn    func(ctx context.Context, id string) (*types.Agent, error)
 	listFn   func(ctx context.Context) ([]*types.Agent, error)
 }
 
-func (m *mockAgentRepo) Create(ctx context.Context, input types.CreateAgentInput) (*types.Agent, error) {
-	return m.createFn(ctx, input)
+func (m *mockAgentRepo) Create(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error) {
+	return m.createFn(ctx, opts)
 }
 
 func (m *mockAgentRepo) GetByID(ctx context.Context, id string) (*types.Agent, error) {
@@ -31,11 +31,11 @@ func (m *mockAgentRepo) List(ctx context.Context) ([]*types.Agent, error) {
 
 func TestAgentHandler_Create_Success(t *testing.T) {
 	h := NewAgentHandler(&mockAgentRepo{
-		createFn: func(ctx context.Context, input types.CreateAgentInput) (*types.Agent, error) {
+		createFn: func(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error) {
 			return &types.Agent{
 				ID:     "test-id",
-				Name:   input.Name,
-				Prompt: input.Prompt,
+				Name:   opts.Name,
+				Prompt: opts.Prompt,
 			}, nil
 		},
 	})
@@ -60,7 +60,7 @@ func TestAgentHandler_Create_Success(t *testing.T) {
 
 func TestAgentHandler_Create_ValidationError(t *testing.T) {
 	h := NewAgentHandler(&mockAgentRepo{
-		createFn: func(ctx context.Context, input types.CreateAgentInput) (*types.Agent, error) {
+		createFn: func(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error) {
 			return nil, types.ErrNameRequired
 		},
 	})

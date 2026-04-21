@@ -9,7 +9,7 @@ import (
 func TestResourceRepository_Create_ValidationError(t *testing.T) {
 	repo := NewResourceRepository(nil)
 
-	_, err := repo.Create(nil, types.CreateResourceInput{})
+	_, err := repo.Create(nil, types.CreateResourceOpts{})
 	if err != types.ErrAgentRequired {
 		t.Errorf("error = %v, want %v", err, types.ErrAgentRequired)
 	}
