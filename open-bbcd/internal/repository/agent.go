@@ -127,15 +127,15 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentChain, 
 	}
 
 	// Walk each agent up to its chain root.
-	rootOf := func(a *types.Agent) string {
-		for a.ParentVersionID != nil {
-			parent, ok := byID[*a.ParentVersionID]
+	rootOf := func(cur *types.Agent) string {
+		for cur.ParentVersionID != nil {
+			parent, ok := byID[*cur.ParentVersionID]
 			if !ok {
 				break
 			}
-			a = parent
+			cur = parent
 		}
-		return a.ID
+		return cur.ID
 	}
 
 	type accumulator struct {
@@ -148,6 +148,8 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentChain, 
 	for _, a := range all {
 		rootID := rootOf(a)
 		if _, exists := chainMap[rootID]; !exists {
+			// Chain name is always the root agent's name; agent names are
+			// immutable per chain so this is stable across all versions.
 			chainMap[rootID] = &accumulator{name: byID[rootID].Name}
 			rootOrder = append(rootOrder, rootID)
 		}
@@ -174,6 +176,9 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentChain, 
 func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
 	if opts.Name == "" {
 		return nil, types.ErrNameRequired
+	}
+	if r.db == nil {
+		return nil, errors.New("repository: no database connection")
 	}
 	wizardJSON, err := json.Marshal(opts.WizardInput)
 	if err != nil {
