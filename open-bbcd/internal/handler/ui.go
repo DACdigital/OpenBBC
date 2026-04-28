@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"html/template"
 	"io/fs"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -74,6 +76,18 @@ func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, 
 	}, nil
 }
 
+// renderTemplate buffers template execution so errors don't corrupt a partial response.
+func renderTemplate(w http.ResponseWriter, tmpl *template.Template, name string, data any) {
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+		log.Printf("template %q error: %v", name, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	buf.WriteTo(w)
+}
+
 type agentsPageData struct {
 	Active string
 	Chains []types.AgentChain
@@ -85,8 +99,7 @@ func (h *UIHandler) AgentsList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	h.agentsTmpl.ExecuteTemplate(w, "layout", agentsPageData{Active: "agents", Chains: chains})
+	renderTemplate(w, h.agentsTmpl, "layout", agentsPageData{Active: "agents", Chains: chains})
 }
 
 type wizardPageData struct {
@@ -94,8 +107,7 @@ type wizardPageData struct {
 }
 
 func (h *UIHandler) WizardPage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	h.wizardTmpl.ExecuteTemplate(w, "layout", wizardPageData{Active: "agents"})
+	renderTemplate(w, h.wizardTmpl, "layout", wizardPageData{Active: "agents"})
 }
 
 type stepData struct {
@@ -148,6 +160,5 @@ func (h *UIHandler) WizardStep(w http.ResponseWriter, r *http.Request) {
 		CurrentValue: currentValue,
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	h.stepTmpl.ExecuteTemplate(w, "step", data)
+	renderTemplate(w, h.stepTmpl, "step", data)
 }
