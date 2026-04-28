@@ -52,6 +52,7 @@ func NewAPI(db *sql.DB) http.Handler {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 
 	// UI routes.
+	// Catch-all: redirect root to /agents/ui; 404 everything else unmatched.
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -68,7 +69,7 @@ func NewAPI(db *sql.DB) http.Handler {
 	mux.HandleFunc("GET /health", Health)
 	mux.HandleFunc("POST /agents", agentHandler.Create)
 	mux.HandleFunc("GET /agents", agentHandler.List)
-	mux.HandleFunc("GET /agents/{id}", agentHandler.Get)
+	mux.HandleFunc("GET /agents/{id}", agentHandler.Get) // fixed paths above take precedence
 	mux.HandleFunc("POST /resources", resourceHandler.Create)
 	mux.HandleFunc("GET /resources/{id}", resourceHandler.Get)
 	mux.HandleFunc("GET /agents/{agent_id}/resources", resourceHandler.ListByAgent)
