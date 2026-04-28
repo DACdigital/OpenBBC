@@ -19,7 +19,7 @@ func TestAgentRepository_Create_ValidationError(t *testing.T) {
 func TestAgentRepository_CreateFromWizard_ValidationError(t *testing.T) {
 	repo := NewAgentRepository(nil)
 	_, err := repo.CreateFromWizard(context.Background(), types.CreateAgentFromWizardOpts{Name: ""})
-	if err == nil {
-		t.Error("expected error for empty name")
+	if err != types.ErrNameRequired {
+		t.Errorf("error = %v, want %v", err, types.ErrNameRequired)
 	}
 }
