@@ -150,9 +150,24 @@ Back/Next navigation: Next renders the next step partial via htmx; Back renders 
 
 `POST /agents/wizard` (handler in `wizard.go`):
 
-1. Parse multipart form — collect all fields (keys come from schema, so no hardcoded field names)
+1. Parse multipart form — collect all fields (keys come from schema `wizard` block, no hardcoded field names)
 2. Schema already loaded in memory at startup — note schema version `"v1"`
-3. Merge wizard text answers + uploaded discovery YAML → single combined YAML document tagged with `schema_version: v1`
+3. Assemble combined YAML with three root keys:
+
+```yaml
+version: v1
+wizard:
+  name: "Customer Support Bot"
+  scope: "Handle customer inquiries end-to-end..."
+  should_do: "Answer product questions, track orders..."
+  should_not_do: "Never discuss competitor pricing..."
+  business_domain: "E-commerce platform for fashion brands..."
+discovery:
+  # raw content of the uploaded discovery YAML merged here
+  intents:
+    - name: track_order
+      resources: [get_order, get_shipment]
+```
 4. Insert agent row:
    - `name` = step 1 input
    - `status` = `INITIALIZING`
@@ -170,36 +185,38 @@ User lands back on the list and sees their new agent in `INITIALIZING` state.
 
 `schemas/wizard-v1.yaml` is embedded in the binary via `//go:embed`. It defines the questions the wizard presents (field names, labels, types). Example structure:
 
+**Schema definition file (`wizard-v1.yaml`):**
+
 ```yaml
 version: v1
-fields:
-  - key: name
+wizard:
+  name:
     label: "Agent name"
     type: text
     required: true
-  - key: scope
+  scope:
     label: "Describe the scope of your agent"
     type: textarea
     required: true
-  - key: should_do
+  should_do:
     label: "What should your agent do?"
     type: textarea
     required: true
-  - key: should_not_do
+  should_not_do:
     label: "What should your agent never do?"
     type: textarea
     required: true
-  - key: business_domain
+  business_domain:
     label: "Describe your platform business domain"
     type: textarea
     required: true
-  - key: discovery_file
+  discovery_file:
     label: "Upload discovery file"
     type: file
     required: false
 ```
 
-The wizard renders steps dynamically from this schema (one field per step). When aicademy changes the expected input format:
+The `wizard` block is a map of technical variable names → field metadata. Order of steps follows key order (YAML spec preserves insertion order). The wizard renders steps dynamically from this schema (one field per step). When aicademy changes the expected input format:
 
 1. New file `schemas/wizard-v2.yaml` is added
 2. Handler updated to read `wizard-v2.yaml` and tag agents with `schema_version: "v2"`
