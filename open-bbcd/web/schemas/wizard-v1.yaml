@@ -28,5 +28,5 @@ wizard:
   discovery_file:
     label: "Upload discovery file"
     type: file
-    required: false
+    required: true
     order: 6
