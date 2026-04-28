@@ -77,12 +77,7 @@ open-bbcd/
 │   │   ├── agents.html                (agents list page)
 │   │   └── wizard/
 │   │       ├── wizard.html            (wizard container with single <form>)
-│   │       ├── step1.html             (Name — htmx partial)
-│   │       ├── step2.html             (Scope)
-│   │       ├── step3.html             (What it should do)
-│   │       ├── step4.html             (What it should never do)
-│   │       ├── step5.html             (Business domain)
-│   │       └── step6.html             (Discovery file upload)
+│   │       └── step.html              (generic step partial — renders any field type)
 │   └── static/
 │       └── htmx.min.js                (vendored, no CDN)
 ├── schemas/
@@ -131,22 +126,23 @@ Persistent left sidebar with nav links. Only **Agents** is active; Datasets, Sco
 
 ### Wizard (`wizard/`)
 
-Single `<form action="/agents/wizard" method="POST" enctype="multipart/form-data">` wraps all 6 steps. htmx swaps step content via `GET /agents/new/step/{n}`, but all inputs remain in the DOM so the final submit sends everything in one request. No server session state — if the user closes the tab, progress is lost (acceptable).
+Single `<form action="/agents/wizard" method="POST" enctype="multipart/form-data">` wraps all steps. htmx swaps step content via `GET /agents/new/step/{n}`, but all inputs remain in the DOM so the final submit sends everything in one request. No server session state — if the user closes the tab, progress is lost (acceptable).
 
-**Progress indicator:** numbered dots (1–6), completed steps show a checkmark, current step highlighted.
+**Steps are driven entirely by the schema.** The handler loads `wizard-v1.yaml` at startup, holds it in memory, and serves field N for step N. The template (`step.html`) is a single generic partial that branches on field type (`text`, `textarea`, `file`). Adding, removing, or reordering questions requires only a schema change — no template or handler code changes.
 
-**Steps:**
+**Progress indicator:** numbered dots (total count from schema), completed steps show a checkmark, current step highlighted.
 
-| # | Label | Input type |
-|---|-------|------------|
-| 1 | Agent name | `<input type="text">` — becomes immutable chain name |
-| 2 | Scope of agent | `<textarea>` |
-| 3 | What it should do | `<textarea>` |
-| 4 | What it should never do | `<textarea>` |
-| 5 | Business domain | `<textarea>` |
-| 6 | Upload discovery file | `<input type="file">` (YAML) |
+**`step.html` renders based on field type:**
 
-Back/Next navigation: Next renders the next step partial via htmx; Back renders the previous step partial. Previous steps' inputs remain as hidden fields. Navigating Back discards the current step's unsaved input (acceptable — same trade-off as closing a modal).
+| Field type | Rendered as |
+|------------|-------------|
+| `text` | `<input type="text" name="{key}">` |
+| `textarea` | `<textarea name="{key}">` |
+| `file` | `<input type="file" name="{key}" accept=".yaml,.yml">` |
+
+Back/Next navigation: Next renders the next step partial via htmx; Back renders the previous step partial. Previous steps' inputs remain as hidden fields in the DOM. Navigating Back discards the current step's unsaved input (acceptable — same trade-off as closing a modal).
+
+**Future:** when aicademy exposes the schema over an API, the handler fetches it remotely instead of reading the embedded file. The wizard rendering code does not change.
 
 ---
 
@@ -154,9 +150,9 @@ Back/Next navigation: Next renders the next step partial via htmx; Back renders 
 
 `POST /agents/wizard` (handler in `wizard.go`):
 
-1. Parse multipart form — collect text fields + discovery YAML file
-2. Read `schemas/wizard-v1.yaml` (embedded), note schema version `"v1"`
-3. Merge wizard answers + discovery YAML → single combined YAML document tagged with `schema_version: v1`
+1. Parse multipart form — collect all fields (keys come from schema, so no hardcoded field names)
+2. Schema already loaded in memory at startup — note schema version `"v1"`
+3. Merge wizard text answers + uploaded discovery YAML → single combined YAML document tagged with `schema_version: v1`
 4. Insert agent row:
    - `name` = step 1 input
    - `status` = `INITIALIZING`
