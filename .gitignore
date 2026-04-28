@@ -99,7 +99,6 @@ go.work.sum
 vendor/
 
 # Build output
-/open-bbcd
 /aicademy
 
 # =========================
