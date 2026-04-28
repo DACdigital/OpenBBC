@@ -1,0 +1,29 @@
+{{define "content"}}
+<div class="page-header">
+  <h1>Agents</h1>
+  <a href="/agents/new" class="btn-primary">+ Create Alpha Agent</a>
+</div>
+
+{{if .Chains}}
+{{range .Chains}}
+<div class="agent-group">
+  <div class="group-header">
+    <span class="group-name">{{.Name}}</span>
+    <span class="group-count">{{len .Versions}} {{if eq (len .Versions) 1}}version{{else}}versions{{end}}</span>
+  </div>
+  <table class="version-table">
+    {{range .Versions}}
+    <tr>
+      <td class="version-num {{if gt .VersionNum 1}}old{{end}}">v{{.VersionNum}}</td>
+      <td>{{.Agent.Name}}</td>
+      <td class="version-date">{{.Agent.CreatedAt.Format "Jan 2, 2006"}}</td>
+      <td><span class="badge badge-{{.Agent.Status | statusClass}}">{{.Agent.Status}}</span></td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+{{else}}
+<p class="empty-state">No agents yet. Create your first alpha agent to get started.</p>
+{{end}}
+{{end}}

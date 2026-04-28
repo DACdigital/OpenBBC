@@ -1,0 +1,12 @@
+{{define "content"}}
+<a href="/agents/ui" class="wizard-back">← Back to Agents</a>
+<div class="wizard-title">Create Alpha Agent</div>
+
+<form id="wizard-form" action="/agents/wizard" method="POST" enctype="multipart/form-data">
+  <div id="form-body"
+       hx-get="/agents/new/step/1"
+       hx-trigger="load"
+       hx-target="#form-body">
+  </div>
+</form>
+{{end}}
