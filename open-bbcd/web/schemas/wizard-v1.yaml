@@ -1,0 +1,32 @@
+version: v1
+wizard:
+  name:
+    label: "Agent name"
+    type: text
+    required: true
+    order: 1
+  scope:
+    label: "Describe the scope of your agent"
+    type: textarea
+    required: true
+    order: 2
+  should_do:
+    label: "What should your agent do?"
+    type: textarea
+    required: true
+    order: 3
+  should_not_do:
+    label: "What should your agent never do?"
+    type: textarea
+    required: true
+    order: 4
+  business_domain:
+    label: "Describe your platform business domain"
+    type: textarea
+    required: true
+    order: 5
+  discovery_file:
+    label: "Upload discovery file"
+    type: file
+    required: false
+    order: 6
