@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -17,11 +18,12 @@ type GroupedAgentRepository interface {
 }
 
 type UIHandler struct {
-	agentRepo  GroupedAgentRepository
-	schema     *types.WizardSchema
-	agentsTmpl *template.Template
-	wizardTmpl *template.Template
-	stepTmpl   *template.Template
+	agentRepo       GroupedAgentRepository
+	schema          *types.WizardSchema
+	agentsTmpl      *template.Template
+	agentVersionsTmpl *template.Template
+	wizardTmpl      *template.Template
+	stepTmpl        *template.Template
 }
 
 func statusClass(status string) string {
@@ -42,11 +44,20 @@ func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, 
 		"statusClass": statusClass,
 		"add":         func(a, b int) int { return a + b },
 		"sub":         func(a, b int) int { return a - b },
+		"urlEncode":   url.PathEscape,
 	}
 
 	agentsTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
 		"templates/agents.html",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	agentVersionsTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/layout.html",
+		"templates/agent-versions.html",
 	)
 	if err != nil {
 		return nil, err
@@ -68,11 +79,12 @@ func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, 
 	}
 
 	return &UIHandler{
-		agentRepo:  agentRepo,
-		schema:     schema,
-		agentsTmpl: agentsTmpl,
-		wizardTmpl: wizardTmpl,
-		stepTmpl:   stepTmpl,
+		agentRepo:         agentRepo,
+		schema:            schema,
+		agentsTmpl:        agentsTmpl,
+		agentVersionsTmpl: agentVersionsTmpl,
+		wizardTmpl:        wizardTmpl,
+		stepTmpl:          stepTmpl,
 	}, nil
 }
 
@@ -100,6 +112,36 @@ func (h *UIHandler) AgentsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	renderTemplate(w, h.agentsTmpl, "layout", agentsPageData{Active: "agents", Chains: chains})
+}
+
+type agentVersionsPageData struct {
+	Active   string
+	Name     string
+	Versions []types.AgentVersion
+}
+
+func (h *UIHandler) AgentVersions(w http.ResponseWriter, r *http.Request) {
+	name, err := url.PathUnescape(r.PathValue("name"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	chains, err := h.agentRepo.ListGrouped(r.Context())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	for _, chain := range chains {
+		if chain.Name == name {
+			renderTemplate(w, h.agentVersionsTmpl, "layout", agentVersionsPageData{
+				Active:   "agents",
+				Name:     chain.Name,
+				Versions: chain.Versions,
+			})
+			return
+		}
+	}
+	http.NotFound(w, r)
 }
 
 type wizardPageData struct {

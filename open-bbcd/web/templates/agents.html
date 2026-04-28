@@ -5,24 +5,29 @@
 </div>
 
 {{if .Chains}}
-{{range .Chains}}
-<div class="agent-group">
-  <div class="group-header">
-    <span class="group-name">{{.Name}}</span>
-    <span class="group-count">{{len .Versions}} {{if eq (len .Versions) 1}}version{{else}}versions{{end}}</span>
-  </div>
-  <table class="version-table">
-    {{range .Versions}}
+<table class="data-table">
+  <thead>
     <tr>
-      <td class="version-num {{if gt .VersionNum 1}}old{{end}}">v{{.VersionNum}}</td>
-      <td>{{.Agent.Name}}</td>
-      <td class="version-date">{{.Agent.CreatedAt.Format "Jan 2, 2006"}}</td>
-      <td><span class="badge badge-{{.Agent.Status | statusClass}}">{{.Agent.Status}}</span></td>
+      <th>Agent</th>
+      <th>Latest</th>
+      <th class="col-status">Status</th>
+      <th class="col-date">Last updated</th>
+      <th class="col-count">Versions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Chains}}
+    {{$latest := index .Versions 0}}
+    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agents/ui/{{.Name | urlEncode}}">
+      <td><a class="agent-link" href="/agents/ui/{{.Name | urlEncode}}">{{.Name}}</a></td>
+      <td class="col-version">v{{$latest.VersionNum}}</td>
+      <td class="col-status"><span class="badge badge-{{$latest.Agent.Status | statusClass}}">{{$latest.Agent.Status}}</span></td>
+      <td class="col-date">{{$latest.Agent.CreatedAt.Format "Jan 2, 2006"}}</td>
+      <td class="col-count">{{len .Versions}}</td>
     </tr>
     {{end}}
-  </table>
-</div>
-{{end}}
+  </tbody>
+</table>
 {{else}}
 <p class="empty-state">No agents yet. Create your first alpha agent to get started.</p>
 {{end}}
