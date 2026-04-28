@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -63,6 +64,7 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		SchemaVersion: h.schema.Version,
 	})
 	if err != nil {
+		log.Printf("wizard: CreateFromWizard: %v", err)
 		http.Error(w, "failed to create agent", http.StatusInternalServerError)
 		return
 	}

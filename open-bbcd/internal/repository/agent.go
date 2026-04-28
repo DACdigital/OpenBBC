@@ -25,13 +25,14 @@ type scanner interface {
 
 func scanAgent(s scanner) (*types.Agent, error) {
 	agent := &types.Agent{}
+	var description sql.NullString
 	var parentVersionID sql.NullString
 	var wizardInput []byte
 	var schemaVersion sql.NullString
 	err := s.Scan(
 		&agent.ID,
 		&agent.Name,
-		&agent.Description,
+		&description,
 		&agent.Prompt,
 		&agent.Status,
 		&parentVersionID,
@@ -43,6 +44,7 @@ func scanAgent(s scanner) (*types.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	agent.Description = description.String
 	if parentVersionID.Valid {
 		agent.ParentVersionID = &parentVersionID.String
 	}
