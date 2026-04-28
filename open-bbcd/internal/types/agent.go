@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+type AgentStatus string
+
+const (
+	AgentStatusInitializing AgentStatus = "INITIALIZING"
+	AgentStatusDraft        AgentStatus = "DRAFT"
+	AgentStatusTested       AgentStatus = "TESTED"
+	AgentStatusDeployed     AgentStatus = "DEPLOYED"
+)
+
 type Agent struct {
 	ID              string          `json:"id"`
 	Name            string          `json:"name"`
@@ -54,6 +63,6 @@ func NewAgent(opts CreateAgentOpts) (*Agent, error) {
 		Name:        opts.Name,
 		Description: opts.Description,
 		Prompt:      opts.Prompt,
-		Status:      "DRAFT",
+		Status:      string(AgentStatusDraft),
 	}, nil
 }

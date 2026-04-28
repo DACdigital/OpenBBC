@@ -17,6 +17,9 @@ func TestNewAgent_Valid(t *testing.T) {
 	if agent.Name != opts.Name {
 		t.Errorf("Name = %q, want %q", agent.Name, opts.Name)
 	}
+	if agent.Status != string(AgentStatusDraft) {
+		t.Errorf("Status = %q, want %q", agent.Status, AgentStatusDraft)
+	}
 }
 
 func TestNewAgent_MissingName(t *testing.T) {
