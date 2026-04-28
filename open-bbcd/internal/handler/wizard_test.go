@@ -67,11 +67,9 @@ func TestWizardHandler_Submit_MissingName(t *testing.T) {
 		t.Fatalf("parse schema: %v", err)
 	}
 
-	called := false
 	repo := &mockWizardRepo{
 		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
-			called = true
-			return nil, types.ErrNameRequired
+			panic("CreateFromWizard should not be called when name is empty")
 		},
 	}
 
@@ -84,8 +82,5 @@ func TestWizardHandler_Submit_MissingName(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
-	}
-	if called {
-		t.Error("repo.CreateFromWizard should not have been called")
 	}
 }

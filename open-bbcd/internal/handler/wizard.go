@@ -40,9 +40,9 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			defer file.Close()
-			content, err := io.ReadAll(file)
-			if err != nil {
+			content, readErr := io.ReadAll(file)
+			file.Close()
+			if readErr != nil {
 				http.Error(w, "failed to read uploaded file", http.StatusInternalServerError)
 				return
 			}
