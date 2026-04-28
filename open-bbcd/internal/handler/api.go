@@ -61,6 +61,7 @@ func NewAPI(db *sql.DB) http.Handler {
 		http.Redirect(w, r, "/agents/ui", http.StatusMovedPermanently)
 	})
 	mux.HandleFunc("GET /agents/ui", uiHandler.AgentsList)
+	mux.HandleFunc("GET /agents/ui/{name}", uiHandler.AgentVersions)
 	mux.HandleFunc("GET /agents/new", uiHandler.WizardPage)
 	mux.HandleFunc("GET /agents/new/step/{n}", uiHandler.WizardStep)
 	mux.HandleFunc("POST /agents/wizard", wizardHandler.Submit)

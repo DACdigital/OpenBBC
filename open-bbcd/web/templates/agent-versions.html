@@ -1,0 +1,25 @@
+{{define "content"}}
+<a href="/agents/ui" class="wizard-back">← Back to Agents</a>
+<div class="page-header">
+  <h1>{{.Name}}</h1>
+</div>
+
+<table class="data-table">
+  <thead>
+    <tr>
+      <th class="col-version">Version</th>
+      <th class="col-status">Status</th>
+      <th class="col-date">Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Versions}}
+    <tr>
+      <td class="col-version {{if gt .VersionNum 1}}old{{end}}">v{{.VersionNum}}</td>
+      <td class="col-status"><span class="badge badge-{{.Agent.Status | statusClass}}">{{.Agent.Status}}</span></td>
+      <td class="col-date">{{.Agent.CreatedAt.Format "Jan 2, 2006"}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}
