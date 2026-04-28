@@ -55,6 +55,15 @@
     .wizard-nav{display:flex;justify-content:space-between;align-items:center;margin-top:20px}
     #form-body{min-height:200px}
   </style>
+  <script>
+    function requireCurrentField(event) {
+      const field = document.querySelector('#form-body input:not([type=hidden]), #form-body textarea, #form-body input[type=file]');
+      if (field && !field.checkValidity()) {
+        field.reportValidity();
+        event.preventDefault();
+      }
+    }
+  </script>
 </head>
 <body>
   <nav class="sidebar">
