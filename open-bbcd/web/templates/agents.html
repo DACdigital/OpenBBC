@@ -18,8 +18,8 @@
   <tbody>
     {{range .Chains}}
     {{$latest := index .Versions 0}}
-    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agents/ui?agent={{.Name | urlEncode}}">
-      <td><a class="agent-link" href="/agents/ui?agent={{.Name | urlEncode}}">{{.Name}}</a></td>
+    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agents/ui?agent_id={{.RootID | urlEncode}}">
+      <td><a class="agent-link" href="/agents/ui?agent_id={{.RootID | urlEncode}}">{{.Name}}</a></td>
       <td class="col-version">v{{$latest.VersionNum}}</td>
       <td class="col-status"><span class="badge badge-{{$latest.Agent.Status | statusClass}}">{{$latest.Agent.Status}}</span></td>
       <td class="col-date">{{$latest.Agent.CreatedAt.Format "Jan 2, 2006"}}</td>

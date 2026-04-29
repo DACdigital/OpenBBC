@@ -1,0 +1,20 @@
+{{define "content"}}
+<a href="/agents/ui?version_id={{.Agent.ID | urlEncode}}" class="wizard-back">← Back to {{.ChainName}} v{{.VersionNum}}</a>
+<div class="page-header">
+  <h1>{{.ChainName}} <span style="color:#8b949e;font-weight:400">— new version</span></h1>
+</div>
+
+<form action="/agents/edit" method="POST">
+  <input type="hidden" name="parent_version_id" value="{{.Agent.ID}}">
+
+  <div class="form-group">
+    <div class="step-label">Prompt <span style="color:#f85149">*</span></div>
+    <textarea name="prompt" class="field-input" rows="14" required>{{.Agent.Prompt}}</textarea>
+  </div>
+
+  <div class="wizard-nav">
+    <a href="/agents/ui?version_id={{.Agent.ID | urlEncode}}" class="btn-secondary">Cancel</a>
+    <button type="submit" class="btn-primary">Save as New Version →</button>
+  </div>
+</form>
+{{end}}

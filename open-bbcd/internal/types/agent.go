@@ -30,14 +30,15 @@ type Agent struct {
 
 // AgentVersion pairs an Agent with its computed version number within a chain.
 type AgentVersion struct {
-	Agent      *Agent
-	VersionNum int
+	Agent      *Agent `json:"agent"`
+	VersionNum int    `json:"version_num"`
 }
 
 // AgentChain groups versions of the same named agent. Versions are ordered newest first.
 type AgentChain struct {
-	Name     string
-	Versions []AgentVersion
+	RootID   string         `json:"root_id"`
+	Name     string         `json:"name"`
+	Versions []AgentVersion `json:"versions"`
 }
 
 type CreateAgentOpts struct {
@@ -50,6 +51,11 @@ type CreateAgentFromWizardOpts struct {
 	Name          string
 	WizardInput   map[string]string
 	SchemaVersion string
+}
+
+// CreateVersionOpts holds the only editable field for a new version; name and description are inherited.
+type CreateVersionOpts struct {
+	Prompt string `json:"prompt"`
 }
 
 func NewAgent(opts CreateAgentOpts) (*Agent, error) {

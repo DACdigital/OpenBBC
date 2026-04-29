@@ -3,7 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -17,7 +17,7 @@ func JSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Printf("error encoding response: %v", err)
+		slog.Error("encode response", slog.Any("error", err))
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 func TestAgentRepository_Create_ValidationError(t *testing.T) {
 	repo := NewAgentRepository(nil) // nil db, won't reach it
 
-	_, err := repo.Create(nil, types.CreateAgentOpts{Name: "", Prompt: ""})
+	_, err := repo.Create(context.Background(), types.CreateAgentOpts{Name: "", Prompt: ""})
 	if err != types.ErrNameRequired {
 		t.Errorf("error = %v, want %v", err, types.ErrNameRequired)
 	}

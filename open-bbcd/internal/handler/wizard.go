@@ -3,7 +3,7 @@ package handler
 import (
 	"context"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -16,10 +16,11 @@ type WizardAgentRepository interface {
 type WizardHandler struct {
 	agentRepo WizardAgentRepository
 	schema    *types.WizardSchema
+	logger    *slog.Logger
 }
 
-func NewWizardHandler(agentRepo WizardAgentRepository, schema *types.WizardSchema) *WizardHandler {
-	return &WizardHandler{agentRepo: agentRepo, schema: schema}
+func NewWizardHandler(agentRepo WizardAgentRepository, schema *types.WizardSchema, logger *slog.Logger) *WizardHandler {
+	return &WizardHandler{agentRepo: agentRepo, schema: schema, logger: logger}
 }
 
 func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +45,7 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 			content, readErr := io.ReadAll(file)
 			file.Close()
 			if readErr != nil {
+				h.logger.Error("wizard: read uploaded file", slog.String("field", of.Key), slog.Any("error", readErr))
 				http.Error(w, "failed to read uploaded file", http.StatusInternalServerError)
 				return
 			}
@@ -58,16 +60,17 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
+	agent, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
 		Name:          wizardInput["name"],
 		WizardInput:   wizardInput,
 		SchemaVersion: h.schema.Version,
 	})
 	if err != nil {
-		log.Printf("wizard: CreateFromWizard: %v", err)
+		h.logger.Error("wizard: create agent", slog.Any("error", err))
 		http.Error(w, "failed to create agent", http.StatusInternalServerError)
 		return
 	}
 
+	h.logger.Info("wizard: agent created", slog.String("id", agent.ID), slog.String("name", agent.Name))
 	http.Redirect(w, r, "/agents/ui", http.StatusSeeOther)
 }

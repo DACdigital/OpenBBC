@@ -169,9 +169,48 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentChain, 
 		sort.Slice(versions, func(i, j int) bool {
 			return versions[i].VersionNum > versions[j].VersionNum
 		})
-		chains = append(chains, types.AgentChain{Name: acc.name, Versions: versions})
+		chains = append(chains, types.AgentChain{RootID: rootID, Name: acc.name, Versions: versions})
 	}
 	return chains, nil
+}
+
+// CreateVersion inserts a new DRAFT agent whose parent_version_id points to parentID.
+// Name and description are inherited from the parent; only prompt is editable.
+func (r *AgentRepository) CreateVersion(ctx context.Context, parentID string, opts types.CreateVersionOpts) (*types.Agent, error) {
+	if opts.Prompt == "" {
+		return nil, types.ErrPromptRequired
+	}
+	parent, err := r.GetByID(ctx, parentID)
+	if err != nil {
+		return nil, err
+	}
+	desc := sql.NullString{String: parent.Description, Valid: parent.Description != ""}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO agents (name, description, prompt, parent_version_id)
+		VALUES ($1, $2, $3, $4)
+		RETURNING `+agentColumns,
+		parent.Name, desc, opts.Prompt, parentID,
+	)
+	return scanAgent(row)
+}
+
+// GetVersionChain returns the full chain that contains agentID (matched as root or any version).
+func (r *AgentRepository) GetVersionChain(ctx context.Context, agentID string) (types.AgentChain, error) {
+	chains, err := r.ListGrouped(ctx)
+	if err != nil {
+		return types.AgentChain{}, err
+	}
+	for _, chain := range chains {
+		if chain.RootID == agentID {
+			return chain, nil
+		}
+		for _, v := range chain.Versions {
+			if v.Agent.ID == agentID {
+				return chain, nil
+			}
+		}
+	}
+	return types.AgentChain{}, types.ErrNotFound
 }
 
 // CreateFromWizard inserts an agent in INITIALIZING status from wizard form answers.
@@ -188,9 +227,9 @@ func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.Creat
 	}
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO agents (name, prompt, status, wizard_input, schema_version)
-		VALUES ($1, '', 'INITIALIZING', $2, $3)
+		VALUES ($1, '', $2, $3, $4)
 		RETURNING `+agentColumns,
-		opts.Name, wizardJSON, opts.SchemaVersion,
+		opts.Name, string(types.AgentStatusInitializing), wizardJSON, opts.SchemaVersion,
 	)
 	return scanAgent(row)
 }

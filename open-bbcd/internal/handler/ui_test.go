@@ -28,11 +28,35 @@ wizard:
 `
 
 type mockGroupedAgentRepo struct {
-	listGroupedFn func(ctx context.Context) ([]types.AgentChain, error)
+	listGroupedFn   func(ctx context.Context) ([]types.AgentChain, error)
+	getByIDFn       func(ctx context.Context, id string) (*types.Agent, error)
+	createVersionFn func(ctx context.Context, parentID string, opts types.CreateVersionOpts) (*types.Agent, error)
+	getChainFn      func(ctx context.Context, agentID string) (types.AgentChain, error)
 }
 
 func (m *mockGroupedAgentRepo) ListGrouped(ctx context.Context) ([]types.AgentChain, error) {
 	return m.listGroupedFn(ctx)
+}
+
+func (m *mockGroupedAgentRepo) GetByID(ctx context.Context, id string) (*types.Agent, error) {
+	if m.getByIDFn != nil {
+		return m.getByIDFn(ctx, id)
+	}
+	panic("GetByID not implemented in mock")
+}
+
+func (m *mockGroupedAgentRepo) CreateVersion(ctx context.Context, parentID string, opts types.CreateVersionOpts) (*types.Agent, error) {
+	if m.createVersionFn != nil {
+		return m.createVersionFn(ctx, parentID, opts)
+	}
+	panic("CreateVersion not implemented in mock")
+}
+
+func (m *mockGroupedAgentRepo) GetVersionChain(ctx context.Context, agentID string) (types.AgentChain, error) {
+	if m.getChainFn != nil {
+		return m.getChainFn(ctx, agentID)
+	}
+	panic("GetVersionChain not implemented in mock")
 }
 
 func mustParseStepTmpl(t *testing.T) *template.Template {

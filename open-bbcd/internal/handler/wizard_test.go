@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +44,7 @@ func TestWizardHandler_Submit_RedirectsOnSuccess(t *testing.T) {
 		},
 	}
 
-	h := NewWizardHandler(repo, &schema)
+	h := NewWizardHandler(repo, &schema, slog.Default())
 	body, ct := buildWizardForm(t, map[string]string{
 		"name":  "My Agent",
 		"scope": "Handle support queries",
@@ -73,7 +74,7 @@ func TestWizardHandler_Submit_MissingName(t *testing.T) {
 		},
 	}
 
-	h := NewWizardHandler(repo, &schema)
+	h := NewWizardHandler(repo, &schema, slog.Default())
 	body, ct := buildWizardForm(t, map[string]string{"name": ""})
 	req := httptest.NewRequest(http.MethodPost, "/agents/wizard", body)
 	req.Header.Set("Content-Type", ct)
