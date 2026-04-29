@@ -1,0 +1,90 @@
+---
+schema_version: 1
+generated_by: flow-map-compiler
+generated_at: {{generated_at_iso}}
+generated_from_sha: {{generated_from_sha}}
+app_name: {{app_name}}
+stack:
+  framework: {{framework_adapter}}
+  version: "{{framework_version}}"
+  router: {{router}}
+  language: {{language}}
+counts:
+  flows: {{counts_flows}}
+  capabilities: {{counts_capabilities}}
+  proposed_tools: {{counts_proposed_tools}}
+freshness:
+  last_verified: {{generated_at_iso}}
+  staleness_check: weekly
+files:
+  app_context: APP.md
+  glossary: glossary.md
+  flows_dir: flows/
+  capabilities_dir: capabilities/
+  proposed_tools: tools-proposed.json
+---
+
+# {{app_name}} — flow map
+
+<!-- AGENT id="summary" -->
+{{app_summary_one_paragraph}}
+<!-- /AGENT -->
+
+## Reading order for agents
+
+1. Load APP.md once per session.
+2. For "tell me about X" / behavior questions → load `flows/<id>.md`
+   matching the intent table below.
+3. For "I need to do Y" / capability questions → load
+   `capabilities/<name>.md`.
+4. For unfamiliar terms → consult `glossary.md`.
+
+## Overview
+
+```mermaid
+flowchart LR
+{{overview_flowchart_body_indented_2}}
+```
+
+## Intent → flow
+
+| User intent | Flow |
+|---|---|
+{{#each intent_to_flow}}
+| {{this.intent}} | [{{this.flow_id}}](flows/{{this.flow_id}}.md) |
+{{/each}}
+
+## Flows
+
+| id | file | what it does |
+|---|---|---|
+{{#each flows}}
+| {{this.id}} | [flows/{{this.id}}.md](flows/{{this.id}}.md) | {{this.summary}} |
+{{/each}}
+
+## Capabilities
+
+| name | file | proposed tools |
+|---|---|---|
+{{#each capabilities}}
+| {{this.name}} | [capabilities/{{this.name}}.md](capabilities/{{this.name}}.md) | {{this.tool_count}} |
+{{/each}}
+
+## Note on tool names
+
+Tool names referenced anywhere in this wiki are *proposed* — derived
+from frontend call sites. The actual MCP server does not exist yet. See
+[`tools-proposed.json`](tools-proposed.json) for the full machine-readable
+list intended for whoever wires up the MCP server.
+
+Flow files do not name proposed tools at all; they reference intents
+defined in [`glossary.md`](glossary.md), which is the single indirection
+layer that maps intents to currently-proposed tool names. When tools are
+renamed, only the glossary updates.
+
+## Unresolved
+
+{{unresolved_summary}}
+
+<!-- HUMAN id="agents-extra" -->
+<!-- /HUMAN -->

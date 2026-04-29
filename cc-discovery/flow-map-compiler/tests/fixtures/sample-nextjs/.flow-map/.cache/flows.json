@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "generated_by": "flow-map-compiler/group",
+  "framework": {
+    "adapter": "next",
+    "router": "app",
+    "version": "15.0.0",
+    "language": "ts"
+  },
+  "flows": [
+    {
+      "id": "update-profile",
+      "entry": "app/profile/page.tsx",
+      "route": "/profile",
+      "trigger": null,
+      "calls": [
+        {
+          "method": "PATCH",
+          "path": "/api/users/{id}",
+          "path_params": [
+            {
+              "name": "id",
+              "type": "string",
+              "required": true
+            }
+          ],
+          "query_params": [],
+          "body_shape": "unknown",
+          "response_shape": "unknown",
+          "auth": "bearer",
+          "client": "fetch",
+          "confidence": "high",
+          "source": [
+            {
+              "file": "lib/api/users.ts",
+              "line": 17
+            }
+          ]
+        }
+      ],
+      "unresolved": []
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "generated_by": "flow-map-compiler/enumerate",
+  "adapter": "react",
+  "entries": [
+    {
+      "file": "src/pages/Profile.tsx",
+      "kind": "page",
+      "route": "/Profile"
+    }
+  ]
+}

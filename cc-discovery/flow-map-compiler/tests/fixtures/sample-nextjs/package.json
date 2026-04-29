@@ -1,0 +1,16 @@
+{
+  "name": "sample-nextjs",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Vertical-slice fixture for flow-map-compiler. Minimal Next.js App Router app exposing a single update-profile flow against PATCH /api/users/{id}.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "15.0.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  }
+}

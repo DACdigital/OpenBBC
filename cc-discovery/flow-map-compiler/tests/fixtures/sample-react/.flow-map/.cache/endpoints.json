@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "generated_by": "flow-map-compiler/resolve",
+  "framework": {
+    "adapter": "react",
+    "router": "react-router-dom",
+    "version": "19.0.0",
+    "language": "ts"
+  },
+  "flows": [
+    {
+      "id": "update-profile",
+      "entry": "src/pages/Profile.tsx",
+      "route": "/Profile",
+      "trigger": null,
+      "calls": [
+        {
+          "method": "PATCH",
+          "path": "/api/users/{id}",
+          "path_params": [
+            {
+              "name": "id",
+              "type": "string",
+              "required": true
+            }
+          ],
+          "query_params": [],
+          "body_shape": "unknown",
+          "response_shape": "unknown",
+          "auth": "bearer",
+          "client": "fetch",
+          "confidence": "high",
+          "source": [
+            {
+              "file": "src/api/users.ts",
+              "line": 17
+            }
+          ]
+        }
+      ],
+      "unresolved": []
+    }
+  ],
+  "backend_declared": [],
+  "unresolved_rate": 0
+}

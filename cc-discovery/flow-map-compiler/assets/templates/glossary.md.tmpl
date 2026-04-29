@@ -1,0 +1,36 @@
+---
+schema_version: 1
+---
+
+# Glossary
+
+The glossary is the indirection layer between flows (which describe
+intent only) and capabilities (which carry HTTP detail and the proposed
+tool name). When the MCP server is built and tools are renamed, only the
+"Proposed tool" column here updates — flow files don't churn.
+
+## Lookup table
+
+| Intent | User phrases | Capability | Proposed tool |
+|---|---|---|---|
+{{#each intents}}
+| [`{{this.intent}}`](#{{this.intent}}) | {{this.phrases_csv}} | [`{{this.capability_anchor}}`]({{this.capability_link}}) | `{{this.proposed_tool}}` |
+{{/each}}
+
+## Intent anchors
+
+Each intent below carries an explicit anchor so flow files can link to
+`glossary.md#<intent>`.
+
+{{#each intents}}
+### {{this.label}} {#{{this.intent}}}
+
+- **Role:** {{this.role}}
+- **Capability:** [`{{this.capability_anchor}}`]({{this.capability_link}})
+- **Proposed tool:** `{{this.proposed_tool}}` (proposed — no MCP server yet)
+- **User phrases:** {{this.phrases_csv}}
+
+{{/each}}
+
+<!-- HUMAN id="glossary-additions" -->
+<!-- /HUMAN -->

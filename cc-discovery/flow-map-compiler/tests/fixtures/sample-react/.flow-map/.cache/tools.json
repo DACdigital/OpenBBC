@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "generated_by": "flow-map-compiler/propose-tools",
+  "naming_convention": "dotted-lower-camel",
+  "tools": [
+    {
+      "proposed_name": "users.update",
+      "method": "PATCH",
+      "path": "/api/users/{id}",
+      "path_params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "query_params": [],
+      "body_shape": "unknown",
+      "response_shape": "unknown",
+      "auth": "bearer",
+      "capability": "users",
+      "anchor": "users-update",
+      "source": [
+        {
+          "file": "src/api/users.ts",
+          "line": 17
+        }
+      ],
+      "used_by_flows": [
+        "update-profile"
+      ],
+      "confidence": "high",
+      "openapi_operation_id": null
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "users",
+      "tool_count": 1,
+      "tools": [
+        "users.update"
+      ]
+    }
+  ],
+  "intents": [
+    {
+      "intent": "update-user-record",
+      "proposed_tool": "users.update",
+      "capability": "users",
+      "capability_anchor": "users-update",
+      "role": "write",
+      "used_by_flows": [
+        "update-profile"
+      ]
+    }
+  ]
+}
