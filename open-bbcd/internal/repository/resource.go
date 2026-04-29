@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -56,7 +57,7 @@ func (r *ResourceRepository) GetByID(ctx context.Context, id string) (*types.Res
 		&resource.CreatedAt,
 		&resource.UpdatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, types.ErrNotFound
 	}
 	if err != nil {

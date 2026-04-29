@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -39,7 +40,7 @@ func TestResourceHandler_Create_Success(t *testing.T) {
 				Prompt:  opts.Prompt,
 			}, nil
 		},
-	})
+	}, slog.Default())
 
 	body := `{"agent_id":"agent-123","name":"get_users","prompt":"Fetches users"}`
 	req := httptest.NewRequest(http.MethodPost, "/resources", bytes.NewBufferString(body))
@@ -64,7 +65,7 @@ func TestResourceHandler_Create_ValidationError(t *testing.T) {
 		createFn: func(ctx context.Context, opts types.CreateResourceOpts) (*types.Resource, error) {
 			return nil, types.ErrNameRequired
 		},
-	})
+	}, slog.Default())
 
 	body := `{"agent_id":"agent-123","name":"","prompt":""}`
 	req := httptest.NewRequest(http.MethodPost, "/resources", bytes.NewBufferString(body))
@@ -88,7 +89,7 @@ func TestResourceHandler_Get_Success(t *testing.T) {
 				Prompt:  "Fetches users",
 			}, nil
 		},
-	})
+	}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/resources/res-123", nil)
 	req.SetPathValue("id", "res-123")
@@ -112,7 +113,7 @@ func TestResourceHandler_Get_NotFound(t *testing.T) {
 		getFn: func(ctx context.Context, id string) (*types.Resource, error) {
 			return nil, types.ErrNotFound
 		},
-	})
+	}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/resources/nonexistent", nil)
 	req.SetPathValue("id", "nonexistent")
@@ -126,7 +127,7 @@ func TestResourceHandler_Get_NotFound(t *testing.T) {
 }
 
 func TestResourceHandler_Get_MissingID(t *testing.T) {
-	h := NewResourceHandler(&mockResourceRepo{})
+	h := NewResourceHandler(&mockResourceRepo{}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/resources/", nil)
 	w := httptest.NewRecorder()
@@ -156,7 +157,7 @@ func TestResourceHandler_ListByAgent_Success(t *testing.T) {
 				},
 			}, nil
 		},
-	})
+	}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/agents/agent-123/resources", nil)
 	req.SetPathValue("agent_id", "agent-123")
@@ -180,7 +181,7 @@ func TestResourceHandler_ListByAgent_Empty(t *testing.T) {
 		listFn: func(ctx context.Context, agentID string) ([]*types.Resource, error) {
 			return nil, nil
 		},
-	})
+	}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/agents/agent-123/resources", nil)
 	req.SetPathValue("agent_id", "agent-123")
@@ -200,7 +201,7 @@ func TestResourceHandler_ListByAgent_Empty(t *testing.T) {
 }
 
 func TestResourceHandler_ListByAgent_MissingAgentID(t *testing.T) {
-	h := NewResourceHandler(&mockResourceRepo{})
+	h := NewResourceHandler(&mockResourceRepo{}, slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/agents//resources", nil)
 	w := httptest.NewRecorder()

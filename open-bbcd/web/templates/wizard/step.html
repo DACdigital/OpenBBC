@@ -1,0 +1,57 @@
+{{define "step"}}
+{{range $key, $val := .Values}}
+<input type="hidden" name="{{$key}}" value="{{$val}}">
+{{end}}
+
+<div class="progress">
+  {{range .AllFields}}
+  {{$order := .Field.Order}}
+  <div class="step-dot {{if lt $order $.CurrentStep}}done{{else if eq $order $.CurrentStep}}active{{end}}">
+    {{if lt $order $.CurrentStep}}✓{{else}}{{$order}}{{end}}
+  </div>
+  {{if lt $order $.TotalSteps}}<div class="step-line {{if lt $order $.CurrentStep}}done{{end}}"></div>{{end}}
+  {{end}}
+</div>
+
+<div class="step-label">Step {{.CurrentStep}} of {{.TotalSteps}}</div>
+<div class="step-question">{{.Field.Field.Label}}</div>
+
+{{if eq .Field.Field.Type "text"}}
+<input type="text" name="{{.Field.Key}}" value="{{.CurrentValue}}"
+       class="field-input" {{if .Field.Field.Required}}required{{end}}>
+
+{{else if eq .Field.Field.Type "textarea"}}
+<textarea name="{{.Field.Key}}" class="field-input" rows="6"
+          {{if .Field.Field.Required}}required{{end}}>{{.CurrentValue}}</textarea>
+
+{{else if eq .Field.Field.Type "file"}}
+<div class="field-file-wrap">
+  <p>Select a YAML file from the discovery output.</p>
+  <input type="file" name="{{.Field.Key}}" accept=".yaml,.yml"
+         {{if .Field.Field.Required}}required{{end}}>
+</div>
+{{end}}
+
+<div class="wizard-nav">
+  {{if gt .CurrentStep 1}}
+  <button type="button"
+          hx-get="/agents/new/step/{{sub .CurrentStep 1}}"
+          hx-include="#form-body [name]"
+          hx-target="#form-body"
+          class="btn-secondary">← Back</button>
+  {{else}}
+  <a href="/agents/ui" class="btn-secondary">Cancel</a>
+  {{end}}
+
+  {{if .IsLast}}
+  <button type="submit" class="btn-primary">Create Agent →</button>
+  {{else}}
+  <button type="button"
+          hx-get="/agents/new/step/{{add .CurrentStep 1}}"
+          hx-include="#form-body [name]"
+          hx-target="#form-body"
+          hx-on::before-request="requireCurrentField(event)"
+          class="btn-primary">Next →</button>
+  {{end}}
+</div>
+{{end}}

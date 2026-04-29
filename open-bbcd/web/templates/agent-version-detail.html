@@ -1,0 +1,48 @@
+{{define "content"}}
+<a href="/agents/ui?agent_id={{.RootID | urlEncode}}" class="wizard-back">← Back to {{.ChainName}}</a>
+<div class="page-header">
+  <h1>{{.ChainName}} <span style="color:#8b949e;font-weight:400">v{{.VersionNum}}</span></h1>
+  <div style="display:flex;gap:10px;align-items:center">
+    <span class="badge badge-{{.Agent.Status | statusClass}}">{{.Agent.Status}}</span>
+    <a href="/agents/edit?version_id={{.Agent.ID | urlEncode}}" class="btn-primary">Edit → New Version</a>
+  </div>
+</div>
+
+<div class="detail-section">
+  <table class="detail-table">
+    <tbody>
+      <tr>
+        <th>Created</th>
+        <td>{{.Agent.CreatedAt.Format "Jan 2, 2006"}}</td>
+      </tr>
+      {{if .Agent.Description}}
+      <tr>
+        <th>Description</th>
+        <td>{{.Agent.Description}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+{{if .WizardAnswers}}
+<h2 class="section-heading">Wizard Inputs</h2>
+<table class="detail-table">
+  <tbody>
+    {{range .WizardAnswers}}
+    <tr>
+      <th>{{.Label}}</th>
+      <td>{{.Value}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}
+
+<h2 class="section-heading">Prompt</h2>
+{{if .Agent.Prompt}}
+<pre class="prompt-block">{{.Agent.Prompt}}</pre>
+{{else}}
+<p class="empty-state" style="text-align:left;padding:20px 0">No prompt set for this version.</p>
+{{end}}
+{{end}}

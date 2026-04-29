@@ -1,0 +1,26 @@
+{{define "content"}}
+<a href="/agents/ui" class="wizard-back">← Back to Agents</a>
+<div class="page-header">
+  <h1>{{.Name}}</h1>
+</div>
+
+<table class="data-table">
+  <thead>
+    <tr>
+      <th class="col-version">Version</th>
+      <th class="col-status">Status</th>
+      <th class="col-date">Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{$rootID := .RootID}}
+    {{range .Versions}}
+    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agents/ui?version_id={{.Agent.ID | urlEncode}}">
+      <td class="col-version"><a class="agent-link" href="/agents/ui?version_id={{.Agent.ID | urlEncode}}">v{{.VersionNum}}</a></td>
+      <td class="col-status"><span class="badge badge-{{.Agent.Status | statusClass}}">{{.Agent.Status}}</span></td>
+      <td class="col-date">{{.Agent.CreatedAt.Format "Jan 2, 2006"}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}
