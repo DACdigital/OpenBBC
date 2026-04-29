@@ -105,12 +105,30 @@ type agentsPageData struct {
 	Chains []types.AgentChain
 }
 
-func (h *UIHandler) AgentsList(w http.ResponseWriter, r *http.Request) {
+// AgentsPage serves either the agents list or a single agent's version history,
+// depending on whether the ?agent= query param is present.
+func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 	chains, err := h.agentRepo.ListGrouped(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	if name := r.URL.Query().Get("agent"); name != "" {
+		for _, chain := range chains {
+			if chain.Name == name {
+				renderTemplate(w, h.agentVersionsTmpl, "layout", agentVersionsPageData{
+					Active:   "agents",
+					Name:     chain.Name,
+					Versions: chain.Versions,
+				})
+				return
+			}
+		}
+		http.NotFound(w, r)
+		return
+	}
+
 	renderTemplate(w, h.agentsTmpl, "layout", agentsPageData{Active: "agents", Chains: chains})
 }
 
@@ -118,30 +136,6 @@ type agentVersionsPageData struct {
 	Active   string
 	Name     string
 	Versions []types.AgentVersion
-}
-
-func (h *UIHandler) AgentVersions(w http.ResponseWriter, r *http.Request) {
-	name, err := url.PathUnescape(r.PathValue("name"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	chains, err := h.agentRepo.ListGrouped(r.Context())
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	for _, chain := range chains {
-		if chain.Name == name {
-			renderTemplate(w, h.agentVersionsTmpl, "layout", agentVersionsPageData{
-				Active:   "agents",
-				Name:     chain.Name,
-				Versions: chain.Versions,
-			})
-			return
-		}
-	}
-	http.NotFound(w, r)
 }
 
 type wizardPageData struct {
