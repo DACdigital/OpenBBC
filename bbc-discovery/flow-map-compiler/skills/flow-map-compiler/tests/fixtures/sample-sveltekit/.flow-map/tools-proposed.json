@@ -13,7 +13,7 @@
       "query_params": [],
       "body_shape": "unknown",
       "response_shape": "unknown",
-      "auth": "unknown",
+      "auth": "none",
       "capability_file": "capabilities/ping.md",
       "anchor": "ping-list",
       "source": [

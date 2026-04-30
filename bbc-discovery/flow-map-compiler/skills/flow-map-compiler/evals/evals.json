@@ -1,0 +1,69 @@
+{
+  "skill_name": "flow-map-compiler",
+  "evals": [
+    {
+      "id": 1,
+      "name": "nextjs-update-profile",
+      "prompt": "Compile a flow map for this Next.js project. Treat the current working directory as the target repo. Run the full compile-and-self-check loop and write everything under `.flow-map/`.",
+      "expected_output": "A `.flow-map/` directory containing AGENTS.md, APP.md, glossary.md, tools-proposed.json, plus skills/, flows/, and capabilities/ subdirectories. The compiler should identify exactly one user-facing flow (profile editing on /profile), one skill that performs the write (update-user-record), and one capability group (users) backing the proposed tool users.update.",
+      "files": [
+        "tests/fixtures/sample-nextjs/package.json",
+        "tests/fixtures/sample-nextjs/app/layout.tsx",
+        "tests/fixtures/sample-nextjs/app/profile/page.tsx",
+        "tests/fixtures/sample-nextjs/lib/api/users.ts"
+      ],
+      "expectations": [
+        "Output `.flow-map/AGENTS.md` frontmatter has counts.skills=1, counts.flows=1, counts.capabilities=1, counts.proposed_tools=1.",
+        "Output `.flow-map/AGENTS.md` frontmatter sets stack.framework to `nextjs` (or a clear next.js identifier) and stack.language to `ts`.",
+        "Output `.flow-map/skills/` contains exactly one file, and its frontmatter `id` and `proposed_tool` describe a write against the user record (e.g., id like `update-user-record`/`update-user-profile`/`write-user-profile`, proposed_tool like `users.update`).",
+        "Output `.flow-map/flows/` contains exactly one file describing the profile-edit user journey, with `entry` pointing at `app/profile/page.tsx` and frontmatter `skills_used[]` referencing the single skill (not capabilities).",
+        "Output `.flow-map/capabilities/` contains exactly one file named `users.md` whose `tools[]` includes a tool entry whose `tool` value matches the skill's `proposed_tool`, with `method: PUT|POST|PATCH` and `path` containing `/users/`.",
+        "Output `.flow-map/tools-proposed.json` is a single-element array (or object whose tools list has one entry) and the tool name round-trips with the capability's tool entry and the skill's `proposed_tool`.",
+        "Output `.flow-map/glossary.md` is the thin pivot table only — no `## Intent anchors` section — with one row linking to `skills/<id>.md` and to `capabilities/users.md#<anchor>`.",
+        "No flow body file in `.flow-map/flows/` contains the proposed tool name, the strings `fetch(`, `axios.`, an HTTP verb token (`GET|POST|PUT|PATCH|DELETE`), or any `/api/` URL path."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "react-update-profile",
+      "prompt": "Compile a flow map for this Vite + React + react-router-dom project. Treat the current working directory as the target repo. Run the full compile-and-self-check loop and write everything under `.flow-map/`.",
+      "expected_output": "A `.flow-map/` directory whose Skills/Flows/Capabilities tables describe a single user journey: the user edits their profile on a `/profile` route and the app persists the change via a write tool against the user record.",
+      "files": [
+        "tests/fixtures/sample-react/package.json",
+        "tests/fixtures/sample-react/src/App.tsx",
+        "tests/fixtures/sample-react/src/pages/Profile.tsx",
+        "tests/fixtures/sample-react/src/api/users.ts"
+      ],
+      "expectations": [
+        "Output `.flow-map/AGENTS.md` frontmatter has counts.skills=1, counts.flows=1, counts.capabilities=1, counts.proposed_tools=1.",
+        "Output `.flow-map/AGENTS.md` frontmatter sets stack.framework to `react`, stack.router to `react-router-dom` (or equivalent), stack.language to `ts`.",
+        "Output `.flow-map/skills/` contains exactly one file describing a write against the user record (id like `update-user-record`/`write-user-profile`, proposed_tool like `users.update`).",
+        "Output `.flow-map/flows/` contains exactly one file with `entry` pointing at `src/pages/Profile.tsx`, and frontmatter `skills_used[]` referencing the single skill via `skill_ref: ../skills/<id>.md`.",
+        "Output `.flow-map/capabilities/users.md` exists and its `tools[]` contains an entry whose `tool` value matches the skill's `proposed_tool` and whose `source` resolves to `src/api/users.ts`.",
+        "Output `.flow-map/glossary.md` is the thin pivot table only — one row, with the Skill column linking to `skills/<id>.md`.",
+        "Skill ↔ capability `flows_using_this[]` round-trips: the skill lists the flow id, and `capabilities/users.md` frontmatter `flows_using_this[]` lists the same flow id.",
+        "No flow body file in `.flow-map/flows/` contains the proposed tool name, an HTTP verb, `fetch(`, `axios.`, or any `/api/` URL path."
+      ]
+    },
+    {
+      "id": 3,
+      "name": "sveltekit-view-home",
+      "prompt": "Compile a flow map for this SvelteKit project. Treat the current working directory as the target repo. Run the full compile-and-self-check loop and write everything under `.flow-map/`.",
+      "expected_output": "A `.flow-map/` directory describing a single read-only flow: the home route loads and reads a list of ping records from the backend. One skill (read), one capability (ping), one proposed tool.",
+      "files": [
+        "tests/fixtures/sample-sveltekit/package.json",
+        "tests/fixtures/sample-sveltekit/src/routes/+page.svelte"
+      ],
+      "expectations": [
+        "Output `.flow-map/AGENTS.md` frontmatter has counts.skills=1, counts.flows=1, counts.capabilities=1, counts.proposed_tools=1.",
+        "Output `.flow-map/AGENTS.md` frontmatter sets stack.framework to `sveltekit` and stack.router to `filesystem` (or equivalent).",
+        "Output `.flow-map/skills/` contains exactly one file with `role: read` and a `proposed_tool` resembling `ping.list`.",
+        "Output `.flow-map/flows/` contains exactly one file with `entry` pointing at `src/routes/+page.svelte` and frontmatter `skills_used[]` referencing the single skill.",
+        "Output `.flow-map/capabilities/` contains exactly one file named `ping.md` whose `tools[]` includes an entry with `method: GET`, `path: /api/ping`, and `auth: none` (since the source has no Authorization header).",
+        "The capability `auth` field is one of the schema-allowed values `bearer|cookie|none` (NOT `unknown` or any other free-form string).",
+        "Output `.flow-map/glossary.md` is the thin pivot table only — no `## Intent anchors` section.",
+        "No flow body file in `.flow-map/flows/` contains the proposed tool name, `fetch(`, an HTTP verb, or `/api/` URL path."
+      ]
+    }
+  ]
+}

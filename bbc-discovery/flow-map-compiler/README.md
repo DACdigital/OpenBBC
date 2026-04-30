@@ -335,6 +335,10 @@ flow-map-compiler/
     ├── references/
     │   ├── output-schemas.md            # file-shape contract
     │   └── lint-contract.md             # 16-rule self-check
+    ├── evals/
+    │   ├── evals.json                   # 3 test cases (one per stack)
+    │   ├── check_flow_map.py            # programmatic verifier
+    │   └── README.md                    # how to run the evals
     └── tests/fixtures/
         ├── sample-nextjs/               # input + canonical .flow-map/
         ├── sample-react/
@@ -344,6 +348,94 @@ flow-map-compiler/
 The fixtures act as few-shot examples — three real-shaped frontend
 sources paired with their canonical generated wikis, so the skill has
 something to anchor on.
+
+## Contributing
+
+Two things matter when changing this skill: the **contract** (schemas
++ lint rules + templates must agree) and the **evals** (the contract
+has to keep producing correct outputs for the three reference stacks).
+
+### Editing the contract
+
+The contract is split across three files and they must stay in sync:
+
+| File | Role |
+|---|---|
+| `skills/flow-map-compiler/references/output-schemas.md` | The file-shape contract — every frontmatter field, every required section. |
+| `skills/flow-map-compiler/references/lint-contract.md` | The 16 self-check rules the skill walks at the end of a compile. |
+| `skills/flow-map-compiler/assets/templates/*.tmpl` | The six output templates. They MUST emit what the schema describes. |
+
+If you add a field, update all three. If you add a rule, point it at a
+field the schema actually defines. The fixtures' canonical
+`.flow-map/` outputs are gold-standard examples — re-render or
+hand-edit them to match the new contract.
+
+### Running the evals
+
+The `evals/` directory holds three test cases — one per supported
+stack — checking that a compile correctly identifies the skills,
+flows, and capabilities the source code implies. They follow the
+[skill-creator](https://github.com/anthropics/claude-plugins/tree/main/plugins/skill-creator)
+schema (`evals.json` + verifier script).
+
+**Smoke-test the canonical fixtures** (the `.flow-map/` outputs we
+ship are gold standard — they should always pass):
+
+```bash
+cd skills/flow-map-compiler
+
+python evals/check_flow_map.py tests/fixtures/sample-nextjs/.flow-map    --expect nextjs-update-profile
+python evals/check_flow_map.py tests/fixtures/sample-react/.flow-map     --expect react-update-profile
+python evals/check_flow_map.py tests/fixtures/sample-sveltekit/.flow-map --expect sveltekit-view-home
+```
+
+Each prints one PASS/FAIL line per expectation and exits non-zero if
+any fail. Run this after every contract change — if the canonical
+fixtures break, your change broke the contract.
+
+The verifier needs `pyyaml` (`pip install pyyaml`).
+
+**Run the full eval loop with skill-creator** (compile fresh outputs
+in a sandbox, grade them against `evals.json`, compare with-skill vs.
+no-skill):
+
+```
+/plugin install skill-creator@anthropic-claude-plugins
+# in a Claude Code session inside this repo:
+> Run the skill-creator eval loop on flow-map-compiler.
+```
+
+Skill-creator spawns subagents to run each test prompt against fresh
+fixture inputs, invokes the grader (which calls `check_flow_map.py
+--json`), aggregates pass-rate + tokens + duration, and opens an
+HTML viewer.
+
+### Adding a new stack or a new test case
+
+1. Add a fixture under `skills/flow-map-compiler/tests/fixtures/sample-<stack>/`
+   with realistic source files and a canonical `.flow-map/` output.
+2. Append a test case to `evals/evals.json` listing the input source
+   files and the structural expectations (counts, expected skill IDs,
+   capability filename, flow entry path, etc.).
+3. Add an entry to `EXPECTATIONS_BY_EVAL` in
+   `evals/check_flow_map.py` so the verifier knows what to check.
+4. Re-run the smoke test. All three (now four) fixtures should pass
+   20+/20+ expectations each.
+
+### Using the produced wiki
+
+Once a `.flow-map/` exists in a target repo, the runtime agent loads
+it in this order:
+
+1. `APP.md` once per session — invariants, auth model, conventions.
+2. For "I want to do X" → `skills/<id>.md` (the primary read).
+3. For "what triggered this UI?" → `flows/<id>.md`.
+4. For "how do I implement the MCP server for resource Y?" →
+   `capabilities/<name>.md`.
+5. `glossary.md` is the one-page index, not a primary read.
+
+`AGENTS.md` at the root is the entry point — it has the Skills /
+Flows / Capabilities tables and the Mermaid overview.
 
 ## License
 
