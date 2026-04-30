@@ -14,11 +14,12 @@ generated_at: <ISO8601>
 generated_from_sha: <git-sha>
 app_name: <name>
 stack: { framework: <framework-id>, version: "<v>", router: app|pages|both|none, language: ts|js }
-counts: { flows: <n>, capabilities: <n>, proposed_tools: <n> }
+counts: { skills: <n>, flows: <n>, capabilities: <n>, proposed_tools: <n> }
 freshness: { last_verified: <ISO8601>, staleness_check: weekly }
 files:
   app_context: APP.md
   glossary: glossary.md
+  skills_dir: skills/
   flows_dir: flows/
   capabilities_dir: capabilities/
   proposed_tools: tools-proposed.json
@@ -30,12 +31,17 @@ files:
 
 ## Reading order for agents
 
+An *agent skill* here is a navigable file describing one tool the
+agent can invoke — not the same as a Claude Code SKILL.md plugin.
+
 1. Load APP.md once per session.
-2. For "tell me about X" / behavior questions → load flows/<id>.md
-   matching the intent table.
-3. For "I need to do Y" / capability questions → load
-   capabilities/<name>.md.
-4. For unfamiliar terms → consult glossary.md.
+2. For "I want to do X" → load skills/<id>.md (the primary
+   reading unit).
+3. For "what triggered this UI" / behavior questions → load
+   flows/<id>.md.
+4. For "how do I implement the MCP server for resource Y" →
+   load capabilities/<name>.md.
+5. glossary.md is the one-page index, not a primary read.
 
 ## Overview
 
@@ -44,10 +50,10 @@ flowchart LR
   ...
 ```
 
-## Intent → flow
+## Skills
 
-| User intent | Flow |
-|---|---|
+| skill | file | proposed tool |
+|---|---|---|
 
 ## Flows
 
@@ -112,11 +118,9 @@ providers: [<name>, <scope>]
 
 ## `glossary.md`
 
-The glossary is the **indirection layer** that decouples flows from
-proposed tool names. Each row is anchored on a stable intent key
-(`{#<intent>}`) so flow files can link to it. When the MCP server lands
-and tools get named, only the "Proposed tool" column changes — flow files
-stay byte-identical.
+A thin one-page pivot table that lists every skill alongside its
+capability and proposed tool. Per-skill body lives in
+`skills/<id>.md`; glossary is the catalog only.
 
 ````markdown
 ---
@@ -125,32 +129,86 @@ schema_version: 1
 
 # Glossary
 
-| Intent | User phrases | Capability | Proposed tool |
+One row per agent skill. For per-skill body (preconditions, examples,
+failure modes), open the skills file linked in the first column.
+
+| Skill | User phrases | Capability | Proposed tool |
 |---|---|---|---|
-| <kebab-case-id> | "<phrase>", "<phrase>" | [<name>#<anchor>](capabilities/<name>.md#<anchor>) | `<tool.name>` |
-
-## Intent anchors
-
-Each intent below carries an explicit anchor so flow files can link to
-`glossary.md#<intent>`.
-
-### write user profile {#write-user-profile}
-
-- Capability: [`capabilities/users.md#users-update`](capabilities/users.md#users-update)
-- Proposed tool: `users.update`
-- Role: write
-
-<repeat per intent>
+| [<kebab-case-id>](skills/<id>.md) | "<phrase>", "<phrase>" | [<name>#<anchor>](capabilities/<name>.md#<anchor>) | `<tool.name>` |
 
 <!-- HUMAN id="glossary-additions" -->
 <!-- /HUMAN -->
 ````
 
+## `skills/<id>.md`
+
+Skills are the **primary reading unit for the runtime agent**. Each
+file describes one tool the agent can invoke: when to reach for it,
+its trigger phrases, the capability it executes, and which flows
+surface it. The frontmatter `proposed_tool` field is the indirection
+layer — when the MCP server lands and tools get renamed, only this
+field changes; flow files stay byte-identical because flows link to
+`skills/<id>.md`, not to the tool name.
+
+> Note: an *agent skill* (this file) is not the same as a Claude
+> Code SKILL.md plugin. Different concept, same word. Context
+> disambiguates inside generated content.
+
+````markdown
+---
+schema_version: 1
+id: <kebab-case>                            # e.g. write-user-profile
+name: <human-readable>                      # "Update user profile"
+description: "Use when <trigger condition>"
+user_phrases:
+  - "<verbatim phrase a user might say>"
+  - "..."
+role: load|read|write|side-effect
+capability_ref: capabilities/<name>.md#<anchor>
+proposed_tool: <tool.name>
+flows_using_this: [<flow-id>, ...]
+confidence: high|medium|low
+---
+
+# <Skill name>
+
+<!-- AGENT id="overview" -->
+<2–3 sentences: what this skill does for the agent>
+<!-- /AGENT -->
+
+## When to use
+
+<trigger phrases + plain-language description of the situation
+that should make the agent reach for this skill>
+
+## Preconditions
+
+1. <numbered list — system state that must be true before invoking>
+
+## Flows that surface this skill
+
+- [<flow-id>](../flows/<flow-id>.md) — <one-line context>
+
+## Failure modes
+
+| Result | Meaning | What to do |
+|---|---|---|
+
+## Examples
+
+<2–3 worked invocations: user phrase → expected tool-call shape.
+The tool name appears here as a *proposed* name; do not commit to
+the exact arguments until the MCP server is live.>
+
+<!-- HUMAN id="notes" -->
+<!-- /HUMAN -->
+````
+
 ## `flows/<id>.md`
 
-Flow files are tool-name-free. They reference **intent keys** that resolve
-through the glossary. The glossary's "Proposed tool" column is the only
-dynamic part — when tools get renamed, flows do not change.
+Flow files are tool-name-free. They reference **skills** by id. The
+skill's `proposed_tool` frontmatter field is the indirection — when
+tools get renamed, flows do not change.
 
 ````markdown
 ---
@@ -166,10 +224,10 @@ entry: <relative source path>
 trigger: <UI event or condition>
 preconditions:
   - <numbered system state requirement>
-intents_used:
-  - intent: <kebab-case-intent>
+skills_used:
+  - skill: <kebab-case-skill-id>
     role: load|read|write|side-effect
-    glossary_ref: ../glossary.md#<intent>
+    skill_ref: ../skills/<skill-id>.md
 postconditions:
   - <what's true after>
 side_effects: [<list>]
@@ -188,9 +246,9 @@ confidence: high|medium|low
 
 ## How the agent handles this
 
-1. <step referring to intents as markdown links to glossary anchors,
-   e.g. [write user profile](../glossary.md#write-user-profile). Never
-   name a tool, never show HTTP method or URL path.>
+1. <step referring to skills as markdown links, e.g.
+   [write user profile](../skills/write-user-profile.md). Never name
+   a tool, never show HTTP method or URL path.>
 2. ...
 
 ## Decision points
@@ -206,7 +264,7 @@ sequenceDiagram
   participant T as MCP tools
 
   User->>Agent: "<user phrase>"
-  Agent->>T: <intent verb-noun, e.g. write user profile>
+  Agent->>T: <skill verb-noun, e.g. write user profile>
   T-->>Agent: <result>
   Agent->>User: <response>
 ```
@@ -216,9 +274,9 @@ sequenceDiagram
 | What happens | What it means | What to do |
 |---|---|---|
 
-## Intents used
-<bullet list of intent keys, each linking to
- glossary.md#<intent>>
+## Skills used
+<bullet list of skill ids, each linking to
+ skills/<id>.md>
 
 <!-- HUMAN id="extra" -->
 <!-- /HUMAN -->

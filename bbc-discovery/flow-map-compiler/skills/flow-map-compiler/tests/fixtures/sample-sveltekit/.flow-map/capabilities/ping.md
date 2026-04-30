@@ -8,7 +8,7 @@ tools:
     does: "TODO: one-line semantic description"
     method: GET
     path: "/api/ping"
-    auth: unknown
+    auth: none
     confidence: high
     source: src/routes/+page.svelte:3
 flows_using_this: [view-home]

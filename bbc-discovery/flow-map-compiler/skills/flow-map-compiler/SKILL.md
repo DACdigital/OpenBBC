@@ -65,11 +65,18 @@ skill.
 <repo>/.flow-map/
 ├── AGENTS.md                 # entry point + retrieval indices
 ├── APP.md                    # app-wide invariants, conventions, boundaries
-├── glossary.md               # domain term ↔ tool/capability lookup
-├── flows/<id>.md             # one playbook per business flow (intent, no HTTP)
+├── glossary.md               # one-page pivot table (skill → capability → tool)
+├── skills/<id>.md            # one per agent skill — primary read for runtime agent
+├── flows/<id>.md             # one playbook per user journey (intent, no HTTP)
 ├── capabilities/<name>.md    # one per resource group (HTTP detail lives here)
 └── tools-proposed.json       # machine-readable handoff for MCP-server author
 ```
+
+> "Agent skill" here means one file describing one tool the runtime
+> agent can invoke — not the same as the parent Claude Code SKILL.md
+> plugin. Same word, different concept. In docs and conversation
+> referring to both, prefer "agent skill" for the output artifact and
+> "this skill" / "the flow-map-compiler skill" for the producer plugin.
 
 Schema version: `1`. Every generated file's frontmatter (and
 `tools-proposed.json`) carries `schema_version: 1`. Tool names are
@@ -83,7 +90,7 @@ When invoked, work through these in order:
 1. **`references/output-schemas.md`** — exact schemas for all generated
    files (AGENTS.md, APP.md, glossary, flow, capability, tools-proposed.json).
    Treat as a contract.
-2. **`references/lint-contract.md`** — the 15 rules. In this version
+2. **`references/lint-contract.md`** — the 16 rules. In this version
    there is no `lint.mjs`; you walk these rules yourself before declaring
    the run done. Output that fails any rule must not ship.
 3. **`assets/templates/*.tmpl`** — the structural skeletons you fill.
@@ -98,20 +105,24 @@ When invoked, work through these in order:
 These do not change without explicit user approval. If something feels
 wrong, stop and ask.
 
-- **Flows are tool-name-free.** Flow files refer to **intent keys**
-  (kebab-case verb-noun, e.g. `write-user-profile`) and link to glossary
-  anchors. They never name a proposed MCP tool, never show HTTP method or
-  URL path. The glossary is the single indirection layer that maps an
-  intent to its currently-proposed tool name and capability anchor — when
-  the MCP server lands and tools get renamed, only the glossary updates;
-  flow files don't churn.
+- **Flows are tool-name-free.** Flow files refer to **skills** by id
+  (kebab-case verb-noun, e.g. `write-user-profile`) and link to
+  `skills/<id>.md`. They never name a proposed MCP tool, never show
+  HTTP method or URL path. Each skill's `proposed_tool` frontmatter
+  field is the indirection layer — when the MCP server lands and tools
+  get renamed, only those frontmatter fields update; flow files don't
+  churn.
 - **No HTTP detail in flow files.** No `GET `, `POST `, `fetch(`,
   `axios.`, or `/api/` paths in `flows/*.md`.
 - **Capabilities own HTTP detail and proposed tool names.** Each
   capability subsection has method, path, params, response shape, auth,
   source coordinates, and the proposed tool name. Proposed names appear
-  *only* in capability files, glossary entries, and `tools-proposed.json`
-  — never in flows.
+  *only* in capability files, skill frontmatter (`proposed_tool`),
+  glossary rows, and `tools-proposed.json` — never in flow bodies.
+- **One skill = one intent = one capability tool.** Do not bundle
+  unrelated tools into a single skill (mega-skill anti-pattern). If
+  two flows surface the same skill, they both link to the same
+  `skills/<id>.md`.
 - **`tools-proposed.json` is a separate handoff artifact.** Not loaded into
   the runtime agent's context. Bidirectionally consistent with capability
   frontmatter (lint rule 14).
@@ -223,38 +234,45 @@ with a one-line reason.
 Read each template under `assets/templates/` and produce the
 corresponding wiki file. Write under `<repo>/.flow-map/`:
 
-- `AGENTS.md` — index, retrieval table, mermaid overview, intent → flow
-  table, file lists. Frontmatter includes `generated_from_sha` (current
-  HEAD).
+- `AGENTS.md` — index, retrieval table, mermaid overview, Skills
+  table, Flows table, Capabilities table. Frontmatter includes
+  `generated_from_sha` (current HEAD).
 - `APP.md` — stack, invariants, auth model, conventions, boundaries.
-- `glossary.md` — intent → user phrases → capability anchor → proposed
-  tool. This is the single indirection layer. Every flow link goes here
-  before reaching a capability.
-- `flows/<id>.md` — one per flow. Tool-name-free. Steps reference
-  intents as markdown links to `glossary.md#<intent>` anchors.
+- `glossary.md` — thin one-page pivot: skill → user phrases →
+  capability anchor → proposed tool. Each row links to the
+  per-skill body in `skills/<id>.md`.
+- `skills/<id>.md` — one per agent skill. Frontmatter carries the
+  `proposed_tool` (the indirection layer). Body sections: When to
+  use, Preconditions, Flows that surface this skill, Failure modes,
+  Examples.
+- `flows/<id>.md` — one per user journey. Tool-name-free. Steps
+  reference skills as markdown links to `skills/<id>.md`.
 - `capabilities/<name>.md` — one per capability group. HTTP detail,
   proposed tool name, source coordinates per tool subsection.
 - `tools-proposed.json` — bidirectional with capability frontmatter.
 
 Match `references/output-schemas.md` exactly: every required
 frontmatter key, every section heading, every block marker. Tool names
-never appear in flow bodies or frontmatter; flows link to glossary
-anchors; glossary entries link to capability anchors.
+never appear in flow bodies or frontmatter; flows link to
+`skills/<id>.md`; skills carry `capability_ref` to a capability anchor.
 
 ### 6. Self-check
 
 Walk every rule in `references/lint-contract.md` against the rendered
-output. All 15 must pass. The most common slips:
+output. All 16 must pass. The most common slips:
 
 - Rule 5 — flow `description` must start with `Use when`.
 - Rule 9 — no HTTP methods, `fetch(`, `axios.`, or `/api/` strings in
   flow bodies.
-- Rule 13 — every `glossary.md#<intent>` link from a flow must exist;
-  every `capabilities/<name>.md#<anchor>` link from glossary must
-  exist.
+- Rule 13 — every `skills/<id>.md` link from a flow must resolve;
+  every `capability_ref` anchor from a skill must exist in the
+  linked capability file.
 - Rule 14 — `tools-proposed.json` and capability `tools:` frontmatter
   must enumerate the same set of tool names.
 - Rule 15 — every `proposed: true` flag is present where required.
+- Rule 16 — every skill's `proposed_tool` matches a tool in its
+  referenced capability, and `flows_using_this:` round-trips between
+  skill and capability.
 
 If any rule fails, fix the offending file (or fix the upstream
 recon/trace data and re-render). Do not ship a lint-failing wiki.
@@ -317,10 +335,10 @@ To verify the skill end-to-end on a fixture:
    `.flow-map.gold/`).
 2. Run the procedure above against the fixture from scratch.
 3. Diff the regenerated `.flow-map/` against `.flow-map.gold/`. Schema,
-   frontmatter keys, file IDs, intent keys, capability names, and
+   frontmatter keys, file IDs, skill ids, capability names, and
    proposed tool names should match. Prose may differ — that is
    acceptable.
-4. Walk the lint contract; all 15 rules must pass.
+4. Walk the lint contract; all 16 rules must pass.
 5. Restore the canonical directory.
 
 For HUMAN-block preservation, insert a hand-edited

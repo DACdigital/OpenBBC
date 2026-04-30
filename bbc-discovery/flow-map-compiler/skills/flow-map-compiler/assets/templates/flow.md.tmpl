@@ -14,11 +14,11 @@ preconditions:
 {{#each preconditions}}
   - {{this}}
 {{/each}}
-intents_used:
-{{#each intents_used}}
-  - intent: {{this.intent}}
+skills_used:
+{{#each skills_used}}
+  - skill: {{this.skill}}
     role: {{this.role}}
-    glossary_ref: {{this.glossary_ref}}
+    skill_ref: {{this.skill_ref}}
 {{/each}}
 postconditions:
 {{#each postconditions}}
@@ -70,10 +70,10 @@ sequenceDiagram
 | {{this.what}} | {{this.means}} | {{this.do}} |
 {{/each}}
 
-## Intents used
+## Skills used
 
-{{#each intents_used}}
-- [{{this.label}}]({{this.glossary_ref}}) — {{this.role}}
+{{#each skills_used}}
+- [{{this.label}}]({{this.skill_ref}}) — {{this.role}}
 {{/each}}
 
 <!-- HUMAN id="extra" -->

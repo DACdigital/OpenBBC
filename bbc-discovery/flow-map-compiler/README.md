@@ -15,51 +15,68 @@ Given a frontend repo (Next.js, SvelteKit, Nuxt, Remix, Astro, plain
 React, Vue, SolidStart, Qwik, or anything else), the skill produces a
 `.flow-map/` directory with:
 
-- **`AGENTS.md`** — entry point. Reading order, intent → flow table,
-  flow & capability indexes, overview Mermaid diagram.
+- **`AGENTS.md`** — entry point. Reading order, Skills/Flows/Capabilities
+  index tables, overview Mermaid diagram.
 - **`APP.md`** — stack, framework, auth model, providers, invariants,
   boundaries.
+- **`skills/<id>.md`** — one file per *agent skill* — the runtime
+  agent's primary reading unit. Each describes one tool the agent can
+  invoke: when to use it, trigger phrases, preconditions, the flows
+  that surface it, failure modes, and worked examples. The
+  `proposed_tool` frontmatter is the indirection layer.
 - **`flows/<id>.md`** — one file per user-facing entry point (page,
-  route, server action). Describes intent, preconditions, sequence,
-  postconditions, failure modes — **without** naming HTTP methods,
-  URL paths, or tool names.
+  route, server action). Describes the user journey, preconditions,
+  sequence, postconditions, failure modes — **without** naming HTTP
+  methods, URL paths, or tool names.
 - **`capabilities/<name>.md`** — one file per backend resource group
   (`users`, `orders`, …). Each tool subsection has method, path, params,
   request/response shape, auth, source coordinates, and a proposed
-  MCP tool name.
-- **`glossary.md`** — the single indirection layer mapping intent keys
-  to capability anchors and currently-proposed tool names.
+  MCP tool name. Read this when building the MCP server.
+- **`glossary.md`** — thin one-page pivot table linking each skill to
+  its capability and proposed tool. The catalog; per-skill body lives
+  under `skills/`.
 - **`tools-proposed.json`** — machine-readable catalog of proposed MCP
   tools (separate handoff artifact for the engineer building the
   server).
 
 Everything is `proposed: true`. No MCP server is assumed to exist.
 
+> **A note on the word "skill".** The output `skills/<id>.md` files
+> are **agent skills** — units of agent functionality, one per
+> invocable tool. This is *not* the same as a Claude Code SKILL.md
+> plugin (which is what `flow-map-compiler` itself is). Same word,
+> different concept; in docs that mention both, this README uses
+> "agent skill" for the output and "this skill" / "the
+> flow-map-compiler skill" for the producer plugin.
+
 ## Why two audiences
 
 The wiki is read by two consumers, and the file structure reflects that:
 
 1. **A runtime agent** that drives MCP tools wrapping the backend.
-   It needs semantics, intent, sequencing, preconditions, invariants,
-   failure modes, and domain vocabulary — not HTTP wiring. So `flows/`
-   are tool-name-free and link through `glossary.md`.
+   It needs semantics, trigger phrases, preconditions, failure modes,
+   and worked examples — one navigable file per skill. So `skills/`
+   is the primary reading unit; flows are supporting context for
+   "what triggered this UI?"
 2. **The engineer who will build that MCP server.** They need
-   methods, paths, params, shapes, auth, and source coordinates. So
-   `capabilities/` and `tools-proposed.json` carry all the HTTP detail.
+   methods, paths, params, shapes, auth, and source coordinates,
+   grouped by resource. So `capabilities/` and `tools-proposed.json`
+   carry the HTTP detail.
 
-When the MCP server lands and tools get renamed, only `glossary.md`
-and `capabilities/` change. Flow files stay byte-identical.
+When the MCP server lands and tools get renamed, only the
+`proposed_tool` frontmatter in `skills/<id>.md`, the glossary pivot
+row, and `capabilities/` change. Flow bodies stay byte-identical.
 
-## Flows vs. capabilities vs. intents
+## Skills vs. flows vs. capabilities
 
 Three concepts, three jobs. The wiki keeps them in separate files so
 each can change independently.
 
-| Concept | What it is | Lives in | Names a tool? |
-|---|---|---|---|
-| **Flow** | A user journey through the app, anchored on an entry point. Describes preconditions, sequence of steps, postconditions, failure modes. *Semantic, durable.* | `flows/<id>.md` | No — never |
-| **Intent** | A kebab-case key (`write-user-profile`) that names *what the agent wants to do*. The link between a flow's narrative and the backend operation that fulfils it. *Stable identifier.* | Anchors in `glossary.md`; referenced from flows as `[label](glossary.md#<intent>)` | No — points at one |
-| **Capability** | A backend resource group (`users`, `orders`, …) with the HTTP wiring: method, path, params, shapes, auth, source line, and the proposed tool name. *Concrete, may churn.* | `capabilities/<name>.md` | Yes — owns it |
+| Concept | What it is | Lives in | Names a tool? | Primary reader |
+|---|---|---|---|---|
+| **Agent skill** | One unit of agent functionality. Trigger phrases, preconditions, the tool to invoke, the flows that surface it, worked examples. *Semantic + indirection layer.* | `skills/<id>.md` | Yes — in `proposed_tool` frontmatter | Runtime agent |
+| **Flow** | A user journey through the app, anchored on an entry point. Steps, sequence diagram, failure modes. References skills, never tools directly. *Semantic, durable.* | `flows/<id>.md` | No — never | Runtime agent (for "what triggered this?") |
+| **Capability** | A backend resource group (`users`, `orders`, …) with the HTTP wiring: method, path, params, shapes, auth, source line, and the proposed tool name. *Concrete, may churn.* | `capabilities/<name>.md` | Yes — owns it | MCP-server author |
 
 ### Worked example
 
@@ -68,17 +85,27 @@ A user clicks Save on `/profile`.
 - **Flow** `flows/update-profile.md` — the journey:
   > 1. User fills out the form and clicks Save.
   > 2. Agent validates the input.
-  > 3. Agent does [write user profile](glossary.md#write-user-profile).
+  > 3. Agent does [write user profile](../skills/write-user-profile.md).
   > 4. On success, show "Saved". On 409, ask the user to refresh.
 
   Notice: no HTTP method, no URL, no tool name.
 
-- **Intent** `write-user-profile` — the kebab-case link target. The
-  glossary anchors it:
-  > ### write user profile {#write-user-profile}
-  > - Capability: [`capabilities/users.md#users-update`](capabilities/users.md#users-update)
-  > - Proposed tool: `users.update`
-  > - Role: write
+- **Skill** `skills/write-user-profile.md` — what the agent needs:
+  > ---
+  > id: write-user-profile
+  > description: "Use when the user wants to save edits to their profile"
+  > user_phrases: ["save my profile", "update my account info"]
+  > role: write
+  > capability_ref: capabilities/users.md#users-update
+  > proposed_tool: users.update
+  > flows_using_this: [update-profile, signup-finish]
+  > ---
+  > ## When to use
+  > Use after form validation; not for read-back.
+  > ## Failure modes
+  > | 409 | Stale version | Ask user to refresh and retry |
+  > ## Examples
+  > User: "save my profile" → call `users.update` with `{name, email}`.
 
 - **Capability** `capabilities/users.md` — the wiring:
   > ## users.update  {#users-update}
@@ -92,12 +119,14 @@ A user clicks Save on `/profile`.
 So the flow stops being a moving target.
 
 - If someone renames `users.update` → `userProfile.write`, only
-  `glossary.md` and `capabilities/users.md` change. Every flow that
-  references `#write-user-profile` is unchanged.
-- The runtime agent reads flows for *semantics* and the glossary
-  for *which tool*. Two different concerns, two different files.
+  `skills/write-user-profile.md` (its `proposed_tool` field), the
+  `glossary.md` pivot row, and `capabilities/users.md` change. Every
+  flow that links to `skills/write-user-profile.md` is unchanged.
+- The runtime agent loads `skills/<id>.md` for semantics + tool
+  name (one file, lazy-loaded by description match) and `flows/`
+  only when it needs entry-point context.
 - The engineer building the MCP server reads `capabilities/` and
-  `tools-proposed.json`. They don't care about flows.
+  `tools-proposed.json`. They don't care about skills or flows.
 
 Same data, three views, decoupled.
 
@@ -122,9 +151,10 @@ source directly and walks six steps:
 4. **Propose tools.** Default naming: `<resource>.<verb>`
    (dotted-lower-camel). Every entry marked `proposed: true`.
 5. **Render.** Fill the templates in `assets/templates/`, write
-   `<repo>/.flow-map/`. Schemas defined in
+   `<repo>/.flow-map/` (AGENTS.md, APP.md, glossary.md, skills/,
+   flows/, capabilities/, tools-proposed.json). Schemas defined in
    `references/output-schemas.md`.
-6. **Self-check.** Walk the 15-rule lint contract in
+6. **Self-check.** Walk the 16-rule lint contract in
    `references/lint-contract.md`. Fix or re-render if anything fails.
 
 Full procedure: see `skills/flow-map-compiler/SKILL.md`.
@@ -134,15 +164,20 @@ Full procedure: see `skills/flow-map-compiler/SKILL.md`.
 These are invariants the skill must not violate. Verbatim from
 `SKILL.md`:
 
-- **Flows are tool-name-free.** Flow files refer to intent keys
-  (kebab-case verb-noun) and link to glossary anchors. They never name
-  a proposed MCP tool, never show HTTP method or URL path.
+- **Flows are tool-name-free.** Flow files refer to skills by id
+  (kebab-case verb-noun) and link to `skills/<id>.md`. They never name
+  a proposed MCP tool, never show HTTP method or URL path. Each
+  skill's `proposed_tool` frontmatter is the indirection layer.
 - **No HTTP detail in flow files.** No `GET `, `POST `, `fetch(`,
   `axios.`, or `/api/` paths in `flows/*.md`.
 - **Capabilities own HTTP detail and proposed tool names.** Method,
   path, params, response shape, auth, source coordinates, and proposed
-  tool name. Proposed names appear *only* in capability files, glossary
-  entries, and `tools-proposed.json`.
+  tool name. Proposed names appear *only* in capability files, skill
+  frontmatter, glossary rows, and `tools-proposed.json`.
+- **One skill = one intent = one capability tool.** Don't bundle
+  unrelated tools into one skill (mega-skill anti-pattern). Two flows
+  may surface the same skill — they both link to the same
+  `skills/<id>.md`.
 - **`tools-proposed.json` is a separate handoff artifact.** Not loaded
   into the runtime agent's context. Bidirectionally consistent with
   capability frontmatter (lint rule 14).
@@ -279,7 +314,7 @@ get updates when the version field in `plugin.json` is bumped.
 - Discovery, extraction, grouping, naming, and rendering all happen
   inside Claude (no Node scripts).
 - Works on any frontend stack because the agent reads source directly
-  and applies the contract (templates + 15-rule lint).
+  and applies the contract (6 templates + 16-rule lint).
 - **No byte-identical idempotence** — LLM-authored prose may churn on
   re-runs even when source is unchanged. Schema and structure are
   stable.
@@ -296,10 +331,10 @@ flow-map-compiler/
 ├── README.md                            # this file
 └── skills/flow-map-compiler/
     ├── SKILL.md                         # the procedure (~340 lines)
-    ├── assets/templates/                # 5 output templates
+    ├── assets/templates/                # 6 output templates
     ├── references/
     │   ├── output-schemas.md            # file-shape contract
-    │   └── lint-contract.md             # 15-rule self-check
+    │   └── lint-contract.md             # 16-rule self-check
     └── tests/fixtures/
         ├── sample-nextjs/               # input + canonical .flow-map/
         ├── sample-react/

@@ -10,6 +10,7 @@ stack:
   router: app
   language: ts
 counts:
+  skills: 1
   flows: 1
   capabilities: 1
   proposed_tools: 1
@@ -19,6 +20,7 @@ freshness:
 files:
   app_context: APP.md
   glossary: glossary.md
+  skills_dir: skills/
   flows_dir: flows/
   capabilities_dir: capabilities/
   proposed_tools: tools-proposed.json
@@ -27,32 +29,35 @@ files:
 # sample-nextjs — flow map
 
 <!-- AGENT id="summary" -->
-A minimal Next.js App Router application with one user-facing flow: profile editing. The agent surface is one screen at /profile and one write capability against the user record.
+A minimal Next.js App Router application with one user-facing flow: profile editing. The agent surface is one screen at /profile and one write skill against the user record.
 <!-- /AGENT -->
 
 ## Reading order for agents
 
+An *agent skill* below is one navigable file describing a tool the
+agent can invoke — not the same as a Claude Code SKILL.md plugin.
+
 1. Load APP.md once per session.
-2. For "tell me about X" / behavior questions → load `flows/<id>.md`
-   matching the intent table below.
-3. For "I need to do Y" / capability questions → load
-   `capabilities/<name>.md`.
-4. For unfamiliar terms → consult `glossary.md`.
+2. For "I want to do X" → load `skills/<id>.md` (primary read).
+3. For "what triggered this UI" → load `flows/<id>.md`.
+4. For "how do I implement the MCP server for resource Y" →
+   load `capabilities/<name>.md`.
+5. `glossary.md` is the one-page index, not a primary read.
 
 ## Overview
 
 ```mermaid
 flowchart LR
   User --> update_profile_E["/profile"]
-  update_profile_E --> update_user_record_I[update-user-record]
-  update_user_record_I --> users_C[users]
+  update_profile_E --> update_user_record_S[update-user-record]
+  update_user_record_S --> users_C[users]
 ```
 
-## Intent → flow
+## Skills
 
-| User intent | Flow |
-|---|---|
-| Persist the user's edited profile fields to the backend | [update-profile](flows/update-profile.md) |
+| skill | file | proposed tool |
+|---|---|---|
+| update-user-record | [skills/update-user-record.md](skills/update-user-record.md) | `users.update` |
 
 ## Flows
 
@@ -73,10 +78,10 @@ from frontend call sites. The actual MCP server does not exist yet. See
 [`tools-proposed.json`](tools-proposed.json) for the full
 machine-readable list intended for whoever wires up the MCP server.
 
-Flow files do not name proposed tools at all; they reference intents
-defined in [`glossary.md`](glossary.md), which is the single
-indirection layer that maps intents to currently-proposed tool names.
-When tools are renamed, only the glossary updates.
+Flow files do not name proposed tools at all; they link to skills under
+[`skills/`](skills/). Each skill's `proposed_tool` frontmatter field is
+the indirection layer — when tools are renamed, only those frontmatter
+fields update; flow bodies stay byte-identical.
 
 ## Unresolved
 

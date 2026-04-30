@@ -14,10 +14,10 @@ trigger: user submits the profile form
 preconditions:
   - User is signed in (a bearer token is present in client-side storage)
   - The form has at least one changed field
-intents_used:
-  - intent: update-user-record
+skills_used:
+  - skill: update-user-record
     role: write
-    glossary_ref: ../glossary.md#update-user-record
+    skill_ref: ../skills/update-user-record.md
 postconditions:
   - The user's profile reflects the submitted values
   - Subsequent reads of the user record return the new values
@@ -40,7 +40,7 @@ The user opens their profile page, edits one or both of name and email, and subm
 
 1. Confirm the user is signed in. If not, ask them to sign in first and stop.
 2. Confirm which field(s) the user wants to change and the new value(s).
-3. Perform [update user record](../glossary.md#update-user-record) with the user's id and the changed fields.
+3. Perform [update user record](../skills/update-user-record.md) with the user's id and the changed fields.
 4. On success, summarise what was changed back to the user.
 5. On failure, show the error returned by the tool and offer to retry once.
 
@@ -73,9 +73,9 @@ sequenceDiagram
 | Tool returns 422 | Validation failed (e.g., bad email) | Echo the error and ask for a fix |
 | Tool returns 5xx | Backend transient failure | Retry once with backoff, then surface |
 
-## Intents used
+## Skills used
 
-- [update user record](../glossary.md#update-user-record) — write
+- [update user record](../skills/update-user-record.md) — write
 
 <!-- HUMAN id="extra" -->
 <!-- /HUMAN -->

@@ -11,10 +11,10 @@ entry: src/routes/+page.svelte
 trigger: TODO
 preconditions:
   - TODO: precondition
-intents_used:
-  - intent: list-ping
+skills_used:
+  - skill: list-ping
     role: read
-    glossary_ref: ../glossary.md#list-ping
+    skill_ref: ../skills/list-ping.md
 postconditions:
   - TODO: postcondition
 side_effects: []
@@ -34,7 +34,7 @@ TODO: 2-4 sentence summary of this flow's purpose, agent behaviour, and any idem
 
 ## How the agent handles this
 
-1. Perform [list ping](../glossary.md#list-ping).
+1. Perform [list ping](../skills/list-ping.md).
 
 ## Decision points
 
@@ -61,9 +61,9 @@ sequenceDiagram
 | Tool returns 401 | auth missing/expired | ask the user to sign in again |
 | Tool returns non-2xx | operation failed | surface the error to the user |
 
-## Intents used
+## Skills used
 
-- [list ping](../glossary.md#list-ping) — read
+- [list ping](../skills/list-ping.md) — read
 
 <!-- HUMAN id="extra" -->
 <!-- /HUMAN -->

@@ -4,27 +4,15 @@ schema_version: 1
 
 # Glossary
 
-The glossary is the indirection layer between flows (intent only) and
-capabilities (HTTP detail + proposed tool name). When the MCP server is
-built and tools are renamed, only the "Proposed tool" column here
-updates — flow files do not churn.
+One row per agent skill — a thin pivot table linking each skill to
+its capability and proposed tool. The per-skill body lives in
+[`skills/<id>.md`](skills/).
 
 ## Lookup table
 
-| Intent | User phrases | Capability | Proposed tool |
+| Skill | User phrases | Capability | Proposed tool |
 |---|---|---|---|
-| [`list-ping`](#list-ping) | TODO | [`ping-list`](capabilities/ping.md#ping-list) | `ping.list` |
-
-## Intent anchors
-
-### List Ping {#list-ping}
-
-- **Role:** read
-- **Capability:** [`ping-list`](capabilities/ping.md#ping-list)
-- **Proposed tool:** `ping.list` (proposed — no MCP server yet)
-- **User phrases:** TODO
-- **What it does:** TODO: domain-level description of `list-ping`.
-
+| [`list-ping`](skills/list-ping.md) | TODO | [`ping-list`](capabilities/ping.md#ping-list) | `ping.list` |
 
 <!-- HUMAN id="glossary-additions" -->
 <!-- /HUMAN -->
