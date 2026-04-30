@@ -1,1 +1,0 @@
-{"file":"src/api/users.ts","line":17,"method":"PATCH","path":"/api/users/{id}","auth":"bearer","client":"fetch","confidence":"high","raw_snippet":"fetch(`/api/users/${id}`, { method: \"PATCH\", headers: { \"Content-Type\": \"application/json\", Authorization: `Bearer ${token}`, }, body: JSON.stringify(input), }); if (!r","entry":"src/pages/Profile.tsx","rule_pack":"fetch"}

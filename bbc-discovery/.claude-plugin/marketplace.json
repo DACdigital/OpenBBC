@@ -1,0 +1,18 @@
+{
+  "name": "bbc-discovery",
+  "description": "Discovery skills for preparing frontend repos as MCP-agent context.",
+  "owner": { "name": "DACdigital" },
+  "plugins": [
+    {
+      "name": "flow-map-compiler",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/DACdigital/OpenBBC.git",
+        "path": "bbc-discovery/flow-map-compiler"
+      },
+      "description": "Compile a frontend repo into a .flow-map/ agent wiki documenting flows, capabilities, and proposed MCP tools.",
+      "category": "discovery",
+      "tags": ["mcp", "agent-context", "documentation", "frontend"]
+    }
+  ]
+}
