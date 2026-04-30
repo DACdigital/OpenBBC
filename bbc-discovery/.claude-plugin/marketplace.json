@@ -10,7 +10,7 @@
         "url": "https://github.com/DACdigital/OpenBBC.git",
         "path": "bbc-discovery/flow-map-compiler"
       },
-      "description": "Compile a frontend repo into a .flow-map/ agent wiki documenting flows, capabilities, and proposed MCP tools.",
+      "description": "Compile a frontend repo into a .flow-map/ agent wiki — flows, capabilities, proposed MCP tools.",
       "category": "discovery",
       "tags": ["mcp", "agent-context", "documentation", "frontend"]
     }

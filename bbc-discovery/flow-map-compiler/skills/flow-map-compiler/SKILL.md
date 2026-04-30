@@ -328,12 +328,7 @@ For HUMAN-block preservation, insert a hand-edited
 `flows/update-profile.md`, regenerate, and confirm the block survives
 verbatim at the same anchor.
 
-## Recommended target-repo `.gitignore`
+## Target-repo `.gitignore`
 
-```
-# nothing to ignore — everything under .flow-map/ is git-tracked in v0
-```
-
-The wiki itself (`AGENTS.md`, `APP.md`, `glossary.md`, `flows/`,
-`capabilities/`, `tools-proposed.json`) is git-tracked. There is no
-`.flow-map/.cache/` in this version.
+Track everything under `.flow-map/`. There is no cache directory in v0,
+so nothing to ignore.

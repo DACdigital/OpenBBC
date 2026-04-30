@@ -13,7 +13,7 @@ all, fix them, and re-render.
 | 3  | Every `flows/*.md` between 60 and 400 lines |
 | 4  | Every flow file's frontmatter has non-empty `description`, `user_phrases`, `intents_used`, `preconditions` |
 | 5  | `description` field on every flow starts with `Use when` |
-| 6  | Every tool referenced in any flow file appears in some `capabilities/*.md` `tools` list |
+| 6  | Every intent listed in a flow's `intents_used[]` resolves via `glossary.md` to a tool in some `capabilities/*.md` `tools` list |
 | 7  | Every endpoint participant in any sequence diagram (when used) matches `^(GET\|POST\|PUT\|PATCH\|DELETE\|HEAD\|OPTIONS) /` OR is a logical tool name like `<word>.<word>`. One convention per file. |
 | 8  | All Mermaid blocks parse |
 | 9  | No `flows/*.md` contains HTTP method strings at the start of a line (`GET `, `POST `, etc.); no `fetch(`, no `axios.`, no `/api/` paths |
@@ -22,7 +22,7 @@ all, fix them, and re-render.
 | 12 | `glossary.md` "Tool / capability" column entries all resolve to a real file or tool name |
 | 13 | Every glossary anchor referenced from a `flows/*.md` link exists in `glossary.md`, **and** every capability anchor referenced from `glossary.md` exists in the linked `capabilities/*.md`. Two-hop integrity. |
 | 14 | Every tool listed in `tools-proposed.json` is referenced by at least one capability file's `tools:` frontmatter, and vice versa |
-| 15 | Every `proposed: true` flag is present where required (every flow `tools_used[]`, every capability `tools[]`). The skill must never emit `proposed: false`. |
+| 15 | Every `proposed: true` flag is present where required (every capability `tools[]` entry, every `tools-proposed.json` entry). The skill must never emit `proposed: false`. Flows do not carry tool entries — they reference intents only. |
 
 ## Failure messages
 
