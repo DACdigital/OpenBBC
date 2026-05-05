@@ -1,0 +1,58 @@
+---
+schema_version: 1
+framework:
+  name: {{framework_adapter}}
+  version: "{{framework_version}}"
+  router: {{router}}
+api_clients: [{{api_clients_csv}}]
+api_base_url:
+  source: {{api_base_url_source}}
+  name: {{api_base_url_name}}
+  default: "{{api_base_url_default}}"
+auth:
+  type: {{auth_type}}
+  token_source: {{auth_token_source}}
+  refresh: {{auth_refresh}}
+providers: [{{providers_csv}}]
+---
+
+# App context
+
+<!-- AGENT id="overview" -->
+{{overview_2_to_3_sentences}}
+<!-- /AGENT -->
+
+## Stack
+
+{{#each stack_bullets}}
+- {{this}}
+{{/each}}
+
+## Invariants
+
+{{#each invariants}}
+{{@index_plus_1}}. {{this}}
+{{/each}}
+
+## Auth model
+
+{{auth_model_paragraph}}
+
+## Conventions
+
+{{#each conventions}}
+- {{this}}
+{{/each}}
+
+## Provider hierarchy
+
+{{provider_hierarchy_section_or_omit}}
+
+## Boundaries
+
+{{#each boundaries}}
+{{@index_plus_1}}. {{this}}
+{{/each}}
+
+<!-- HUMAN id="extra-context" -->
+<!-- /HUMAN -->

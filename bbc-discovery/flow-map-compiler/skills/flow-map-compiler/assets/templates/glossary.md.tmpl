@@ -1,0 +1,21 @@
+---
+schema_version: 1
+---
+
+# Glossary
+
+One row per agent skill — a thin pivot table linking each skill to
+its capability and proposed tool. The per-skill body (preconditions,
+flows that surface it, examples, failure modes) lives in
+[`skills/<id>.md`](skills/). Glossary is the catalog only.
+
+## Lookup table
+
+| Skill | User phrases | Capability | Proposed tool |
+|---|---|---|---|
+{{#each skills}}
+| [`{{this.id}}`](skills/{{this.id}}.md) | {{this.phrases_csv}} | [`{{this.capability_anchor}}`]({{this.capability_link}}) | `{{this.proposed_tool}}` |
+{{/each}}
+
+<!-- HUMAN id="glossary-additions" -->
+<!-- /HUMAN -->

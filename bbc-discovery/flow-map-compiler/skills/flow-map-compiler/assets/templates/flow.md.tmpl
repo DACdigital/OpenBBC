@@ -1,0 +1,84 @@
+---
+schema_version: 1
+id: {{id}}
+name: {{name}}
+description: "Use when {{trigger_condition}}"
+intent: "{{intent_one_sentence}}"
+user_phrases:
+{{#each user_phrases}}
+  - "{{this}}"
+{{/each}}
+entry: {{entry_path}}
+trigger: {{trigger_ui_event}}
+preconditions:
+{{#each preconditions}}
+  - {{this}}
+{{/each}}
+skills_used:
+{{#each skills_used}}
+  - skill: {{this.skill}}
+    role: {{this.role}}
+    skill_ref: {{this.skill_ref}}
+{{/each}}
+postconditions:
+{{#each postconditions}}
+  - {{this}}
+{{/each}}
+side_effects: [{{side_effects_csv}}]
+related_flows: [{{related_flows_csv}}]
+confidence: {{confidence}}
+---
+
+# {{name}}
+
+<!-- AGENT id="prose" -->
+{{prose_2_to_4_sentences}}
+<!-- /AGENT -->
+
+## Entry point
+
+{{entry_path}} — {{how_reached}}
+
+## How the agent handles this
+
+{{#each steps}}
+{{@index_plus_1}}. {{this}}
+{{/each}}
+
+## Decision points
+
+{{#each decision_points}}
+- **{{this.condition}}** → {{this.action}}
+{{/each}}
+
+## Sequence
+
+```mermaid
+sequenceDiagram
+  actor User
+  participant Agent
+  participant T as MCP tools
+
+{{sequence_body_indented_2}}
+```
+
+## Failure modes
+
+| What happens | What it means | What to do |
+|---|---|---|
+{{#each failure_modes}}
+| {{this.what}} | {{this.means}} | {{this.do}} |
+{{/each}}
+
+## Skills used
+
+{{#each skills_used}}
+- [{{this.label}}]({{this.skill_ref}}) — {{this.role}}
+{{/each}}
+
+<!-- HUMAN id="extra" -->
+<!-- /HUMAN -->
+
+## Unresolved
+
+{{unresolved_list_or_none}}

@@ -1,0 +1,67 @@
+---
+schema_version: 1
+id: {{id}}
+name: {{name}}
+description: "Use when {{trigger_condition}}"
+user_phrases:
+{{#each user_phrases}}
+  - "{{this}}"
+{{/each}}
+role: {{role}}
+capability_ref: {{capability_ref}}
+proposed_tool: {{proposed_tool}}
+flows_using_this: [{{flows_using_this_csv}}]
+confidence: {{confidence}}
+---
+
+# {{name}}
+
+<!-- AGENT id="overview" -->
+{{overview_2_to_3_sentences}}
+<!-- /AGENT -->
+
+## When to use
+
+{{when_to_use_paragraph}}
+
+Trigger phrases:
+{{#each user_phrases}}
+- "{{this}}"
+{{/each}}
+
+## Preconditions
+
+{{#each preconditions}}
+{{@index_plus_1}}. {{this}}
+{{/each}}
+
+## Flows that surface this skill
+
+{{#each flows_using_this}}
+- [{{this.id}}](../flows/{{this.id}}.md) — {{this.context}}
+{{/each}}
+
+## Failure modes
+
+| Result | Meaning | What to do |
+|---|---|---|
+{{#each failure_modes}}
+| {{this.result}} | {{this.meaning}} | {{this.action}} |
+{{/each}}
+
+## Examples
+
+{{#each examples}}
+**{{@index_plus_1}}.** User says: *"{{this.user_phrase}}"*
+
+Expected tool call shape (proposed — exact arguments depend on the
+final MCP server):
+
+```
+{{this.tool_call_shape}}
+```
+
+{{/each}}
+
+<!-- HUMAN id="notes" -->
+<!-- /HUMAN -->

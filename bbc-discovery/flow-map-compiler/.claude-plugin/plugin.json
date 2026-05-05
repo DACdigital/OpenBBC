@@ -1,0 +1,10 @@
+{
+  "name": "flow-map-compiler",
+  "description": "Compile a frontend repo into a .flow-map/ agent wiki — flows, capabilities, proposed MCP tools.",
+  "version": "0.1.0",
+  "author": { "name": "DACdigital" },
+  "homepage": "https://github.com/DACdigital/OpenBBC/tree/main/bbc-discovery/flow-map-compiler",
+  "repository": "https://github.com/DACdigital/OpenBBC.git",
+  "license": "Apache-2.0",
+  "keywords": ["mcp", "agent-context", "frontend", "documentation", "discovery"]
+}

@@ -1,0 +1,9 @@
+# skill-creator eval workspaces (regenerated per iteration)
+**/flow-map-compiler-workspace/
+
+# Python cruft from running evals/check_flow_map.py
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

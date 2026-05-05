@@ -1,0 +1,68 @@
+---
+schema_version: 1
+capability: {{capability}}
+summary: "{{summary_one_sentence}}"
+tools:
+{{#each tools}}
+  - tool: {{this.tool}}
+    proposed: true
+    does: "{{this.does}}"
+    method: {{this.method}}
+    path: "{{this.path}}"
+    auth: {{this.auth}}
+    confidence: {{this.confidence}}
+    source: {{this.source}}
+{{/each}}
+flows_using_this: [{{flows_using_this_csv}}]
+---
+
+# {{capability_title}}
+
+<!-- AGENT id="overview" -->
+{{overview_paragraphs}}
+<!-- /AGENT -->
+
+## Concepts the agent must know
+
+{{#each concepts}}
+- {{this}}
+{{/each}}
+
+## When to reach for which tool
+
+{{#each when_to_reach}}
+- "{{this.intent}}" → `{{this.tool}}`
+{{/each}}
+
+---
+
+{{#each tools}}
+## {{this.tool}}  {#{{this.anchor}}}
+
+**Proposed tool name:** `{{this.tool}}` (proposed — no MCP server yet)
+**HTTP:** `{{this.method}} {{this.path}}`
+**Auth:** {{this.auth}}
+**Confidence:** {{this.confidence}}
+**Source:** `{{this.source}}`
+
+**Path params:** {{this.path_params_or_none}}
+**Query params:** {{this.query_params_or_none}}
+**Body shape:** {{this.body_shape_or_unknown}}
+**Response shape:** {{this.response_shape_or_unknown}}
+
+**When to call it:** {{this.when_to_call_phrases}}
+
+**Used by flows:** {{this.used_by_flows_links}}
+
+---
+
+{{/each}}
+
+## Things this capability cannot do
+
+{{#each cannot_do}}
+- {{this}}
+{{/each}}
+
+<!-- HUMAN id="notes" -->
+<!-- /HUMAN -->

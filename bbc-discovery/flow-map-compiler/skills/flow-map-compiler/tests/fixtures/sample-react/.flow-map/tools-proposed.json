@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "generated_by": "flow-map-compiler",
+  "generated_at": "2026-04-29T14:46:11+02:00",
+  "generated_from_sha": "6d8d83e4a61789ff4ffe16c053b01eaf8effe26a",
+  "naming_convention": "dotted-lower-camel",
+  "tools": [
+    {
+      "proposed_name": "users.update",
+      "method": "PATCH",
+      "path": "/api/users/{id}",
+      "path_params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "query_params": [],
+      "body_shape": "unknown",
+      "response_shape": "unknown",
+      "auth": "bearer",
+      "capability_file": "capabilities/users.md",
+      "anchor": "users-update",
+      "source": [
+        {
+          "file": "src/api/users.ts",
+          "line": 17
+        }
+      ],
+      "used_by_flows": [
+        "update-profile"
+      ],
+      "confidence": "high",
+      "openapi_operation_id": null
+    }
+  ],
+  "unresolved": []
+}
