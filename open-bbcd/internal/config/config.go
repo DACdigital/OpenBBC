@@ -6,8 +6,9 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
+	Server    ServerConfig
+	Database  DatabaseConfig
+	Discovery DiscoveryConfig
 }
 
 type ServerConfig struct {
@@ -19,8 +20,12 @@ type DatabaseConfig struct {
 	URL string `env:"DATABASE_URL,required"`
 }
 
+type DiscoveryConfig struct {
+	StorageDir  string `env:"DISCOVERY_STORAGE_DIR" envDefault:"./data/discovery"`
+	MaxUploadMB int    `env:"DISCOVERY_MAX_UPLOAD_MB" envDefault:"50"`
+}
+
 func Load() (*Config, error) {
-	// Load .env if exists (ignore error if missing)
 	_ = godotenv.Load()
 
 	cfg := &Config{}

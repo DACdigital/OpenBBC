@@ -1,0 +1,84 @@
+{{define "layout"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>open-bbcd</title>
+  <script src="/static/htmx.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e6edf3;height:100vh;display:flex}
+    .sidebar{width:160px;background:#0d1117;border-right:1px solid #30363d;padding:16px 0;flex-shrink:0;display:flex;flex-direction:column;gap:2px}
+    .sidebar-logo{color:#6eb5ff;font-weight:700;font-size:15px;padding:0 16px;margin-bottom:20px;display:block}
+    .nav-link{display:block;padding:7px 16px;font-size:13px;text-decoration:none;color:#8b949e;border-left:2px solid transparent}
+    .nav-link:hover{color:#e6edf3}
+    .nav-link.active{color:#4caf50;border-left-color:#4caf50;background:#0f1f0f}
+    .nav-link.disabled{color:#444;cursor:default;pointer-events:none}
+    .content{flex:1;padding:24px;overflow-y:auto;max-width:960px}
+    .page-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+    .page-header h1{font-size:18px;font-weight:600}
+    .btn-primary{background:#238636;color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:13px;cursor:pointer;text-decoration:none;display:inline-block}
+    .btn-primary:hover{background:#2ea043}
+    .btn-secondary{background:transparent;color:#8b949e;border:1px solid #30363d;padding:7px 16px;border-radius:6px;font-size:13px;cursor:pointer;text-decoration:none;display:inline-block}
+    .btn-secondary:hover{color:#e6edf3;border-color:#8b949e}
+    .data-table{width:100%;border-collapse:collapse;border:1px solid #30363d;border-radius:8px;overflow:hidden}
+    .data-table th{background:#161b22;padding:10px 16px;font-size:12px;color:#8b949e;text-align:left;font-weight:500;border-bottom:1px solid #30363d}
+    .data-table td{padding:10px 16px;font-size:13px;border-top:1px solid #21262d}
+    .data-table tbody tr.clickable{cursor:pointer}
+    .data-table tbody tr.clickable:hover{background:#161b22}
+    .col-version{width:52px;font-weight:600;color:#4caf50}
+    .col-version.old{color:#8b949e}
+    .col-date{width:130px;color:#8b949e}
+    .col-count{width:80px;color:#8b949e;text-align:right}
+    .col-status{width:130px}
+    .agent-link{color:#e6edf3;text-decoration:none;font-weight:600}
+    .agent-link:hover{color:#6eb5ff;text-decoration:underline}
+    .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
+    .badge-deployed{background:#1a3a1a;color:#4caf50}
+    .badge-tested{background:#2a2a1a;color:#f9c74f}
+    .badge-initializing{background:#1a1a2e;color:#6eb5ff}
+    .badge-draft{background:#222;color:#8b949e}
+    .empty-state{color:#8b949e;font-size:14px;padding:40px 0;text-align:center}
+    .wizard-back{font-size:13px;color:#8b949e;text-decoration:none;display:inline-block;margin-bottom:14px}
+    .wizard-back:hover{color:#e6edf3}
+    .wizard-title{font-size:18px;font-weight:600;margin-bottom:20px}
+    .progress{display:flex;align-items:center;margin-bottom:28px}
+    .step-dot{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;background:#30363d;color:#8b949e;flex-shrink:0}
+    .step-dot.active{background:#1f6feb;color:#fff;box-shadow:0 0 0 3px #388bfd33}
+    .step-dot.done{background:#238636;color:#fff}
+    .step-line{flex:1;height:2px;background:#30363d}
+    .step-line.done{background:#238636}
+    .step-label{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+    .step-question{font-size:16px;font-weight:500;margin-bottom:16px}
+    .field-input{width:100%;background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:10px 12px;font-size:14px;font-family:inherit;resize:vertical;outline:none}
+    .field-input:focus{border-color:#388bfd}
+    .field-file-wrap{background:#0d1117;border:2px dashed #30363d;border-radius:6px;padding:20px;text-align:center;color:#8b949e}
+    .field-file-wrap input{margin-top:8px}
+    .wizard-nav{display:flex;justify-content:space-between;align-items:center;margin-top:20px}
+    #form-body{min-height:200px}
+  </style>
+  <script>
+    function requireCurrentField(event) {
+      const field = document.querySelector('#form-body input:not([type=hidden]), #form-body textarea, #form-body input[type=file]');
+      if (field && !field.checkValidity()) {
+        field.reportValidity();
+        event.preventDefault();
+      }
+    }
+  </script>
+</head>
+<body>
+  <nav class="sidebar">
+    <span class="sidebar-logo">open-bbcd</span>
+    <a href="/agents/ui" class="nav-link {{if eq .Active "agents"}}active{{end}}">Agents</a>
+    <span class="nav-link disabled">Datasets</span>
+    <span class="nav-link disabled">Scores</span>
+    <span class="nav-link disabled">Resources</span>
+  </nav>
+  <main class="content">
+    {{template "content" .}}
+  </main>
+</body>
+</html>
+{{end}}
