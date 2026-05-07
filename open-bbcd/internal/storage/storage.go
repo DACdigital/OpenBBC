@@ -32,7 +32,10 @@ func NewLocalDisk(root string) (*LocalDisk, error) {
 }
 
 // Put writes r to Root/<key+".tmp">, fsyncs, then renames to Root/<key>.
-// The rename is atomic on POSIX filesystems.
+// The rename is atomic on POSIX filesystems. ctx is accepted for interface
+// compatibility but is not honoured during I/O; a future S3 implementation
+// will respect cancellation. Concurrent calls with the same key are not
+// safe — callers must ensure unique keys (the wizard handler uses UUIDs).
 func (s *LocalDisk) Put(ctx context.Context, key string, r io.Reader) error {
 	final := filepath.Join(s.Root, key)
 	tmp := final + ".tmp"
