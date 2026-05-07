@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/DACdigital/OpenBBC/open-bbcd/web"
 	"gopkg.in/yaml.v3"
@@ -19,7 +21,7 @@ const (
 	IdleTimeout  = 60 * time.Second
 )
 
-func NewAPI(db *sql.DB) http.Handler {
+func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConfig) http.Handler {
 	agentRepo := repository.NewAgentRepository(db)
 	resourceRepo := repository.NewResourceRepository(db)
 
@@ -37,22 +39,20 @@ func NewAPI(db *sql.DB) http.Handler {
 	if err != nil {
 		log.Fatalf("init UI handler: %v", err)
 	}
-	wizardHandler := NewWizardHandler(agentRepo, &schema, nil, 50<<20)
+	maxUploadBytes := int64(discoveryCfg.MaxUploadMB) << 20
+	wizardHandler := NewWizardHandler(agentRepo, &schema, store, maxUploadBytes)
 
 	agentHandler := NewAgentHandler(agentRepo)
 	resourceHandler := NewResourceHandler(resourceRepo)
 
 	mux := http.NewServeMux()
 
-	// Static files.
 	staticFS, err := fs.Sub(web.Assets, "static")
 	if err != nil {
 		log.Fatalf("sub static FS: %v", err)
 	}
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 
-	// UI routes.
-	// Catch-all: redirect root to /agents/ui; 404 everything else unmatched.
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -65,11 +65,10 @@ func NewAPI(db *sql.DB) http.Handler {
 	mux.HandleFunc("GET /agents/new/step/{n}", uiHandler.WizardStep)
 	mux.HandleFunc("POST /agents/wizard", wizardHandler.Submit)
 
-	// JSON REST API.
 	mux.HandleFunc("GET /health", Health)
 	mux.HandleFunc("POST /agents", agentHandler.Create)
 	mux.HandleFunc("GET /agents", agentHandler.List)
-	mux.HandleFunc("GET /agents/{id}", agentHandler.Get) // fixed paths above take precedence
+	mux.HandleFunc("GET /agents/{id}", agentHandler.Get)
 	mux.HandleFunc("POST /resources", resourceHandler.Create)
 	mux.HandleFunc("GET /resources/{id}", resourceHandler.Get)
 	mux.HandleFunc("GET /agents/{agent_id}/resources", resourceHandler.ListByAgent)

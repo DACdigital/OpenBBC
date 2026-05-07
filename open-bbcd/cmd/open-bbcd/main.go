@@ -13,6 +13,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/database"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/handler"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 )
 
 const (
@@ -40,10 +41,16 @@ func run() error {
 	defer db.Close()
 	log.Printf("database connected")
 
+	store, err := storage.NewLocalDisk(cfg.Discovery.StorageDir)
+	if err != nil {
+		return fmt.Errorf("init storage: %w", err)
+	}
+	log.Printf("discovery storage rooted at %s", cfg.Discovery.StorageDir)
+
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      handler.NewAPI(db),
+		Handler:      handler.NewAPI(db, store, cfg.Discovery),
 		ReadTimeout:  handler.ReadTimeout,
 		WriteTimeout: handler.WriteTimeout,
 		IdleTimeout:  handler.IdleTimeout,
