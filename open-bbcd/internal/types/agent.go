@@ -16,16 +16,17 @@ const (
 )
 
 type Agent struct {
-	ID              string          `json:"id"`
-	Name            string          `json:"name"`
-	Description     string          `json:"description,omitempty"`
-	Prompt          string          `json:"prompt"`
-	Status          string          `json:"status"`
-	ParentVersionID *string         `json:"parent_version_id,omitempty"`
-	WizardInput     json.RawMessage `json:"wizard_input,omitempty"`
-	SchemaVersion   string          `json:"schema_version,omitempty"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	ID                string          `json:"id"`
+	Name              string          `json:"name"`
+	Description       string          `json:"description,omitempty"`
+	Prompt            string          `json:"prompt"`
+	Status            string          `json:"status"`
+	ParentVersionID   *string         `json:"parent_version_id,omitempty"`
+	WizardInput       json.RawMessage `json:"wizard_input,omitempty"`
+	SchemaVersion     string          `json:"schema_version,omitempty"`
+	DiscoveryFilePath string          `json:"discovery_file_path,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
 }
 
 // AgentVersion pairs an Agent with its computed version number within a chain.
@@ -47,9 +48,11 @@ type CreateAgentOpts struct {
 }
 
 type CreateAgentFromWizardOpts struct {
-	Name          string
-	WizardInput   map[string]string
-	SchemaVersion string
+	ID                string
+	Name              string
+	WizardInput       map[string]string
+	SchemaVersion     string
+	DiscoveryFilePath string
 }
 
 func NewAgent(opts CreateAgentOpts) (*Agent, error) {
