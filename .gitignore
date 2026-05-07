@@ -2,6 +2,7 @@
 # Claude Code
 # =========================
 .claude/
+.superpowers/
 
 # =========================
 # Test project
