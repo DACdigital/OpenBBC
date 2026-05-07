@@ -26,7 +26,7 @@ wizard:
     required: true
     order: 5
   discovery_file:
-    label: "Upload discovery file"
+    label: "Upload discovery zip"
     type: file
     required: true
     order: 6

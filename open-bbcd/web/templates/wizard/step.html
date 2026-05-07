@@ -26,8 +26,8 @@
 
 {{else if eq .Field.Field.Type "file"}}
 <div class="field-file-wrap">
-  <p>Select a YAML file from the discovery output.</p>
-  <input type="file" name="{{.Field.Key}}" accept=".yaml,.yml"
+  <p>Upload the .flow-map zip from discovery.</p>
+  <input type="file" name="{{.Field.Key}}" accept=".zip"
          {{if .Field.Field.Required}}required{{end}}>
 </div>
 {{end}}
