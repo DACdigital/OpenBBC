@@ -36,7 +36,10 @@ func Error(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, types.ErrNameRequired),
 		errors.Is(err, types.ErrPromptRequired),
-		errors.Is(err, types.ErrAgentRequired):
+		errors.Is(err, types.ErrAgentRequired),
+		errors.Is(err, types.ErrDiscoveryFileRequired),
+		errors.Is(err, types.ErrDiscoveryFileTooLarge),
+		errors.Is(err, types.ErrDiscoveryFileBadExtension):
 		status = http.StatusBadRequest
 	}
 
