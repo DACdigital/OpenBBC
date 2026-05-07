@@ -335,4 +335,7 @@ func TestWizardHandler_Submit_MissingName(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
+	if store.calls != 0 {
+		t.Errorf("store.Put called %d times, want 0", store.calls)
+	}
 }

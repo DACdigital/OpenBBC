@@ -48,6 +48,10 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	fields := h.schema.OrderedFields()
 	wizardInput := make(map[string]string, len(fields))
 	agentID := uuid.NewString()
+	// discoveryKey holds the storage key for the file field. The current
+	// schema has exactly one file field (discovery_file); if a future schema
+	// adds a second file field, only the last one's key would be retained —
+	// generalise then.
 	var discoveryKey string
 
 	for _, of := range fields {
