@@ -2,11 +2,14 @@ package handler
 
 import (
 	"context"
-	"io"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/google/uuid"
 )
 
 type WizardAgentRepository interface {
@@ -14,58 +17,89 @@ type WizardAgentRepository interface {
 }
 
 type WizardHandler struct {
-	agentRepo WizardAgentRepository
-	schema    *types.WizardSchema
+	agentRepo      WizardAgentRepository
+	schema         *types.WizardSchema
+	store          storage.Storage
+	maxUploadBytes int64
 }
 
-func NewWizardHandler(agentRepo WizardAgentRepository, schema *types.WizardSchema) *WizardHandler {
-	return &WizardHandler{agentRepo: agentRepo, schema: schema}
+func NewWizardHandler(agentRepo WizardAgentRepository, schema *types.WizardSchema, store storage.Storage, maxUploadBytes int64) *WizardHandler {
+	return &WizardHandler{
+		agentRepo:      agentRepo,
+		schema:         schema,
+		store:          store,
+		maxUploadBytes: maxUploadBytes,
+	}
 }
 
 func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
+	// Pre-check Content-Length. Trusts the client's reported length, which is
+	// fine for backoffice usage; tighten with http.MaxBytesReader if needed.
+	if r.ContentLength > h.maxUploadBytes {
+		Error(w, types.ErrDiscoveryFileTooLarge)
+		return
+	}
+
+	if err := r.ParseMultipartForm(h.maxUploadBytes); err != nil {
 		http.Error(w, "failed to parse form", http.StatusBadRequest)
 		return
 	}
 
 	fields := h.schema.OrderedFields()
 	wizardInput := make(map[string]string, len(fields))
+	agentID := uuid.NewString()
+	var discoveryKey string
 
 	for _, of := range fields {
 		if of.Field.Type == "file" {
-			file, _, err := r.FormFile(of.Key)
+			file, header, err := r.FormFile(of.Key)
 			if err != nil {
 				if of.Field.Required {
-					http.Error(w, of.Key+" is required", http.StatusBadRequest)
+					Error(w, types.ErrDiscoveryFileRequired)
 					return
 				}
 				continue
 			}
-			content, readErr := io.ReadAll(file)
+			ext := strings.ToLower(filepath.Ext(header.Filename))
+			if ext != ".zip" {
+				file.Close()
+				Error(w, types.ErrDiscoveryFileBadExtension)
+				return
+			}
+
+			discoveryKey = agentID + ".zip"
+			if err := h.store.Put(r.Context(), discoveryKey, file); err != nil {
+				file.Close()
+				log.Printf("wizard: storage.Put %s: %v", discoveryKey, err)
+				http.Error(w, "failed to save discovery file", http.StatusInternalServerError)
+				return
+			}
 			file.Close()
-			if readErr != nil {
-				http.Error(w, "failed to read uploaded file", http.StatusInternalServerError)
-				return
-			}
-			wizardInput[of.Key] = string(content)
-		} else {
-			val := r.FormValue(of.Key)
-			if of.Field.Required && val == "" {
-				http.Error(w, of.Key+" is required", http.StatusBadRequest)
-				return
-			}
-			wizardInput[of.Key] = val
+			continue
 		}
+
+		val := r.FormValue(of.Key)
+		if of.Field.Required && val == "" {
+			http.Error(w, of.Key+" is required", http.StatusBadRequest)
+			return
+		}
+		wizardInput[of.Key] = val
 	}
 
 	_, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
-		Name:          wizardInput["name"],
-		WizardInput:   wizardInput,
-		SchemaVersion: h.schema.Version,
+		ID:                agentID,
+		Name:              wizardInput["name"],
+		WizardInput:       wizardInput,
+		SchemaVersion:     h.schema.Version,
+		DiscoveryFilePath: discoveryKey,
 	})
 	if err != nil {
-		log.Printf("wizard: CreateFromWizard: %v", err)
-		http.Error(w, "failed to create agent", http.StatusInternalServerError)
+		if discoveryKey != "" {
+			log.Printf("wizard: orphan discovery file %s after insert failure: %v", discoveryKey, err)
+		} else {
+			log.Printf("wizard: CreateFromWizard: %v", err)
+		}
+		Error(w, err)
 		return
 	}
 

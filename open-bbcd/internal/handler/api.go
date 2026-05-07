@@ -37,7 +37,7 @@ func NewAPI(db *sql.DB) http.Handler {
 	if err != nil {
 		log.Fatalf("init UI handler: %v", err)
 	}
-	wizardHandler := NewWizardHandler(agentRepo, &schema)
+	wizardHandler := NewWizardHandler(agentRepo, &schema, nil, 50<<20)
 
 	agentHandler := NewAgentHandler(agentRepo)
 	resourceHandler := NewResourceHandler(resourceRepo)
