@@ -254,3 +254,47 @@ func (h *ConfiguratorHandler) saveConfig(ctx context.Context, agentID string, cf
 	}
 	return h.repo.UpdateFlowMapConfig(ctx, agentID, b)
 }
+
+// FlowIncluded toggles a flow's `included` boolean. Body: "included=true"
+// or "included=false". Responds with the updated flow_row HTML fragment so
+// htmx can swap the list row in place.
+func (h *ConfiguratorHandler) FlowIncluded(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	included := r.FormValue("included") == "true"
+
+	agentID := r.PathValue("id")
+	flowID := r.PathValue("flowId")
+	cfg, err := h.loadConfig(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	idx := -1
+	for i := range cfg.Flows {
+		if cfg.Flows[i].ID == flowID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		http.NotFound(w, r)
+		return
+	}
+	cfg.Flows[idx].Included = included
+
+	if err := h.saveConfig(r.Context(), agentID, cfg); err != nil {
+		Error(w, err)
+		return
+	}
+
+	// Re-render the flow row so htmx can swap it in place.
+	renderTemplate(w, h.flowsTmpl, "flow_row", map[string]any{
+		"AgentID":    agentID,
+		"Flow":       cfg.Flows[idx],
+		"SelectedID": "",
+	})
+}

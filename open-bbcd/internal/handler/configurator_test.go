@@ -128,3 +128,60 @@ func TestConfigurator_ParseError_ShowsErrorBanner(t *testing.T) {
 		t.Errorf("Parse error not surfaced")
 	}
 }
+
+func TestConfigurator_FlowIncluded_Toggle(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	// Toggle off
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/flows/place-order/included",
+		strings.NewReader("included=false"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("flowId", "place-order")
+	w := httptest.NewRecorder()
+	h.FlowIncluded(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if store.cfg.Flows[0].Included {
+		t.Error("Flows[0].Included should be false after toggle")
+	}
+	// The response is an htmx-friendly fragment containing the updated row.
+	if !strings.Contains(w.Body.String(), "place-order") {
+		t.Errorf("response should re-render the flow row")
+	}
+
+	// Toggle back on.
+	req2 := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/flows/place-order/included",
+		strings.NewReader("included=true"))
+	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req2.SetPathValue("id", "abc")
+	req2.SetPathValue("flowId", "place-order")
+	w2 := httptest.NewRecorder()
+	h.FlowIncluded(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("status = %d", w2.Code)
+	}
+	if !store.cfg.Flows[0].Included {
+		t.Error("Flows[0].Included should be true after second toggle")
+	}
+}
+
+func TestConfigurator_FlowIncluded_UnknownFlow_404(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/flows/ghost/included",
+		strings.NewReader("included=false"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("flowId", "ghost")
+	w := httptest.NewRecorder()
+	h.FlowIncluded(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}

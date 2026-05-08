@@ -1,10 +1,17 @@
 {{define "flow_row"}}
-<a href="/agents/{{.AgentID}}/configure/flows/{{.Flow.ID}}"
-   class="config-list-row {{if and .SelectedID (eq .SelectedID .Flow.ID)}}selected{{end}}">
-  <span class="config-list-row-icon">{{if .Flow.Included}}☑{{else}}☐{{end}}</span>
-  <span class="config-list-row-name">{{.Flow.ID}}</span>
-  <span class="config-list-row-meta">{{len .Flow.Workflow.Layout}} nodes</span>
-</a>
+<div id="flow-row-{{.Flow.ID}}" class="config-list-row {{if and .SelectedID (eq .SelectedID .Flow.ID)}}selected{{end}}">
+  <input type="checkbox" class="config-list-row-toggle"
+         {{if .Flow.Included}}checked{{end}}
+         hx-post="/agents/{{.AgentID}}/configure/flows/{{.Flow.ID}}/included"
+         hx-trigger="change"
+         hx-vals='js:{included: event.target.checked}'
+         hx-target="#flow-row-{{.Flow.ID}}"
+         hx-swap="outerHTML">
+  <a href="/agents/{{.AgentID}}/configure/flows/{{.Flow.ID}}" class="config-list-row-link">
+    <span class="config-list-row-name">{{.Flow.ID}}</span>
+    <span class="config-list-row-meta">{{len .Flow.Workflow.Layout}} nodes</span>
+  </a>
+</div>
 {{end}}
 
 {{define "flow_detail"}}
