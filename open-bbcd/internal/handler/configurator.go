@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/flowmap"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/yuin/goldmark"
 )
@@ -349,6 +350,56 @@ func parseSkillForm(r *http.Request, capabilities []types.Capability) (types.Ski
 		ProposedTool:  strings.TrimSpace(r.FormValue("proposed_tool")),
 		UserPhrases:   phrases,
 	}, nil
+}
+
+// SkillCreate adds a new custom skill from form values. The id is server-
+// assigned via SlugifySkillName + UniqueSkillID. Returns the rendered
+// skill_row partial so htmx can append it to the list.
+func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	agentID := r.PathValue("id")
+	cfg, err := h.loadConfig(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	parsed, err := parseSkillForm(r, cfg.Capabilities)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if parsed.Name == "" {
+		Error(w, types.ErrCustomSkillNameRequired)
+		return
+	}
+
+	slug := flowmap.SlugifySkillName(parsed.Name)
+	if slug == "" {
+		Error(w, types.ErrCustomSkillNameRequired)
+		return
+	}
+	taken := make(map[string]struct{}, len(cfg.Skills))
+	for _, s := range cfg.Skills {
+		taken[s.ID] = struct{}{}
+	}
+	parsed.ID = flowmap.UniqueSkillID(slug, taken)
+	parsed.Origin = "custom"
+
+	cfg.Skills = append(cfg.Skills, parsed)
+	if err := h.saveConfig(r.Context(), agentID, cfg); err != nil {
+		Error(w, err)
+		return
+	}
+
+	renderTemplate(w, h.skillsTmpl, "skill_row", map[string]any{
+		"AgentID":    agentID,
+		"Skill":      parsed,
+		"SelectedID": "",
+	})
 }
 
 // SkillUpdate applies form values to an existing skill in place.

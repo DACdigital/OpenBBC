@@ -274,3 +274,85 @@ func TestConfigurator_SkillUpdate_InvalidRole(t *testing.T) {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
+
+func TestConfigurator_SkillCreate_HappyPath(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	form := url.Values{
+		"name":          {"Send Email Alert"},
+		"description":   {"Notify the user via email"},
+		"role":          {"write"},
+		"external":      {"true"},
+		"external_note": {"sends through SMTP relay"},
+		"user_phrases":  {"send email\nemail me"},
+	}
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/skills",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.SkillCreate(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	if len(store.cfg.Skills) != 2 {
+		t.Fatalf("Skills len = %d, want 2", len(store.cfg.Skills))
+	}
+	created := store.cfg.Skills[1]
+	if created.ID != "send-email-alert" {
+		t.Errorf("created.ID = %q, want send-email-alert", created.ID)
+	}
+	if created.Origin != "custom" {
+		t.Errorf("created.Origin = %q, want custom", created.Origin)
+	}
+	if !created.External {
+		t.Error("External should be true")
+	}
+}
+
+func TestConfigurator_SkillCreate_NameCollision_GetsDiscriminator(t *testing.T) {
+	cfg := sampleConfig()
+	// Existing skill is "place-order"; force a collision by using the same name.
+	store := &stubConfigStore{cfg: cfg}
+	h := newConfigHandler(t, store)
+
+	form := url.Values{
+		"name":     {"Place Order"},
+		"role":     {"write"},
+		"external": {"true"},
+	}
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/skills",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.SkillCreate(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	created := store.cfg.Skills[len(store.cfg.Skills)-1]
+	if !strings.HasPrefix(created.ID, "place-order-") || created.ID == "place-order" {
+		t.Errorf("collision id = %q, want place-order-<hex>", created.ID)
+	}
+}
+
+func TestConfigurator_SkillCreate_NameRequired(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	form := url.Values{"role": {"write"}, "external": {"true"}}
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/skills",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.SkillCreate(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
