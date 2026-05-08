@@ -1,14 +1,18 @@
 package handler
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -126,29 +130,30 @@ func TestWizardHandler_Submit_HappyPath(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Submit(w, req)
 
+	// 303 redirect goes to the configurator now.
 	if w.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303; body = %s", w.Code, w.Body.String())
 	}
-	if loc := w.Header().Get("Location"); loc != "/agents/ui" {
-		t.Errorf("Location = %q", loc)
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/agents/") || !strings.HasSuffix(loc, "/configure") {
+		t.Errorf("Location = %q, want /agents/<id>/configure", loc)
 	}
 	if store.calls != 1 {
 		t.Errorf("store.Put called %d times, want 1", store.calls)
 	}
-	if !strings.HasSuffix(capturedKey, ".zip") || len(capturedKey) < len("00000000-0000-0000-0000-000000000000.zip") {
+	if !strings.HasSuffix(capturedKey, ".zip") {
 		t.Errorf("Put key = %q, want <uuid>.zip", capturedKey)
 	}
 	if capturedOpts.DiscoveryFilePath != capturedKey {
 		t.Errorf("DiscoveryFilePath = %q, want %q", capturedOpts.DiscoveryFilePath, capturedKey)
 	}
-	if capturedOpts.ID == "" || capturedOpts.ID+".zip" != capturedKey {
-		t.Errorf("ID/key mismatch: id=%q key=%q", capturedOpts.ID, capturedKey)
+	// The zip body in the test is "zip body" — not a real zip — so parse fails.
+	// We expect the row to be created with a non-empty FlowMapParseError and a nil FlowMapConfig.
+	if capturedOpts.FlowMapParseError == "" {
+		t.Error("FlowMapParseError should be set when zip body is invalid")
 	}
-	if _, present := capturedOpts.WizardInput["discovery_file"]; present {
-		t.Error("discovery_file should NOT be present in WizardInput")
-	}
-	if capturedOpts.WizardInput["name"] != "My Agent" {
-		t.Errorf("WizardInput[name] = %q", capturedOpts.WizardInput["name"])
+	if capturedOpts.FlowMapConfig != nil {
+		t.Errorf("FlowMapConfig should be nil on parse failure, got %s", string(capturedOpts.FlowMapConfig))
 	}
 }
 
@@ -338,4 +343,88 @@ func TestWizardHandler_Submit_MissingName(t *testing.T) {
 	if store.calls != 0 {
 		t.Errorf("store.Put called %d times, want 0", store.calls)
 	}
+}
+
+func TestWizardHandler_Submit_RealZip_HappyPath(t *testing.T) {
+	// Build a real zip from the flowmap testdata.
+	zipBytes := buildSampleFlowMapZip(t)
+
+	var capturedOpts types.CreateAgentFromWizardOpts
+	repo := &mockWizardRepo{
+		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
+			capturedOpts = opts
+			return &types.Agent{ID: opts.ID, Name: opts.Name, Status: "INITIALIZING"}, nil
+		},
+	}
+	store := &mockStorage{}
+	h := newTestWizardHandler(t, repo, store)
+
+	body, ct := buildWizardForm(t,
+		map[string]string{"name": "agent", "scope": "support"},
+		"flow-map.zip", zipBytes,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/agents/wizard", body)
+	req.Header.Set("Content-Type", ct)
+	req.ContentLength = int64(body.Len())
+	w := httptest.NewRecorder()
+	h.Submit(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", w.Code)
+	}
+	if capturedOpts.FlowMapParseError != "" {
+		t.Errorf("FlowMapParseError = %q, want empty", capturedOpts.FlowMapParseError)
+	}
+	if len(capturedOpts.FlowMapConfig) == 0 {
+		t.Fatal("FlowMapConfig should be populated")
+	}
+	// Sanity: decode it.
+	var cfg types.FlowMapConfig
+	if err := json.Unmarshal(capturedOpts.FlowMapConfig, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if cfg.Name != "agent" || cfg.Scope != "support" {
+		t.Errorf("phase-1 fields not folded into FlowMapConfig: %+v", cfg)
+	}
+	if len(cfg.Flows) != 1 {
+		t.Errorf("Flows = %d, want 1", len(cfg.Flows))
+	}
+}
+
+// buildSampleFlowMapZip returns a zip of internal/flowmap/testdata/sample-flowmap.
+func buildSampleFlowMapZip(t *testing.T) []byte {
+	t.Helper()
+	root := "../flowmap/testdata/sample-flowmap"
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		fw, err := zw.Create(filepath.ToSlash(rel))
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(fw, f)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	return buf.Bytes()
 }

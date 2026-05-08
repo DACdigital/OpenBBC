@@ -24,6 +24,10 @@ postconditions:
 side_effects: [audit-log-entry]
 related_flows: []
 confidence: high
+workflow: |
+  flowchart TD
+    start([start]) --> s_update_user_record[update-user-record]
+    s_update_user_record --> e([end])
 ---
 
 # Update profile

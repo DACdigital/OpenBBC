@@ -10,3 +10,5 @@ require (
 )
 
 require github.com/google/uuid v1.6.0
+
+require github.com/yuin/goldmark v1.7.4

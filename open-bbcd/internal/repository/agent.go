@@ -4,7 +4,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"sort"
 
@@ -27,8 +26,8 @@ func scanAgent(s scanner) (*types.Agent, error) {
 	agent := &types.Agent{}
 	var description sql.NullString
 	var parentVersionID sql.NullString
-	var wizardInput []byte
-	var schemaVersion sql.NullString
+	var flowMapConfig []byte
+	var flowMapParseError sql.NullString
 	var discoveryFilePath sql.NullString
 	err := s.Scan(
 		&agent.ID,
@@ -37,8 +36,8 @@ func scanAgent(s scanner) (*types.Agent, error) {
 		&agent.Prompt,
 		&agent.Status,
 		&parentVersionID,
-		&wizardInput,
-		&schemaVersion,
+		&flowMapConfig,
+		&flowMapParseError,
 		&discoveryFilePath,
 		&agent.CreatedAt,
 		&agent.UpdatedAt,
@@ -50,9 +49,9 @@ func scanAgent(s scanner) (*types.Agent, error) {
 	if parentVersionID.Valid {
 		agent.ParentVersionID = &parentVersionID.String
 	}
-	agent.WizardInput = wizardInput
-	if schemaVersion.Valid {
-		agent.SchemaVersion = schemaVersion.String
+	agent.FlowMapConfig = flowMapConfig
+	if flowMapParseError.Valid {
+		agent.FlowMapParseError = flowMapParseError.String
 	}
 	if discoveryFilePath.Valid {
 		agent.DiscoveryFilePath = discoveryFilePath.String
@@ -62,7 +61,7 @@ func scanAgent(s scanner) (*types.Agent, error) {
 
 // agentColumns lists the SELECT/RETURNING columns. Must stay in sync with
 // scanAgent's positional scan destinations.
-const agentColumns = `id, name, description, prompt, status, parent_version_id, wizard_input, schema_version, discovery_file_path, created_at, updated_at`
+const agentColumns = `id, name, description, prompt, status, parent_version_id, flow_map_config, flow_map_parse_error, discovery_file_path, created_at, updated_at`
 
 func (r *AgentRepository) Create(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error) {
 	agent, err := types.NewAgent(opts)
@@ -192,15 +191,49 @@ func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.Creat
 	if r.db == nil {
 		return nil, errors.New("repository: no database connection")
 	}
-	wizardJSON, err := json.Marshal(opts.WizardInput)
-	if err != nil {
-		return nil, err
-	}
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO agents (id, name, prompt, status, wizard_input, schema_version, discovery_file_path)
-		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, '', 'INITIALIZING', $3, $4, NULLIF($5, ''))
+		INSERT INTO agents (id, name, prompt, status, flow_map_config, flow_map_parse_error, discovery_file_path)
+		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, '', 'INITIALIZING', $3, NULLIF($4, ''), NULLIF($5, ''))
 		RETURNING `+agentColumns,
-		opts.ID, opts.Name, wizardJSON, opts.SchemaVersion, opts.DiscoveryFilePath,
+		opts.ID, opts.Name, []byte(opts.FlowMapConfig), opts.FlowMapParseError, opts.DiscoveryFilePath,
 	)
 	return scanAgent(row)
+}
+
+// GetFlowMapConfig returns the agent's parsed config (or nil bytes if absent).
+// Returns ErrNotFound if no agent has the given id.
+func (r *AgentRepository) GetFlowMapConfig(ctx context.Context, agentID string) ([]byte, string, error) {
+	var cfg []byte
+	var parseErr sql.NullString
+	row := r.db.QueryRowContext(ctx, `
+		SELECT flow_map_config, flow_map_parse_error FROM agents WHERE id = $1
+	`, agentID)
+	if err := row.Scan(&cfg, &parseErr); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, "", types.ErrNotFound
+		}
+		return nil, "", err
+	}
+	return cfg, parseErr.String, nil
+}
+
+// UpdateFlowMapConfig overwrites the agent's flow_map_config and clears any
+// prior parse error. Used by configurator edit endpoints (PR2/PR3).
+func (r *AgentRepository) UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE agents
+		SET flow_map_config = $2, flow_map_parse_error = NULL, updated_at = now()
+		WHERE id = $1
+	`, agentID, cfg)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return types.ErrNotFound
+	}
+	return nil
 }

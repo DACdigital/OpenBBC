@@ -22,8 +22,8 @@ type Agent struct {
 	Prompt            string          `json:"prompt"`
 	Status            string          `json:"status"`
 	ParentVersionID   *string         `json:"parent_version_id,omitempty"`
-	WizardInput       json.RawMessage `json:"wizard_input,omitempty"`
-	SchemaVersion     string          `json:"schema_version,omitempty"`
+	FlowMapConfig     json.RawMessage `json:"flow_map_config,omitempty"`
+	FlowMapParseError string          `json:"flow_map_parse_error,omitempty"`
 	DiscoveryFilePath string          `json:"discovery_file_path,omitempty"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
@@ -50,8 +50,8 @@ type CreateAgentOpts struct {
 type CreateAgentFromWizardOpts struct {
 	ID                string
 	Name              string
-	WizardInput       map[string]string
-	SchemaVersion     string
+	FlowMapConfig     json.RawMessage // pre-marshaled JSONB; nil if parse failed
+	FlowMapParseError string          // empty when parse succeeded
 	DiscoveryFilePath string
 }
 

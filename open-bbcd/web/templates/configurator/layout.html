@@ -1,0 +1,30 @@
+{{define "content"}}
+<div class="config-page">
+  <div class="config-header">
+    <a href="/agents/ui" class="config-back">← Back to Agents</a>
+    <h1>{{.AgentName}}</h1>
+  </div>
+
+  <nav class="config-tabs">
+    <a href="/agents/{{.AgentID}}/configure/flows"
+       class="config-tab {{if eq .Tab "flows"}}active{{end}}">Flows</a>
+    <a href="/agents/{{.AgentID}}/configure/skills"
+       class="config-tab {{if eq .Tab "skills"}}active{{end}}">Skills</a>
+    <a href="/agents/{{.AgentID}}/configure/capabilities"
+       class="config-tab {{if eq .Tab "capabilities"}}active{{end}}">Capabilities</a>
+    <span class="config-spacer"></span>
+    <span class="btn-disabled" title="Available in PR4">Finalize →</span>
+  </nav>
+
+  {{if .ParseError}}
+  <div class="config-banner config-banner-error">
+    <strong>Discovery archive could not be parsed:</strong> {{.ParseError}}
+    <p class="hint">Re-run discovery and re-upload the zip via <a href="/agents/new">the wizard</a>.</p>
+  </div>
+  {{end}}
+
+  <div class="config-body">
+    {{template "tab_content" .}}
+  </div>
+</div>
+{{end}}

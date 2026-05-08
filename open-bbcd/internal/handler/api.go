@@ -42,6 +42,11 @@ func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConf
 	maxUploadBytes := int64(discoveryCfg.MaxUploadMB) << 20
 	wizardHandler := NewWizardHandler(agentRepo, &schema, store, maxUploadBytes)
 
+	configuratorHandler, err := NewConfiguratorHandler(agentRepo, web.Assets)
+	if err != nil {
+		log.Fatalf("init configurator handler: %v", err)
+	}
+
 	agentHandler := NewAgentHandler(agentRepo)
 	resourceHandler := NewResourceHandler(resourceRepo)
 
@@ -64,6 +69,13 @@ func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConf
 	mux.HandleFunc("GET /agents/new", uiHandler.WizardPage)
 	mux.HandleFunc("GET /agents/new/step/{n}", uiHandler.WizardStep)
 	mux.HandleFunc("POST /agents/wizard", wizardHandler.Submit)
+	mux.HandleFunc("GET /agents/{id}/configure", configuratorHandler.Index)
+	mux.HandleFunc("GET /agents/{id}/configure/flows", configuratorHandler.Flows)
+	mux.HandleFunc("GET /agents/{id}/configure/flows/{flowId}", configuratorHandler.Flows)
+	mux.HandleFunc("GET /agents/{id}/configure/skills", configuratorHandler.Skills)
+	mux.HandleFunc("GET /agents/{id}/configure/skills/{skillId}", configuratorHandler.Skills)
+	mux.HandleFunc("GET /agents/{id}/configure/capabilities", configuratorHandler.Capabilities)
+	mux.HandleFunc("GET /agents/{id}/configure/capabilities/{capName}", configuratorHandler.Capabilities)
 
 	mux.HandleFunc("GET /health", Health)
 	mux.HandleFunc("POST /agents", agentHandler.Create)

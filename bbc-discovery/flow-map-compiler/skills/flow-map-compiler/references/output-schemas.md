@@ -233,6 +233,10 @@ postconditions:
 side_effects: [<list>]
 related_flows: [<id>, ...]
 confidence: high|medium|low
+workflow: |
+  flowchart TD
+    start([start]) --> <node-id>[<skill-id>]
+    <node-id> --> end([end])
 ---
 
 # <Flow name>
@@ -284,6 +288,34 @@ sequenceDiagram
 ## Unresolved
 <list of call sites that couldn't be statically resolved; empty if none>
 ````
+
+### Workflow notation
+
+The `workflow:` frontmatter field on every flow is a multiline mermaid
+`flowchart` block describing the flow's control flow. It is the
+authoritative structured representation of the flow's algorithm; the
+prose body remains for human readers.
+
+Required node shapes (do not invent new ones):
+
+| Shape           | Mermaid syntax                  | Meaning                              |
+|-----------------|---------------------------------|--------------------------------------|
+| Start           | `id([start])`                   | Single entry node, label = `start`   |
+| End             | `id([end])`                     | Terminal node(s), label = `end`      |
+| Skill call      | `id[<skill-id>]`                | Invokes the named agent skill        |
+| Decision        | `id{<question?>}`               | Two-way branch, label edges `yes`/`no` |
+| Parallel fanout | `id{{<label>}}`                 | Fan into multiple branches with `&`  |
+
+Every `id[<skill-id>]` skill node's label MUST equal a `skills_used[].skill`
+entry on the same flow. Loops are modeled as back-edges between existing
+nodes — no dedicated node type. When call-site control flow can't be
+determined (low-confidence fallback), emit a linear chain through
+`skills_used` in declared order:
+
+```
+flowchart TD
+  s_<a> --> s_<b> --> s_<c>
+```
 
 ## `capabilities/<name>.md`
 
