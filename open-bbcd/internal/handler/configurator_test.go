@@ -356,3 +356,67 @@ func TestConfigurator_SkillCreate_NameRequired(t *testing.T) {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
+
+func TestConfigurator_SkillDelete_Custom_OK(t *testing.T) {
+	cfg := sampleConfig()
+	cfg.Skills = append(cfg.Skills, types.Skill{
+		ID: "custom-thing", Origin: "custom", Name: "Custom thing", Role: "write",
+		External: true,
+	})
+	store := &stubConfigStore{cfg: cfg}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodDelete,
+		"/agents/abc/configure/skills/custom-thing", nil)
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("skillId", "custom-thing")
+	w := httptest.NewRecorder()
+	h.SkillDelete(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	for _, s := range store.cfg.Skills {
+		if s.ID == "custom-thing" {
+			t.Error("custom-thing should have been removed")
+		}
+	}
+}
+
+func TestConfigurator_SkillDelete_Discovered_409(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodDelete,
+		"/agents/abc/configure/skills/place-order", nil)
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("skillId", "place-order")
+	w := httptest.NewRecorder()
+	h.SkillDelete(w, req)
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (cannot delete discovered skill)", w.Code)
+	}
+}
+
+func TestConfigurator_SkillDelete_Referenced_409(t *testing.T) {
+	cfg := sampleConfig()
+	// Add a custom skill that is referenced by the existing flow's workflow.
+	cfg.Skills = append(cfg.Skills, types.Skill{
+		ID: "needed-by-flow", Origin: "custom", Name: "Needed", Role: "write",
+		External: true,
+	})
+	cfg.Flows[0].Workflow.Mermaid = "flowchart TD\n" +
+		"  start([start]) --> a[needed-by-flow]\n" +
+		"  a --> e([end])"
+	store := &stubConfigStore{cfg: cfg}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodDelete,
+		"/agents/abc/configure/skills/needed-by-flow", nil)
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("skillId", "needed-by-flow")
+	w := httptest.NewRecorder()
+	h.SkillDelete(w, req)
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (skill referenced by flow workflow)", w.Code)
+	}
+}

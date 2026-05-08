@@ -402,6 +402,50 @@ func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// SkillDelete removes a custom skill. Discovered skills cannot be deleted
+// (409). Custom skills cannot be deleted while referenced by any flow's
+// workflow (409). On success returns 200 with an empty body so htmx can
+// remove the row in place.
+func (h *ConfiguratorHandler) SkillDelete(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	skillID := r.PathValue("skillId")
+	cfg, err := h.loadConfig(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	idx := -1
+	for i := range cfg.Skills {
+		if cfg.Skills[i].ID == skillID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		http.NotFound(w, r)
+		return
+	}
+	if cfg.Skills[idx].Origin != "custom" {
+		Error(w, types.ErrSkillReferenced)
+		return
+	}
+	for _, f := range cfg.Flows {
+		if flowmap.WorkflowReferencesSkill(f.Workflow.Mermaid, skillID) {
+			Error(w, types.ErrSkillReferenced)
+			return
+		}
+	}
+
+	cfg.Skills = append(cfg.Skills[:idx], cfg.Skills[idx+1:]...)
+	if err := h.saveConfig(r.Context(), agentID, cfg); err != nil {
+		Error(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 // SkillUpdate applies form values to an existing skill in place.
 func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
