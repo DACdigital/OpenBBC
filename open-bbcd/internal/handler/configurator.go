@@ -13,18 +13,19 @@ import (
 	"github.com/yuin/goldmark"
 )
 
-// ConfigGetter is the narrow interface the configurator depends on.
-type ConfigGetter interface {
+// ConfigStore is the narrow interface the configurator depends on.
+type ConfigStore interface {
 	GetFlowMapConfig(ctx context.Context, agentID string) (cfg []byte, parseErr string, err error)
 	GetByID(ctx context.Context, id string) (*types.Agent, error)
+	UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error
 }
 
 type ConfiguratorHandler struct {
-	repo                                    ConfigGetter
+	repo                                    ConfigStore
 	flowsTmpl, skillsTmpl, capabilitiesTmpl *template.Template
 }
 
-func NewConfiguratorHandler(repo ConfigGetter, webFS fs.FS) (*ConfiguratorHandler, error) {
+func NewConfiguratorHandler(repo ConfigStore, webFS fs.FS) (*ConfiguratorHandler, error) {
 	funcs := template.FuncMap{
 		"renderMarkdown": renderMarkdown,
 		"dict":           tplDict,
@@ -225,4 +226,31 @@ func tplDict(kv ...any) (map[string]any, error) {
 		m[key] = kv[i+1]
 	}
 	return m, nil
+}
+
+// loadConfig fetches the agent's flow_map_config and unmarshals into a
+// FlowMapConfig. Returns ErrNotFound if the agent does not exist or has no
+// config persisted (the configurator pages assume the wizard already ran).
+func (h *ConfiguratorHandler) loadConfig(ctx context.Context, agentID string) (types.FlowMapConfig, error) {
+	cfgBytes, _, err := h.repo.GetFlowMapConfig(ctx, agentID)
+	if err != nil {
+		return types.FlowMapConfig{}, err
+	}
+	if len(cfgBytes) == 0 {
+		return types.FlowMapConfig{}, types.ErrNotFound
+	}
+	var cfg types.FlowMapConfig
+	if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+		return types.FlowMapConfig{}, err
+	}
+	return cfg, nil
+}
+
+// saveConfig marshals cfg to JSON and writes it via the repository.
+func (h *ConfiguratorHandler) saveConfig(ctx context.Context, agentID string, cfg types.FlowMapConfig) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return h.repo.UpdateFlowMapConfig(ctx, agentID, b)
 }

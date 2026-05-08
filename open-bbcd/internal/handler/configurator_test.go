@@ -13,14 +13,15 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/web"
 )
 
-// stubConfigGetter returns a hardcoded FlowMapConfig as raw JSON.
-type stubConfigGetter struct {
+type stubConfigStore struct {
 	cfg      types.FlowMapConfig
 	getErr   error
 	parseErr string
+	updates  int
+	updateFn func(cfg []byte) error
 }
 
-func (s *stubConfigGetter) GetFlowMapConfig(ctx context.Context, agentID string) ([]byte, string, error) {
+func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, agentID string) ([]byte, string, error) {
 	if s.getErr != nil {
 		return nil, "", s.getErr
 	}
@@ -28,8 +29,21 @@ func (s *stubConfigGetter) GetFlowMapConfig(ctx context.Context, agentID string)
 	return b, s.parseErr, nil
 }
 
-func (s *stubConfigGetter) GetByID(ctx context.Context, id string) (*types.Agent, error) {
+func (s *stubConfigStore) GetByID(ctx context.Context, id string) (*types.Agent, error) {
 	return &types.Agent{ID: id, Name: s.cfg.Name, Status: "INITIALIZING"}, nil
+}
+
+func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error {
+	s.updates++
+	if s.updateFn != nil {
+		return s.updateFn(cfg)
+	}
+	var decoded types.FlowMapConfig
+	if err := json.Unmarshal(cfg, &decoded); err != nil {
+		return err
+	}
+	s.cfg = decoded
+	return nil
 }
 
 func sampleConfig() types.FlowMapConfig {
@@ -49,7 +63,7 @@ func sampleConfig() types.FlowMapConfig {
 	}
 }
 
-func newConfigHandler(t *testing.T, getter handler.ConfigGetter) *handler.ConfiguratorHandler {
+func newConfigHandler(t *testing.T, getter handler.ConfigStore) *handler.ConfiguratorHandler {
 	t.Helper()
 	h, err := handler.NewConfiguratorHandler(getter, web.Assets)
 	if err != nil {
@@ -59,7 +73,7 @@ func newConfigHandler(t *testing.T, getter handler.ConfigGetter) *handler.Config
 }
 
 func TestConfigurator_FlowsTab_RendersFlowsList(t *testing.T) {
-	h := newConfigHandler(t, &stubConfigGetter{cfg: sampleConfig()})
+	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig()})
 	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure/flows", nil)
 	req.SetPathValue("id", "abc")
 	w := httptest.NewRecorder()
@@ -73,7 +87,7 @@ func TestConfigurator_FlowsTab_RendersFlowsList(t *testing.T) {
 }
 
 func TestConfigurator_SkillsTab_ShowsSkillRow(t *testing.T) {
-	h := newConfigHandler(t, &stubConfigGetter{cfg: sampleConfig()})
+	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig()})
 	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure/skills", nil)
 	req.SetPathValue("id", "abc")
 	w := httptest.NewRecorder()
@@ -87,7 +101,7 @@ func TestConfigurator_SkillsTab_ShowsSkillRow(t *testing.T) {
 }
 
 func TestConfigurator_CapabilitiesTab_IsReadOnly(t *testing.T) {
-	h := newConfigHandler(t, &stubConfigGetter{cfg: sampleConfig()})
+	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig()})
 	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure/capabilities", nil)
 	req.SetPathValue("id", "abc")
 	w := httptest.NewRecorder()
@@ -102,7 +116,7 @@ func TestConfigurator_CapabilitiesTab_IsReadOnly(t *testing.T) {
 }
 
 func TestConfigurator_ParseError_ShowsErrorBanner(t *testing.T) {
-	h := newConfigHandler(t, &stubConfigGetter{cfg: sampleConfig(), parseErr: "missing tools-proposed.json"})
+	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig(), parseErr: "missing tools-proposed.json"})
 	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure", nil)
 	req.SetPathValue("id", "abc")
 	w := httptest.NewRecorder()
