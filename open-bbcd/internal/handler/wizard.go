@@ -1,12 +1,16 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"path/filepath"
 	"strings"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/flowmap"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/google/uuid"
@@ -33,13 +37,10 @@ func NewWizardHandler(agentRepo WizardAgentRepository, schema *types.WizardSchem
 }
 
 func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
-	// Pre-check Content-Length. Trusts the client's reported length, which is
-	// fine for backoffice usage; tighten with http.MaxBytesReader if needed.
 	if r.ContentLength > h.maxUploadBytes {
 		Error(w, types.ErrDiscoveryFileTooLarge)
 		return
 	}
-
 	if err := r.ParseMultipartForm(h.maxUploadBytes); err != nil {
 		http.Error(w, "failed to parse form", http.StatusBadRequest)
 		return
@@ -48,11 +49,10 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	fields := h.schema.OrderedFields()
 	wizardInput := make(map[string]string, len(fields))
 	agentID := uuid.NewString()
-	// discoveryKey holds the storage key for the file field. The current
-	// schema has exactly one file field (discovery_file); if a future schema
-	// adds a second file field, only the last one's key would be retained —
-	// generalise then.
-	var discoveryKey string
+	var (
+		discoveryKey string
+		zipBytes     []byte
+	)
 
 	for _, of := range fields {
 		if of.Field.Type == "file" {
@@ -71,14 +71,22 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// Buffer the zip so we can both store it and parse it.
+			b, err := io.ReadAll(file)
+			file.Close()
+			if err != nil {
+				log.Printf("wizard: read upload: %v", err)
+				http.Error(w, "failed to read upload", http.StatusInternalServerError)
+				return
+			}
+			zipBytes = b
+
 			discoveryKey = agentID + ".zip"
-			if err := h.store.Put(r.Context(), discoveryKey, file); err != nil {
-				file.Close()
+			if err := h.store.Put(r.Context(), discoveryKey, bytes.NewReader(zipBytes)); err != nil {
 				log.Printf("wizard: storage.Put %s: %v", discoveryKey, err)
 				http.Error(w, "failed to save discovery file", http.StatusInternalServerError)
 				return
 			}
-			file.Close()
 			continue
 		}
 
@@ -90,11 +98,37 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		wizardInput[of.Key] = val
 	}
 
-	_, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
+	// Parse the zip into a structured config; non-fatal — we record any
+	// error on the row so the configurator page can surface it.
+	cfg, parseErr := flowmap.Parse(bytes.NewReader(zipBytes))
+	cfg.Name = wizardInput["name"]
+	cfg.Scope = wizardInput["scope"]
+	cfg.ShouldDo = wizardInput["should_do"]
+	cfg.ShouldNotDo = wizardInput["should_not_do"]
+	cfg.BusinessDomain = wizardInput["business_domain"]
+	cfg.SchemaVersion = 1
+
+	var (
+		cfgJSON      json.RawMessage
+		parseErrText string
+	)
+	if parseErr != nil {
+		parseErrText = parseErr.Error()
+	} else {
+		b, err := json.Marshal(cfg)
+		if err != nil {
+			log.Printf("wizard: marshal flow_map_config: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		cfgJSON = b
+	}
+
+	agent, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
 		ID:                agentID,
 		Name:              wizardInput["name"],
-		WizardInput:       wizardInput,
-		SchemaVersion:     h.schema.Version,
+		FlowMapConfig:     cfgJSON,
+		FlowMapParseError: parseErrText,
 		DiscoveryFilePath: discoveryKey,
 	})
 	if err != nil {
@@ -107,5 +141,5 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/agents/ui", http.StatusSeeOther)
+	http.Redirect(w, r, "/agents/"+agent.ID+"/configure", http.StatusSeeOther)
 }
