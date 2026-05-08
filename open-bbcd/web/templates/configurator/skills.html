@@ -1,0 +1,19 @@
+{{define "tab_content"}}
+<div class="config-two-pane">
+  <aside class="config-list">
+    <div class="config-list-header">Skills ({{len .Config.Skills}})</div>
+    {{range .Config.Skills}}
+      {{template "skill_row" (dict "AgentID" $.AgentID "Skill" . "SelectedID" (selectedSkillID $.SelectedSkill))}}
+    {{else}}
+      <p class="empty-state">No skills in this discovery snapshot.</p>
+    {{end}}
+  </aside>
+  <main class="config-detail-pane">
+    {{if .SelectedSkill}}
+      {{template "skill_detail" (dict "AgentID" .AgentID "Skill" .SelectedSkill)}}
+    {{else}}
+      <p class="config-detail-empty">Select a skill on the left.</p>
+    {{end}}
+  </main>
+</div>
+{{end}}

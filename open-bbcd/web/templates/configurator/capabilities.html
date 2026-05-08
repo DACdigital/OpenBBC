@@ -1,0 +1,22 @@
+{{define "tab_content"}}
+<div class="config-banner">
+  Capabilities are derived from the discovery snapshot and cannot be edited here. To change them, re-run discovery.
+</div>
+<div class="config-two-pane">
+  <aside class="config-list">
+    <div class="config-list-header">Capabilities ({{len .Config.Capabilities}})</div>
+    {{range .Config.Capabilities}}
+      {{template "capability_row" (dict "AgentID" $.AgentID "Cap" . "SelectedID" (selectedCapName $.SelectedCap))}}
+    {{else}}
+      <p class="empty-state">No capabilities in this discovery snapshot.</p>
+    {{end}}
+  </aside>
+  <main class="config-detail-pane">
+    {{if .SelectedCap}}
+      {{template "capability_detail" (dict "AgentID" .AgentID "Cap" .SelectedCap)}}
+    {{else}}
+      <p class="config-detail-empty">Select a capability on the left.</p>
+    {{end}}
+  </main>
+</div>
+{{end}}

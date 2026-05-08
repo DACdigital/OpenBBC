@@ -51,7 +51,7 @@ func NewConfiguratorHandler(repo ConfigGetter, webFS fs.FS) (*ConfiguratorHandle
 		return template.New("").Funcs(funcs).ParseFS(webFS,
 			"templates/layout.html",
 			"templates/configurator/layout.html",
-			"templates/configurator/_partials.html",
+			"templates/configurator/partials.html",
 			"templates/configurator/"+name+".html",
 		)
 	}

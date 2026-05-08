@@ -1,0 +1,117 @@
+{{define "flow_row"}}
+<a href="/agents/{{.AgentID}}/configure/flows/{{.Flow.ID}}"
+   class="config-list-row {{if and .SelectedID (eq .SelectedID .Flow.ID)}}selected{{end}}">
+  <span class="config-list-row-icon">{{if .Flow.Included}}☑{{else}}☐{{end}}</span>
+  <span class="config-list-row-name">{{.Flow.ID}}</span>
+  <span class="config-list-row-meta">{{len .Flow.Workflow.Layout}} nodes</span>
+</a>
+{{end}}
+
+{{define "flow_detail"}}
+<div class="config-detail">
+  <h2>{{.Flow.Name}}</h2>
+  <p class="config-detail-id"><code>{{.Flow.ID}}</code></p>
+
+  <div class="config-section">
+    <h3>Workflow</h3>
+    <pre class="config-mermaid">{{.Flow.Workflow.Mermaid}}</pre>
+    <p class="hint">Live editor lands in PR3.</p>
+  </div>
+
+  <div class="config-section">
+    <h3>Metadata</h3>
+    <dl class="config-meta">
+      <dt>Description</dt>     <dd>{{.Flow.Description}}</dd>
+      <dt>Intent</dt>          <dd>{{.Flow.Intent}}</dd>
+      <dt>User phrases</dt>    <dd>{{range .Flow.UserPhrases}}<span class="chip">{{.}}</span>{{end}}</dd>
+      <dt>Preconditions</dt>   <dd><ul>{{range .Flow.Preconditions}}<li>{{.}}</li>{{end}}</ul></dd>
+      <dt>Postconditions</dt>  <dd><ul>{{range .Flow.Postconditions}}<li>{{.}}</li>{{end}}</ul></dd>
+      <dt>Side effects</dt>    <dd>{{range .Flow.SideEffects}}<span class="chip">{{.}}</span>{{end}}</dd>
+      <dt>Confidence</dt>      <dd>{{.Flow.Confidence}}</dd>
+    </dl>
+  </div>
+
+  {{if .Flow.ProseMD}}
+  <div class="config-section">
+    <h3>Description (from discovery)</h3>
+    <div class="prose">{{renderMarkdown .Flow.ProseMD}}</div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{define "skill_row"}}
+<a href="/agents/{{.AgentID}}/configure/skills/{{.Skill.ID}}"
+   class="config-list-row {{if and .SelectedID (eq .SelectedID .Skill.ID)}}selected{{end}}">
+  <span class="config-list-row-name">{{.Skill.ID}}</span>
+  <span class="config-list-row-meta">
+    <span class="badge badge-{{.Skill.Origin}}">{{.Skill.Origin}}</span>
+    {{if .Skill.External}}<span class="badge">external</span>{{else}}<span class="muted">{{.Skill.CapabilityRef}}</span>{{end}}
+    <code>{{.Skill.ProposedTool}}</code>
+  </span>
+</a>
+{{end}}
+
+{{define "skill_detail"}}
+<div class="config-detail">
+  <h2>{{.Skill.Name}}</h2>
+  <p class="config-detail-id"><code>{{.Skill.ID}}</code> · <span class="badge badge-{{.Skill.Origin}}">{{.Skill.Origin}}</span></p>
+
+  <div class="config-section">
+    <h3>Metadata</h3>
+    <dl class="config-meta">
+      <dt>Description</dt>   <dd>{{.Skill.Description}}</dd>
+      <dt>Role</dt>          <dd>{{.Skill.Role}}</dd>
+      <dt>User phrases</dt>  <dd>{{range .Skill.UserPhrases}}<span class="chip">{{.}}</span>{{end}}</dd>
+      <dt>Capability</dt>    <dd>{{if .Skill.External}}external{{else}}<a href="/agents/{{.AgentID}}/configure/capabilities/{{.Skill.CapabilityRef}}">{{.Skill.CapabilityRef}}</a>{{end}}</dd>
+      <dt>Proposed tool</dt> <dd><code>{{.Skill.ProposedTool}}</code></dd>
+    </dl>
+  </div>
+
+  {{if .Skill.ProseMD}}
+  <div class="config-section">
+    <h3>Source (from discovery)</h3>
+    <div class="prose">{{renderMarkdown .Skill.ProseMD}}</div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{define "capability_row"}}
+<a href="/agents/{{.AgentID}}/configure/capabilities/{{.Cap.Name}}"
+   class="config-list-row {{if and .SelectedID (eq .SelectedID .Cap.Name)}}selected{{end}}">
+  <span class="config-list-row-name">{{.Cap.Name}}</span>
+  <span class="config-list-row-meta"><span class="muted">{{len .Cap.Tools}} tools</span></span>
+</a>
+{{end}}
+
+{{define "capability_detail"}}
+<div class="config-detail">
+  <h2>{{.Cap.Name}}</h2>
+  <p>{{.Cap.Summary}}</p>
+
+  <div class="config-section">
+    <h3>Tools</h3>
+    <table class="data-table">
+      <thead><tr><th>Tool</th><th>Method</th><th>Path</th><th>Auth</th></tr></thead>
+      <tbody>
+        {{range .Cap.Tools}}
+        <tr>
+          <td><code>{{index . "tool"}}</code></td>
+          <td>{{index . "method"}}</td>
+          <td><code>{{index . "path"}}</code></td>
+          <td>{{index . "auth"}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  {{if .Cap.ProseMD}}
+  <div class="config-section">
+    <h3>Documentation (from discovery)</h3>
+    <div class="prose">{{renderMarkdown .Cap.ProseMD}}</div>
+  </div>
+  {{end}}
+</div>
+{{end}}
