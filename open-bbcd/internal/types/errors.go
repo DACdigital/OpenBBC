@@ -11,4 +11,6 @@ var (
 	ErrDiscoveryFileRequired     = errors.New("discovery file is required")
 	ErrDiscoveryFileTooLarge     = errors.New("discovery file is too large")
 	ErrDiscoveryFileBadExtension = errors.New("discovery file must be a .zip")
+
+	ErrFlowMapInvalid = errors.New("flow-map archive is invalid")
 )

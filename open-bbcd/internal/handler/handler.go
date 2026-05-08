@@ -39,7 +39,8 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrAgentRequired),
 		errors.Is(err, types.ErrDiscoveryFileRequired),
 		errors.Is(err, types.ErrDiscoveryFileTooLarge),
-		errors.Is(err, types.ErrDiscoveryFileBadExtension):
+		errors.Is(err, types.ErrDiscoveryFileBadExtension),
+		errors.Is(err, types.ErrFlowMapInvalid):
 		status = http.StatusBadRequest
 	}
 
