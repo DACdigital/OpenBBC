@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -85,6 +86,10 @@ func Parse(r io.Reader) (types.FlowMapConfig, error) {
 			cfg.Flows = append(cfg.Flows, fl)
 		}
 	}
+
+	sort.Slice(cfg.Capabilities, func(i, j int) bool { return cfg.Capabilities[i].Name < cfg.Capabilities[j].Name })
+	sort.Slice(cfg.Skills, func(i, j int) bool { return cfg.Skills[i].ID < cfg.Skills[j].ID })
+	sort.Slice(cfg.Flows, func(i, j int) bool { return cfg.Flows[i].ID < cfg.Flows[j].ID })
 
 	if err := validate(&cfg); err != nil {
 		return cfg, err
@@ -264,15 +269,10 @@ func linearFallback(skills []struct {
 	Role  string `yaml:"role"`
 }) string {
 	var b strings.Builder
-	b.WriteString("flowchart TD\n")
-	prev := "start"
-	b.WriteString("  start([start])")
+	b.WriteString("flowchart TD\n  start([start])")
 	for _, s := range skills {
 		nodeID := "s_" + strings.ReplaceAll(s.Skill, "-", "_")
-		fmt.Fprintf(&b, " --> %s[%s]", nodeID, s.Skill)
-		prev = nodeID
-		b.WriteString("\n  ")
-		b.WriteString(prev)
+		fmt.Fprintf(&b, " --> %s[%s]\n  %s", nodeID, s.Skill, nodeID)
 	}
 	b.WriteString(" --> e([end])\n")
 	return b.String()
@@ -280,7 +280,7 @@ func linearFallback(skills []struct {
 
 // validate runs cross-reference checks: every skill's capability_ref must
 // resolve to a discovered capability; every flow's workflow skill nodes
-// must resolve to a discovered skill (delegated to mermaid.go in T7).
+// must resolve to a declared skill (see validateWorkflowSkillRefs in mermaid.go).
 func validate(cfg *types.FlowMapConfig) error {
 	caps := make(map[string]struct{}, len(cfg.Capabilities))
 	for _, c := range cfg.Capabilities {

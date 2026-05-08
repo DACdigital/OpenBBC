@@ -1,7 +1,6 @@
 package flowmap
 
 import (
-	"errors"
 	"testing"
 )
 
@@ -49,9 +48,6 @@ func TestValidateWorkflowSkillRefs(t *testing.T) {
 			err := validateWorkflowSkillRefs(tc.mermaid, skills)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("err = %v, wantErr = %v", err, tc.wantErr)
-			}
-			if err != nil && !errors.Is(err, errUnknownSkill) && tc.wantErr {
-				// Allow other validation errors too, but this is the main one.
 			}
 		})
 	}
