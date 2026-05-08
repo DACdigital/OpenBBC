@@ -34,13 +34,18 @@ func Error(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, types.ErrNotFound):
 		status = http.StatusNotFound
+	case errors.Is(err, types.ErrSkillReferenced):
+		status = http.StatusConflict
 	case errors.Is(err, types.ErrNameRequired),
 		errors.Is(err, types.ErrPromptRequired),
 		errors.Is(err, types.ErrAgentRequired),
 		errors.Is(err, types.ErrDiscoveryFileRequired),
 		errors.Is(err, types.ErrDiscoveryFileTooLarge),
 		errors.Is(err, types.ErrDiscoveryFileBadExtension),
-		errors.Is(err, types.ErrFlowMapInvalid):
+		errors.Is(err, types.ErrFlowMapInvalid),
+		errors.Is(err, types.ErrCapabilityReadOnly),
+		errors.Is(err, types.ErrInvalidSkillRole),
+		errors.Is(err, types.ErrCustomSkillNameRequired):
 		status = http.StatusBadRequest
 	}
 

@@ -13,4 +13,9 @@ var (
 	ErrDiscoveryFileBadExtension = errors.New("discovery file must be a .zip")
 
 	ErrFlowMapInvalid = errors.New("flow-map archive is invalid")
+
+	ErrSkillReferenced         = errors.New("skill is referenced by a flow's workflow and cannot be deleted")
+	ErrCapabilityReadOnly      = errors.New("capabilities are read-only")
+	ErrInvalidSkillRole        = errors.New("skill role must be 'read' or 'write'")
+	ErrCustomSkillNameRequired = errors.New("custom skill name is required")
 )
