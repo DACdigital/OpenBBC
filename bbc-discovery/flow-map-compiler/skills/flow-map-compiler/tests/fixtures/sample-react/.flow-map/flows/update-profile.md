@@ -24,6 +24,13 @@ postconditions:
 side_effects: [audit-log-entry]
 related_flows: []
 confidence: high
+workflow: |
+  flowchart TD
+    start([start]) --> s_read_self_profile[read-self-profile]
+    s_read_self_profile --> d{user provided new value?}
+    d -- no --> e([end])
+    d -- yes --> s_write_self_profile[write-self-profile]
+    s_write_self_profile --> e
 ---
 
 # Update profile

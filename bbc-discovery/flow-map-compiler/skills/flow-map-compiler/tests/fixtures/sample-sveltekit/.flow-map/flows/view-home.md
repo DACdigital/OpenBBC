@@ -20,6 +20,9 @@ postconditions:
 side_effects: []
 related_flows: []
 confidence: medium
+workflow: |
+  flowchart TD
+    start([start]) --> s_list_ping[list-ping] --> e([end])
 ---
 
 # View Home
