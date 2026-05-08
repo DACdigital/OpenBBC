@@ -1,6 +1,6 @@
 # Lint contract
 
-The agent walks these 16 rules as a self-check after rendering and
+The agent walks these 17 rules as a self-check after rendering and
 must not ship a wiki that fails any of them. There is no `lint.mjs` in
 the v0 skill — the agent is the linter. Report failures naming the
 file and the rule number; do not stop on first failure, surface them
@@ -24,6 +24,7 @@ all, fix them, and re-render.
 | 14 | Every tool listed in `tools-proposed.json` is referenced by at least one capability file's `tools:` frontmatter, and vice versa |
 | 15 | Every `proposed: true` flag is present where required (every capability `tools[]` entry, every `tools-proposed.json` entry). The skill must never emit `proposed: false`. Flows do not carry tool entries — they reference skills only. |
 | 16 | Every `skills/<id>.md` `proposed_tool` matches a `tool:` entry in the capability file referenced by its `capability_ref`, and that capability also lists this skill's flow ids in `flows_using_this:` (transitive reachability) |
+| 17 | Every flow file's frontmatter has a `workflow:` field; it is a multiline mermaid `flowchart` block; every `id[<skill-id>]` skill node's label appears in `skills_used[].skill` on the same flow; every node id referenced in an edge appears in the node list; every flowchart parses. |
 
 ## Failure messages
 
@@ -81,4 +82,22 @@ in the skill's `flows_using_this:`. This guarantees the three-way graph
 ```
 skills/write-user-profile.md: rule 16 — proposed_tool "users.update" not in capabilities/users.md tools
 capabilities/users.md: rule 16 — flow "update-profile" used by skills/write-user-profile.md but not in flows_using_this
+```
+
+## Workflow well-formedness (rule 17)
+
+For each `flows/<id>.md`:
+
+1. The frontmatter has a `workflow:` field whose value is a string.
+2. The string starts with `flowchart TD` (or `flowchart LR`) followed by mermaid flowchart node and edge syntax.
+3. Every node declared with `id[<label>]` (rectangle = skill call) has its label exactly equal to some `skills_used[].skill` entry on the same flow. Mismatches mean either the skill list is wrong or the workflow references something that should be added.
+4. Every edge endpoint is a declared node id.
+5. The block parses (rule 8 covers all mermaid blocks; rule 17 narrows to skill-id correspondence).
+
+Failure messages:
+
+```
+flows/<id>.md: rule 17 — workflow node "s_foo[do-foo]" references skill "do-foo" not in skills_used[]
+flows/<id>.md: rule 17 — workflow edge from "s_a" to "s_b" but "s_b" is not declared
+flows/<id>.md: rule 17 — workflow field missing from frontmatter
 ```
