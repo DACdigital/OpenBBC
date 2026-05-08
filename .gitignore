@@ -3,6 +3,7 @@
 # =========================
 .claude/
 .superpowers/
+.worktrees/
 
 # =========================
 # Test project
