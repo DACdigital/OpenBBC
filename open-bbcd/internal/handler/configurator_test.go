@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -183,5 +184,93 @@ func TestConfigurator_FlowIncluded_UnknownFlow_404(t *testing.T) {
 	h.FlowIncluded(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestConfigurator_SkillUpdate_HappyPath(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	form := url.Values{
+		"name":          {"Place an order"},
+		"description":   {"Updated description"},
+		"role":          {"write"},
+		"capability":    {"orders"},
+		"proposed_tool": {"orders.create"},
+		"user_phrases":  {"check out\nplace order\nbuy"},
+		"external":      {"false"},
+	}
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/skills/place-order",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("skillId", "place-order")
+	w := httptest.NewRecorder()
+	h.SkillUpdate(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	got := store.cfg.Skills[0]
+	if got.Name != "Place an order" || got.Description != "Updated description" {
+		t.Errorf("metadata not saved: %+v", got)
+	}
+	if len(got.UserPhrases) != 3 || got.UserPhrases[0] != "check out" {
+		t.Errorf("user_phrases not split correctly: %+v", got.UserPhrases)
+	}
+	if got.External {
+		t.Error("External should be false")
+	}
+}
+
+func TestConfigurator_SkillUpdate_External(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	form := url.Values{
+		"name":          {"Send notification"},
+		"role":          {"write"},
+		"external":      {"true"},
+		"external_note": {"sends to webhook"},
+		"user_phrases":  {""},
+	}
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/skills/place-order",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("skillId", "place-order")
+	w := httptest.NewRecorder()
+	h.SkillUpdate(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	got := store.cfg.Skills[0]
+	if !got.External || got.ExternalNote != "sends to webhook" {
+		t.Errorf("External/Note not saved: %+v", got)
+	}
+	if got.CapabilityRef != "" {
+		t.Errorf("CapabilityRef should be cleared when external=true, got %q", got.CapabilityRef)
+	}
+}
+
+func TestConfigurator_SkillUpdate_InvalidRole(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	form := url.Values{
+		"name": {"Some skill"},
+		"role": {"banana"}, // invalid
+	}
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/skills/place-order",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("skillId", "place-order")
+	w := httptest.NewRecorder()
+	h.SkillUpdate(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
 	}
 }

@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/yuin/goldmark"
@@ -296,5 +298,115 @@ func (h *ConfiguratorHandler) FlowIncluded(w http.ResponseWriter, r *http.Reques
 		"AgentID":    agentID,
 		"Flow":       cfg.Flows[idx],
 		"SelectedID": "",
+	})
+}
+
+// parseSkillForm reads form values shared by SkillUpdate and SkillCreate.
+// Validates role; clears capability_ref/external_note when external is the
+// other state. Splits user_phrases on newlines or commas.
+func parseSkillForm(r *http.Request, capabilities []types.Capability) (types.Skill, error) {
+	role := strings.TrimSpace(r.FormValue("role"))
+	if role != "read" && role != "write" {
+		return types.Skill{}, types.ErrInvalidSkillRole
+	}
+	external := r.FormValue("external") == "true"
+	cap := strings.TrimSpace(r.FormValue("capability"))
+	note := strings.TrimSpace(r.FormValue("external_note"))
+	if external {
+		cap = ""
+	} else {
+		note = ""
+		if cap != "" {
+			ok := false
+			for _, c := range capabilities {
+				if c.Name == cap {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return types.Skill{}, fmt.Errorf("%w: capability %q not present in this agent's discovery snapshot",
+					types.ErrFlowMapInvalid, cap)
+			}
+		}
+	}
+
+	rawPhrases := r.FormValue("user_phrases")
+	var phrases []string
+	for _, line := range strings.FieldsFunc(rawPhrases, func(r rune) bool { return r == '\n' || r == ',' }) {
+		if s := strings.TrimSpace(line); s != "" {
+			phrases = append(phrases, s)
+		}
+	}
+
+	return types.Skill{
+		Name:          strings.TrimSpace(r.FormValue("name")),
+		Description:   strings.TrimSpace(r.FormValue("description")),
+		Role:          role,
+		CapabilityRef: cap,
+		External:      external,
+		ExternalNote:  note,
+		ProposedTool:  strings.TrimSpace(r.FormValue("proposed_tool")),
+		UserPhrases:   phrases,
+	}, nil
+}
+
+// SkillUpdate applies form values to an existing skill in place.
+func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	agentID := r.PathValue("id")
+	skillID := r.PathValue("skillId")
+	cfg, err := h.loadConfig(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	idx := -1
+	for i := range cfg.Skills {
+		if cfg.Skills[i].ID == skillID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		http.NotFound(w, r)
+		return
+	}
+
+	parsed, err := parseSkillForm(r, cfg.Capabilities)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if parsed.Name == "" {
+		Error(w, types.ErrCustomSkillNameRequired)
+		return
+	}
+
+	// Preserve immutable fields: id, origin, prose_md.
+	cur := &cfg.Skills[idx]
+	cur.Name = parsed.Name
+	cur.Description = parsed.Description
+	cur.Role = parsed.Role
+	cur.CapabilityRef = parsed.CapabilityRef
+	cur.External = parsed.External
+	cur.ExternalNote = parsed.ExternalNote
+	cur.ProposedTool = parsed.ProposedTool
+	cur.UserPhrases = parsed.UserPhrases
+
+	if err := h.saveConfig(r.Context(), agentID, cfg); err != nil {
+		Error(w, err)
+		return
+	}
+
+	// Re-render skill_detail so the htmx swap shows the saved state.
+	renderTemplate(w, h.skillsTmpl, "skill_detail", map[string]any{
+		"AgentID":      agentID,
+		"Skill":        *cur,
+		"Capabilities": cfg.Capabilities,
 	})
 }
