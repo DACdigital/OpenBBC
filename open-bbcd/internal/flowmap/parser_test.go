@@ -3,6 +3,7 @@ package flowmap_test
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/flowmap"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
 // zipDir walks dir and returns an in-memory zip with paths relative to dir.
@@ -46,6 +48,49 @@ func zipDir(t *testing.T, dir string) *bytes.Reader {
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("zipDir close: %v", err)
+	}
+	return bytes.NewReader(buf.Bytes())
+}
+
+// zipDirOverride builds a zip from dir but replaces the bytes of files
+// whose relative path matches a key in overrides.
+func zipDirOverride(t *testing.T, dir string, overrides map[string]string) *bytes.Reader {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		relSlash := filepath.ToSlash(rel)
+		fw, err := w.Create(relSlash)
+		if err != nil {
+			return err
+		}
+		if override, ok := overrides[relSlash]; ok {
+			_, err = io.WriteString(fw, override)
+			return err
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(fw, f)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("zipDirOverride: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("zipDirOverride close: %v", err)
 	}
 	return bytes.NewReader(buf.Bytes())
 }
@@ -90,5 +135,85 @@ func TestParse_HappyPath(t *testing.T) {
 
 	if len(cfg.Capabilities) != 1 || cfg.Capabilities[0].Name != "orders" {
 		t.Errorf("Capabilities = %+v", cfg.Capabilities)
+	}
+}
+
+func TestParse_MissingWorkflowFallback(t *testing.T) {
+	r := zipDirOverride(t, "testdata/sample-flowmap", map[string]string{
+		"flows/place-order.md": `---
+schema_version: 1
+id: place-order
+name: Place order
+description: "Use when the user wants to check out"
+intent: "Submit the cart as an order"
+user_phrases:
+  - "check out"
+entry: src/pages/Cart.tsx
+trigger: user clicks Place order
+preconditions:
+  - User is signed in
+skills_used:
+  - skill: place-order
+    role: write
+    skill_ref: ../skills/place-order.md
+postconditions:
+  - The cart is persisted as an order
+side_effects: [audit-log-entry]
+related_flows: []
+confidence: high
+---
+
+# Place order
+
+stub body
+`,
+	})
+
+	cfg, err := flowmap.Parse(r)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	wf := cfg.Flows[0].Workflow.Mermaid
+	if !strings.Contains(wf, "s_place_order[place-order]") {
+		t.Errorf("Fallback workflow does not contain expected linear node:\n%s", wf)
+	}
+}
+
+func TestParse_InvalidSkillReference(t *testing.T) {
+	r := zipDirOverride(t, "testdata/sample-flowmap", map[string]string{
+		"flows/place-order.md": `---
+schema_version: 1
+id: place-order
+name: Place order
+description: "Use when the user wants to check out"
+intent: "Submit the cart as an order"
+user_phrases: ["check out"]
+preconditions: []
+skills_used:
+  - skill: place-order
+    role: write
+    skill_ref: ../skills/place-order.md
+postconditions: []
+side_effects: []
+related_flows: []
+confidence: high
+workflow: |
+  flowchart TD
+    start([start]) --> s_x[ghost-skill]
+    s_x --> e([end])
+---
+
+# Place order
+
+stub
+`,
+	})
+
+	_, err := flowmap.Parse(r)
+	if err == nil {
+		t.Fatal("Parse should fail when workflow references an unknown skill")
+	}
+	if !errors.Is(err, types.ErrFlowMapInvalid) {
+		t.Errorf("err = %v, want errors.Is(types.ErrFlowMapInvalid)", err)
 	}
 }
