@@ -251,6 +251,29 @@ corresponding wiki file. Write under `<repo>/.flow-map/`:
   proposed tool name, source coordinates per tool subsection.
 - `tools-proposed.json` — bidirectional with capability frontmatter.
 
+**Deriving the `workflow:` field on each flow:** read the entry file
+plus its near transitive imports for control-flow signal. Translate
+into a mermaid `flowchart TD` per `references/output-schemas.md`'s
+"Workflow notation" subsection. Map call-site sequences to skill nodes
+(`id[<skill-id>]`), early-return / guard checks to decision nodes
+(`id{<question?>}`), and `Promise.all` / parallel awaits to a parallel
+fanout (`id{{parallel}}` with `& joins`). Loops in the source
+(while, for-each polling) become back-edges between existing nodes;
+do not introduce a dedicated loop node.
+
+When control flow can't be determined with `medium`+ confidence,
+fall back to a linear chain through `skills_used` in declared
+order, e.g.
+
+```
+flowchart TD
+  start([start]) --> s_<id1>[<id1>] --> s_<id2>[<id2>] --> e([end])
+```
+
+Annotate the flow's `confidence:` field accordingly. Lint rule 17
+will check that every skill node's label is a declared
+`skills_used[].skill`.
+
 Match `references/output-schemas.md` exactly: every required
 frontmatter key, every section heading, every block marker. Tool names
 never appear in flow bodies or frontmatter; flows link to
