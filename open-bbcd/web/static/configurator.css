@@ -1,0 +1,180 @@
+/* Page-scoped: the configurator wants more room than the default .content cap. */
+.content:has(.config-page) { max-width: 1280px; }
+
+.config-page {
+  width: 100%;
+  padding: 0;
+}
+
+.config-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.config-header h1 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.config-back {
+  font-size: 13px;
+  color: #6e7681;
+  text-decoration: none;
+}
+
+.config-back:hover { text-decoration: underline; }
+
+.config-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid #30363d;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.config-tab {
+  padding: 10px 16px;
+  text-decoration: none;
+  color: #c9d1d9;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.config-tab.active {
+  color: #58a6ff;
+  border-bottom-color: #58a6ff;
+  font-weight: 600;
+}
+
+.config-spacer { flex: 1; }
+
+.btn-disabled {
+  padding: 8px 14px;
+  background: #21262d;
+  color: #6e7681;
+  border-radius: 6px;
+  cursor: not-allowed;
+  font-size: 13px;
+}
+
+.config-banner {
+  padding: 12px 16px;
+  background: #161b22;
+  border-left: 3px solid #58a6ff;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.config-banner-error {
+  border-left-color: #f85149;
+  background: #2d1418;
+}
+
+.config-banner .hint {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #8b949e;
+}
+
+.config-two-pane {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  min-height: 480px;
+}
+
+.config-list {
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.config-list-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid #30363d;
+  background: #161b22;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.config-list-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #21262d;
+  text-decoration: none;
+  color: #c9d1d9;
+}
+
+.config-list-row:hover { background: #1c2128; }
+.config-list-row.selected { background: #1f2937; }
+
+.config-list-row-icon { font-size: 14px; }
+.config-list-row-name { font-weight: 600; font-size: 14px; }
+.config-list-row-meta { font-size: 12px; color: #8b949e; display: flex; gap: 8px; align-items: center; }
+.config-list-row-meta code { background: #21262d; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+
+.config-detail-pane {
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 24px;
+  overflow: auto;
+}
+
+.config-detail-empty {
+  color: #6e7681;
+  font-style: italic;
+}
+
+.config-detail h2 { margin: 0 0 6px; }
+.config-detail-id { margin: 0 0 16px; color: #8b949e; font-size: 13px; }
+
+.config-section {
+  border-top: 1px solid #21262d;
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.config-section h3 { margin: 0 0 8px; font-size: 14px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+
+.config-mermaid {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  padding: 12px;
+  font-size: 12px;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.config-meta { display: grid; grid-template-columns: 160px 1fr; gap: 6px 16px; margin: 0; }
+.config-meta dt { color: #8b949e; font-size: 13px; }
+.config-meta dd { margin: 0; }
+
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  margin: 2px 4px 2px 0;
+  background: #21262d;
+  border-radius: 12px;
+  font-size: 12px;
+  color: #c9d1d9;
+}
+
+.muted { color: #8b949e; }
+
+.badge-discovered { background: #1f6feb; }
+.badge-custom { background: #d29922; color: #0d1117; }
+
+.prose { line-height: 1.6; }
+.prose h1, .prose h2, .prose h3 { margin-top: 16px; }
+.prose pre { background: #0d1117; padding: 8px; border-radius: 4px; overflow-x: auto; }
+.prose code { background: #21262d; padding: 1px 6px; border-radius: 3px; }
+.prose table { border-collapse: collapse; margin: 12px 0; }
+.prose th, .prose td { border: 1px solid #30363d; padding: 6px 10px; }
