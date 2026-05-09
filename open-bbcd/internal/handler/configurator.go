@@ -446,6 +446,24 @@ func (h *ConfiguratorHandler) SkillDelete(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusOK)
 }
 
+// SkillNew renders an empty skill_new_form for creating a custom skill.
+// The form's submit URL is /skills (no skillId), creating a new row
+// instead of updating an existing one.
+func (h *ConfiguratorHandler) SkillNew(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	cfg, err := h.loadConfig(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	blank := types.Skill{Origin: "custom", Role: "read"}
+	renderTemplate(w, h.skillsTmpl, "skill_new_form", map[string]any{
+		"AgentID":      agentID,
+		"Skill":        blank,
+		"Capabilities": cfg.Capabilities,
+	})
+}
+
 // SkillUpdate applies form values to an existing skill in place.
 func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
