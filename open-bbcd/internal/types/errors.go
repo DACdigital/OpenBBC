@@ -18,4 +18,6 @@ var (
 	ErrCapabilityReadOnly      = errors.New("capabilities are read-only")
 	ErrInvalidSkillRole        = errors.New("skill role must be 'read' or 'write'")
 	ErrCustomSkillNameRequired = errors.New("custom skill name is required")
+
+	ErrInvalidAgentStatus = errors.New("agent is not in a valid status for this transition")
 )

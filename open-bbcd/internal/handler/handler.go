@@ -34,7 +34,8 @@ func Error(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, types.ErrNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, types.ErrSkillReferenced):
+	case errors.Is(err, types.ErrSkillReferenced),
+		errors.Is(err, types.ErrInvalidAgentStatus):
 		status = http.StatusConflict
 	case errors.Is(err, types.ErrNameRequired),
 		errors.Is(err, types.ErrPromptRequired),

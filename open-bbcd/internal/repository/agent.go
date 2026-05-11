@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -234,6 +235,37 @@ func (r *AgentRepository) UpdateFlowMapConfig(ctx context.Context, agentID strin
 	}
 	if n == 0 {
 		return types.ErrNotFound
+	}
+	return nil
+}
+
+// UpdateStatus transitions the agent's status. Used by Finalize
+// (INITIALIZING → DRAFT). Returns ErrInvalidAgentStatus if the current
+// status doesn't match expectedFrom — preventing accidental re-finalize.
+func (r *AgentRepository) UpdateStatus(ctx context.Context, agentID, expectedFrom, to string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE agents
+		SET status = $3, updated_at = now()
+		WHERE id = $1 AND status = $2
+	`, agentID, expectedFrom, to)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// Either the agent doesn't exist, or its status isn't expectedFrom.
+		var cur string
+		row := r.db.QueryRowContext(ctx, `SELECT status FROM agents WHERE id = $1`, agentID)
+		if err := row.Scan(&cur); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return types.ErrNotFound
+			}
+			return err
+		}
+		return fmt.Errorf("%w: have %q, want %q", types.ErrInvalidAgentStatus, cur, expectedFrom)
 	}
 	return nil
 }
