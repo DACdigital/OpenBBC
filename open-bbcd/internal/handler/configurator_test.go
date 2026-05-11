@@ -420,3 +420,92 @@ func TestConfigurator_SkillDelete_Referenced_409(t *testing.T) {
 		t.Errorf("status = %d, want 409 (skill referenced by flow workflow)", w.Code)
 	}
 }
+
+func TestConfigurator_WorkflowUpdate_HappyPath(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	body := `{
+		"mermaid": "flowchart TD\n  start([start]) --> s_x[place-order]\n  s_x --> e([end])",
+		"layout": {"start": {"x": 40, "y": 40}, "s_x": {"x": 40, "y": 140}, "e": {"x": 40, "y": 240}}
+	}`
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/flows/place-order/workflow",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("flowId", "place-order")
+	w := httptest.NewRecorder()
+	h.WorkflowUpdate(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	got := store.cfg.Flows[0].Workflow
+	if !strings.Contains(got.Mermaid, "place-order") {
+		t.Errorf("mermaid not saved: %q", got.Mermaid)
+	}
+	if got.Layout["s_x"].X != 40 || got.Layout["s_x"].Y != 140 {
+		t.Errorf("layout not saved: %+v", got.Layout)
+	}
+}
+
+func TestConfigurator_WorkflowUpdate_RejectsUnknownSkill(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	body := `{
+		"mermaid": "flowchart TD\n  start([start]) --> s_x[ghost-skill]\n  s_x --> e([end])",
+		"layout": {}
+	}`
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/flows/place-order/workflow",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("flowId", "place-order")
+	w := httptest.NewRecorder()
+	h.WorkflowUpdate(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (unknown skill)", w.Code)
+	}
+}
+
+func TestConfigurator_WorkflowUpdate_RejectsMalformedMermaid(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	body := `{"mermaid": "this is not mermaid", "layout": {}}`
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/flows/place-order/workflow",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("flowId", "place-order")
+	w := httptest.NewRecorder()
+	h.WorkflowUpdate(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (malformed)", w.Code)
+	}
+}
+
+func TestConfigurator_WorkflowUpdate_UnknownFlow_404(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	body := `{"mermaid": "flowchart TD\n  start([start]) --> e([end])", "layout": {}}`
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/configure/flows/ghost/workflow",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "abc")
+	req.SetPathValue("flowId", "ghost")
+	w := httptest.NewRecorder()
+	h.WorkflowUpdate(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}

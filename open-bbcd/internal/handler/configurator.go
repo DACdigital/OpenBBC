@@ -464,6 +464,67 @@ func (h *ConfiguratorHandler) SkillNew(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// WorkflowUpdate accepts a JSON body { "mermaid": "...", "layout": { nodeId: {x, y} } }
+// and persists it to the named flow's Workflow struct. Validates the mermaid:
+//   - structural parse via flowmap.ParseWorkflow
+//   - every id[<skill-id>] rectangle resolves to a known skill in this agent's config
+//
+// Returns 200 with empty body on success.
+func (h *ConfiguratorHandler) WorkflowUpdate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mermaid string                    `json:"mermaid"`
+		Layout  map[string]types.Position `json:"layout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	agentID := r.PathValue("id")
+	flowID := r.PathValue("flowId")
+	cfg, err := h.loadConfig(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	idx := -1
+	for i := range cfg.Flows {
+		if cfg.Flows[i].ID == flowID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		http.NotFound(w, r)
+		return
+	}
+
+	if _, err := flowmap.ParseWorkflow(body.Mermaid); err != nil {
+		Error(w, fmt.Errorf("%w: %v", types.ErrFlowMapInvalid, err))
+		return
+	}
+	skillIDs := make(map[string]struct{}, len(cfg.Skills))
+	for _, s := range cfg.Skills {
+		skillIDs[s.ID] = struct{}{}
+	}
+	if err := flowmap.ValidateWorkflowSkillRefs(body.Mermaid, skillIDs); err != nil {
+		Error(w, fmt.Errorf("%w: %v", types.ErrFlowMapInvalid, err))
+		return
+	}
+
+	cfg.Flows[idx].Workflow = types.Workflow{
+		Mermaid: body.Mermaid,
+		Layout:  body.Layout,
+	}
+
+	if err := h.saveConfig(r.Context(), agentID, cfg); err != nil {
+		Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 // SkillUpdate applies form values to an existing skill in place.
 func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {

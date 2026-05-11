@@ -45,7 +45,7 @@ func TestValidateWorkflowSkillRefs(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateWorkflowSkillRefs(tc.mermaid, skills)
+			err := ValidateWorkflowSkillRefs(tc.mermaid, skills)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("err = %v, wantErr = %v", err, tc.wantErr)
 			}

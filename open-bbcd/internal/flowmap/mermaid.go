@@ -15,9 +15,9 @@ var errUnknownSkill = errors.New("unknown skill")
 // other shapes that are NOT skill references.
 var skillNodeRe = regexp.MustCompile(`(?m)([A-Za-z_][A-Za-z0-9_]*)\[([^\]\[]+)\]`)
 
-// validateWorkflowSkillRefs walks every "id[label]" rectangle node in
+// ValidateWorkflowSkillRefs walks every "id[label]" rectangle node in
 // the mermaid string and asserts that label is a key in the provided set.
-func validateWorkflowSkillRefs(mermaid string, skills map[string]struct{}) error {
+func ValidateWorkflowSkillRefs(mermaid string, skills map[string]struct{}) error {
 	matches := skillNodeRe.FindAllStringSubmatch(mermaid, -1)
 	for _, m := range matches {
 		label := m[2]
