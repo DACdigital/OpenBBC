@@ -21,8 +21,22 @@
 
   <div class="config-section">
     <h3>Workflow</h3>
-    <pre class="config-mermaid">{{.Flow.Workflow.Mermaid}}</pre>
-    <p class="hint">Live editor lands in PR3.</p>
+    <div class="obf-editor"
+         data-obf-editor
+         data-agent-id="{{.AgentID}}"
+         data-flow-id="{{.Flow.ID}}"
+         data-skills='{{json (skillIds .Skills)}}'>
+      <div class="obf-toolbar">
+        <button type="button" data-obf-add="skill">+ skill</button>
+        <button type="button" data-obf-add="decision">+ decision</button>
+        <button type="button" data-obf-add="end">+ end</button>
+        <button type="button" data-obf-action="auto-layout">Auto-layout</button>
+        <button type="button" data-obf-action="reset">Reset to source</button>
+        <span class="obf-saved-indicator"></span>
+      </div>
+      <div class="obf-canvas"></div>
+      <script type="application/json" data-obf-state>{{workflowState .Flow.Workflow}}</script>
+    </div>
   </div>
 
   <div class="config-section">

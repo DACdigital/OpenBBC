@@ -1,0 +1,5 @@
+flowchart TD
+  start([start]) --> s_a[poll-status]
+  s_a --> d{ready?}
+  d -- no --> s_a
+  d -- yes --> e([end])

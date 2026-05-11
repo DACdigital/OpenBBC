@@ -264,3 +264,100 @@
   border: 1px solid #30363d;
 }
 .danger-button:hover { background: #2d1418; border-color: #f85149; }
+
+/* Workflow editor (Drawflow canvas + toolbar) */
+.obf-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  background: #0d1117;
+  height: 520px;
+}
+
+.obf-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid #21262d;
+  background: #161b22;
+}
+
+.obf-toolbar button {
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.obf-toolbar button:hover { background: #1c2128; }
+
+.obf-saved-indicator {
+  margin-left: auto;
+  font-size: 11px;
+  color: #8b949e;
+}
+
+.obf-canvas {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Override Drawflow's default light theme for the dark configurator. */
+.obf-canvas .drawflow {
+  background: #0d1117;
+}
+.obf-canvas .drawflow .drawflow-node {
+  background: transparent;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+}
+
+/* Custom node shapes. */
+.obf-pill {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #161b22;
+  border: 2px solid #58a6ff;
+  color: #e6edf3;
+  font-size: 12px;
+}
+.obf-pill.obf-end { border-color: #58a6ff; }
+
+.obf-rect {
+  display: inline-block;
+  padding: 8px 14px;
+  border-radius: 4px;
+  background: #161b22;
+  border: 1px solid #6e7681;
+  color: #e6edf3;
+  font-size: 12px;
+}
+
+.obf-diamond {
+  position: relative;
+  width: 140px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #e6edf3;
+  font-size: 12px;
+}
+.obf-diamond::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: #161b22;
+  border: 2px solid #d29922;
+  transform: rotate(45deg) scale(0.7);
+  border-radius: 4px;
+  z-index: -1;
+}
