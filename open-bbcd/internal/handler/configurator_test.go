@@ -3,6 +3,7 @@ package handler_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,11 +16,13 @@ import (
 )
 
 type stubConfigStore struct {
-	cfg      types.FlowMapConfig
-	getErr   error
-	parseErr string
-	updates  int
-	updateFn func(cfg []byte) error
+	cfg           types.FlowMapConfig
+	getErr        error
+	parseErr      string
+	updates       int
+	updateFn      func(cfg []byte) error
+	statusFn      func(agentID, expectedFrom, to string) error
+	currentStatus string // optional override; defaults to "INITIALIZING"
 }
 
 func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, agentID string) ([]byte, string, error) {
@@ -31,7 +34,11 @@ func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, agentID string) 
 }
 
 func (s *stubConfigStore) GetByID(ctx context.Context, id string) (*types.Agent, error) {
-	return &types.Agent{ID: id, Name: s.cfg.Name, Status: "INITIALIZING"}, nil
+	status := s.currentStatus
+	if status == "" {
+		status = "INITIALIZING"
+	}
+	return &types.Agent{ID: id, Name: s.cfg.Name, Status: status}, nil
 }
 
 func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error {
@@ -44,6 +51,21 @@ func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, agentID strin
 		return err
 	}
 	s.cfg = decoded
+	return nil
+}
+
+func (s *stubConfigStore) UpdateStatus(ctx context.Context, agentID, expectedFrom, to string) error {
+	if s.statusFn != nil {
+		return s.statusFn(agentID, expectedFrom, to)
+	}
+	cur := s.currentStatus
+	if cur == "" {
+		cur = "INITIALIZING"
+	}
+	if cur != expectedFrom {
+		return fmt.Errorf("%w: have %q, want %q", types.ErrInvalidAgentStatus, cur, expectedFrom)
+	}
+	s.currentStatus = to
 	return nil
 }
 

@@ -21,6 +21,7 @@ type ConfigStore interface {
 	GetFlowMapConfig(ctx context.Context, agentID string) (cfg []byte, parseErr string, err error)
 	GetByID(ctx context.Context, id string) (*types.Agent, error)
 	UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error
+	UpdateStatus(ctx context.Context, agentID, expectedFrom, to string) error
 }
 
 type ConfiguratorHandler struct {
