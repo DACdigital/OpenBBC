@@ -25,8 +25,8 @@ type ConfigStore interface {
 }
 
 type ConfiguratorHandler struct {
-	repo                                    ConfigStore
-	flowsTmpl, skillsTmpl, capabilitiesTmpl *template.Template
+	repo                                                  ConfigStore
+	flowsTmpl, skillsTmpl, capabilitiesTmpl, finalizeTmpl *template.Template
 }
 
 func NewConfiguratorHandler(repo ConfigStore, webFS fs.FS) (*ConfiguratorHandler, error) {
@@ -75,11 +75,16 @@ func NewConfiguratorHandler(repo ConfigStore, webFS fs.FS) (*ConfiguratorHandler
 	if err != nil {
 		return nil, err
 	}
+	finalizeTmpl, err := parse("finalize")
+	if err != nil {
+		return nil, err
+	}
 	return &ConfiguratorHandler{
 		repo:             repo,
 		flowsTmpl:        flowsTmpl,
 		skillsTmpl:       skillsTmpl,
 		capabilitiesTmpl: capabilitiesTmpl,
+		finalizeTmpl:     finalizeTmpl,
 	}, nil
 }
 
@@ -557,6 +562,53 @@ func tplWorkflowState(wf types.Workflow) (template.JS, error) {
 		return "", err
 	}
 	return template.JS(b), nil
+}
+
+// FinalizeConfirm renders the small confirmation page shown when the user
+// clicks "Finalize →" in the configurator. Submitting the page's form
+// POSTs to /agents/{id}/finalize.
+func (h *ConfiguratorHandler) FinalizeConfirm(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	agent, err := h.repo.GetByID(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	cfgBytes, parseErr, err := h.repo.GetFlowMapConfig(r.Context(), agentID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	data := configPageData{
+		Active:     "agents",
+		AgentID:    agentID,
+		AgentName:  agent.Name,
+		Tab:        "finalize",
+		ParseError: parseErr,
+	}
+	if len(cfgBytes) > 0 {
+		_ = json.Unmarshal(cfgBytes, &data.Config)
+	}
+	renderTemplate(w, h.finalizeTmpl, "layout", data)
+}
+
+// Finalize flips status INITIALIZING → DRAFT and redirects to /agents/ui.
+// 409 (ErrInvalidAgentStatus) if the agent isn't in INITIALIZING.
+func (h *ConfiguratorHandler) Finalize(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if err := h.repo.UpdateStatus(r.Context(), agentID, "INITIALIZING", "DRAFT"); err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	http.Redirect(w, r, "/agents/ui", http.StatusSeeOther)
 }
 
 // SkillUpdate applies form values to an existing skill in place.

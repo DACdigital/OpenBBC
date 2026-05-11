@@ -531,3 +531,68 @@ func TestConfigurator_WorkflowUpdate_UnknownFlow_404(t *testing.T) {
 		t.Errorf("status = %d, want 404", w.Code)
 	}
 }
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func TestConfigurator_FinalizeConfirm_RendersPage(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/agents/abc/configure/finalize", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.FinalizeConfirm(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Finalize") {
+		t.Errorf("response should contain a Finalize heading or button: first 200 chars = %s", body[:minInt(200, len(body))])
+	}
+	if !strings.Contains(body, "/agents/abc/finalize") {
+		t.Errorf("response should include the POST target: first 200 chars = %s", body[:minInt(200, len(body))])
+	}
+}
+
+func TestConfigurator_Finalize_HappyPath_RedirectsToAgentsUI(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()} // currentStatus defaults to "INITIALIZING"
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/finalize", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.Finalize(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303; body = %s", w.Code, w.Body.String())
+	}
+	if loc := w.Header().Get("Location"); loc != "/agents/ui" {
+		t.Errorf("Location = %q, want /agents/ui", loc)
+	}
+	if store.currentStatus != "DRAFT" {
+		t.Errorf("status = %q, want DRAFT", store.currentStatus)
+	}
+}
+
+func TestConfigurator_Finalize_WrongStatus_409(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig(), currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/finalize", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.Finalize(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", w.Code)
+	}
+}

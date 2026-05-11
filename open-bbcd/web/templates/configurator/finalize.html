@@ -1,0 +1,28 @@
+{{define "tab_content"}}
+<div class="config-finalize">
+  <h2>Finalize this agent?</h2>
+  <p>
+    The agent is currently in <span class="badge badge-initializing">INITIALIZING</span> state.
+    Finalizing flips it to <span class="badge badge-draft">DRAFT</span> and locks the configurator —
+    re-running the wizard against this agent will create a new version.
+  </p>
+
+  {{if .ParseError}}
+  <div class="config-banner config-banner-error">
+    <strong>Discovery archive could not be parsed:</strong> {{.ParseError}}
+    <p class="hint">Finalize is allowed, but downstream alpha generation will see an empty config.</p>
+  </div>
+  {{end}}
+
+  <ul class="config-finalize-summary">
+    <li><strong>{{len .Config.Flows}}</strong> flows</li>
+    <li><strong>{{len .Config.Skills}}</strong> skills</li>
+    <li><strong>{{len .Config.Capabilities}}</strong> capabilities</li>
+  </ul>
+
+  <form method="POST" action="/agents/{{.AgentID}}/finalize" class="config-finalize-form">
+    <button type="submit" class="btn-primary">Yes, finalize →</button>
+    <a href="/agents/{{.AgentID}}/configure/flows" class="btn-secondary">Cancel</a>
+  </form>
+</div>
+{{end}}
