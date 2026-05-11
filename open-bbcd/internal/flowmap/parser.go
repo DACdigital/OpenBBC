@@ -280,7 +280,7 @@ func linearFallback(skills []struct {
 
 // validate runs cross-reference checks: every skill's capability_ref must
 // resolve to a discovered capability; every flow's workflow skill nodes
-// must resolve to a declared skill (see validateWorkflowSkillRefs in mermaid.go).
+// must resolve to a declared skill (see ValidateWorkflowSkillRefs in mermaid.go).
 func validate(cfg *types.FlowMapConfig) error {
 	caps := make(map[string]struct{}, len(cfg.Capabilities))
 	for _, c := range cfg.Capabilities {
@@ -300,7 +300,7 @@ func validate(cfg *types.FlowMapConfig) error {
 		skillIDs[s.ID] = struct{}{}
 	}
 	for _, f := range cfg.Flows {
-		if err := validateWorkflowSkillRefs(f.Workflow.Mermaid, skillIDs); err != nil {
+		if err := ValidateWorkflowSkillRefs(f.Workflow.Mermaid, skillIDs); err != nil {
 			return fmt.Errorf("%w: flow %q: %v", types.ErrFlowMapInvalid, f.ID, err)
 		}
 	}
