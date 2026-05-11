@@ -13,7 +13,8 @@
     <a href="/agents/{{.AgentID}}/configure/capabilities"
        class="config-tab {{if eq .Tab "capabilities"}}active{{end}}">Capabilities</a>
     <span class="config-spacer"></span>
-    <span class="btn-disabled" title="Available in PR4">Finalize →</span>
+    <a href="/agents/{{.AgentID}}/configure/finalize"
+       class="config-tab {{if eq .Tab "finalize"}}active{{end}}">Finalize →</a>
   </nav>
 
   {{if .ParseError}}
