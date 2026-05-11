@@ -13,6 +13,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/handler"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/DACdigital/OpenBBC/open-bbcd/web"
+	"gopkg.in/yaml.v3"
 )
 
 type stubConfigStore struct {
@@ -594,5 +595,70 @@ func TestConfigurator_Finalize_WrongStatus_409(t *testing.T) {
 
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409", w.Code)
+	}
+}
+
+func TestConfigurator_DownloadYAML_HappyPath(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig(), currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.DownloadYAML(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/yaml") {
+		t.Errorf("Content-Type = %q, want application/yaml", ct)
+	}
+	cd := w.Header().Get("Content-Disposition")
+	if !strings.Contains(cd, "attachment") {
+		t.Errorf("Content-Disposition = %q, want to contain 'attachment'", cd)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "schema_version") {
+		t.Errorf("yaml should contain schema_version: %s", body[:minInt(200, len(body))])
+	}
+	if !strings.Contains(body, "test-agent") {
+		t.Errorf("yaml should contain the agent name: %s", body[:minInt(200, len(body))])
+	}
+}
+
+func TestConfigurator_DownloadYAML_RoundTrip(t *testing.T) {
+	cfg := sampleConfig()
+	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.DownloadYAML(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	var decoded types.FlowMapConfig
+	if err := yaml.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+
+	if decoded.Name != cfg.Name {
+		t.Errorf("Name mismatch: %q vs %q", decoded.Name, cfg.Name)
+	}
+	if len(decoded.Flows) != len(cfg.Flows) {
+		t.Fatalf("Flows len mismatch: %d vs %d", len(decoded.Flows), len(cfg.Flows))
+	}
+	if decoded.Flows[0].Workflow.Mermaid != cfg.Flows[0].Workflow.Mermaid {
+		t.Errorf("Workflow.Mermaid not preserved")
+	}
+	if len(decoded.Skills) != len(cfg.Skills) {
+		t.Errorf("Skills len mismatch: %d vs %d", len(decoded.Skills), len(cfg.Skills))
+	}
+	if len(decoded.Capabilities) != len(cfg.Capabilities) {
+		t.Errorf("Capabilities len mismatch: %d vs %d", len(decoded.Capabilities), len(cfg.Capabilities))
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/flowmap"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/yuin/goldmark"
+	"gopkg.in/yaml.v3"
 )
 
 // ConfigStore is the narrow interface the configurator depends on.
@@ -562,6 +563,69 @@ func tplWorkflowState(wf types.Workflow) (template.JS, error) {
 		return "", err
 	}
 	return template.JS(b), nil
+}
+
+// DownloadYAML renders the agent's flow_map_config as YAML and serves it
+// as a file attachment named "<agent-name>.yaml".
+//
+// Available for any agent (no status gate at the handler level — the link
+// in /agents/ui only appears for non-INITIALIZING agents). Returns 404 if
+// the agent doesn't exist or has no config persisted yet.
+func (h *ConfiguratorHandler) DownloadYAML(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	agent, err := h.repo.GetByID(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	cfg, err := h.loadConfig(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	yamlBytes, err := yaml.Marshal(cfg)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	filename := sanitiseFilename(agent.Name) + ".yaml"
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(yamlBytes)
+}
+
+// sanitiseFilename produces a safe basename for the Content-Disposition header.
+// Strips path separators and quotes; falls back to "agent" if the input is
+// empty or has no allowed characters.
+func sanitiseFilename(name string) string {
+	if name == "" {
+		return "agent"
+	}
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteByte('-')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "agent"
+	}
+	return out
 }
 
 // FinalizeConfirm renders the small confirmation page shown when the user
