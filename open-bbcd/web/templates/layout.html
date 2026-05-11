@@ -6,6 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>open-bbcd</title>
   <script src="/static/htmx.min.js"></script>
+  <script src="/static/drawflow.min.js"></script>
+  <script src="/static/dagre.min.js"></script>
+  <script defer src="/static/openbbc-flow.js"></script>
   <script defer src="/static/chip-input.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -59,6 +62,7 @@
     .wizard-nav{display:flex;justify-content:space-between;align-items:center;margin-top:20px}
     #form-body{min-height:200px}
   </style>
+  <link rel="stylesheet" href="/static/drawflow.min.css">
   <link rel="stylesheet" href="/static/configurator.css">
   <script>
     function requireCurrentField(event) {
