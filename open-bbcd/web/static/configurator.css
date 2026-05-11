@@ -361,3 +361,19 @@
   border-radius: 4px;
   z-index: -1;
 }
+
+.config-finalize { max-width: 640px; }
+.config-finalize h2 { margin: 0 0 12px; }
+.config-finalize p { margin: 0 0 16px; line-height: 1.5; color: #c9d1d9; }
+
+.config-finalize-summary {
+  list-style: none;
+  padding: 12px 16px;
+  margin: 0 0 16px;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  background: #161b22;
+}
+.config-finalize-summary li { margin: 4px 0; color: #c9d1d9; }
+
+.config-finalize-form { display: flex; gap: 8px; }

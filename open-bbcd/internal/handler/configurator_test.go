@@ -3,6 +3,7 @@ package handler_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,14 +13,17 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/handler"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/DACdigital/OpenBBC/open-bbcd/web"
+	"gopkg.in/yaml.v3"
 )
 
 type stubConfigStore struct {
-	cfg      types.FlowMapConfig
-	getErr   error
-	parseErr string
-	updates  int
-	updateFn func(cfg []byte) error
+	cfg           types.FlowMapConfig
+	getErr        error
+	parseErr      string
+	updates       int
+	updateFn      func(cfg []byte) error
+	statusFn      func(agentID, expectedFrom, to string) error
+	currentStatus string // optional override; defaults to "INITIALIZING"
 }
 
 func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, agentID string) ([]byte, string, error) {
@@ -31,7 +35,11 @@ func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, agentID string) 
 }
 
 func (s *stubConfigStore) GetByID(ctx context.Context, id string) (*types.Agent, error) {
-	return &types.Agent{ID: id, Name: s.cfg.Name, Status: "INITIALIZING"}, nil
+	status := s.currentStatus
+	if status == "" {
+		status = "INITIALIZING"
+	}
+	return &types.Agent{ID: id, Name: s.cfg.Name, Status: status}, nil
 }
 
 func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error {
@@ -44,6 +52,21 @@ func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, agentID strin
 		return err
 	}
 	s.cfg = decoded
+	return nil
+}
+
+func (s *stubConfigStore) UpdateStatus(ctx context.Context, agentID, expectedFrom, to string) error {
+	if s.statusFn != nil {
+		return s.statusFn(agentID, expectedFrom, to)
+	}
+	cur := s.currentStatus
+	if cur == "" {
+		cur = "INITIALIZING"
+	}
+	if cur != expectedFrom {
+		return fmt.Errorf("%w: have %q, want %q", types.ErrInvalidAgentStatus, cur, expectedFrom)
+	}
+	s.currentStatus = to
 	return nil
 }
 
@@ -507,5 +530,135 @@ func TestConfigurator_WorkflowUpdate_UnknownFlow_404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func TestConfigurator_FinalizeConfirm_RendersPage(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/agents/abc/configure/finalize", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.FinalizeConfirm(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Finalize") {
+		t.Errorf("response should contain a Finalize heading or button: first 200 chars = %s", body[:minInt(200, len(body))])
+	}
+	if !strings.Contains(body, "/agents/abc/finalize") {
+		t.Errorf("response should include the POST target: first 200 chars = %s", body[:minInt(200, len(body))])
+	}
+}
+
+func TestConfigurator_Finalize_HappyPath_RedirectsToAgentsUI(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig()} // currentStatus defaults to "INITIALIZING"
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/finalize", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.Finalize(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303; body = %s", w.Code, w.Body.String())
+	}
+	if loc := w.Header().Get("Location"); loc != "/agents/ui" {
+		t.Errorf("Location = %q, want /agents/ui", loc)
+	}
+	if store.currentStatus != "DRAFT" {
+		t.Errorf("status = %q, want DRAFT", store.currentStatus)
+	}
+}
+
+func TestConfigurator_Finalize_WrongStatus_409(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig(), currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/agents/abc/finalize", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.Finalize(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", w.Code)
+	}
+}
+
+func TestConfigurator_DownloadYAML_HappyPath(t *testing.T) {
+	store := &stubConfigStore{cfg: sampleConfig(), currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.DownloadYAML(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/yaml") {
+		t.Errorf("Content-Type = %q, want application/yaml", ct)
+	}
+	cd := w.Header().Get("Content-Disposition")
+	if !strings.Contains(cd, "attachment") {
+		t.Errorf("Content-Disposition = %q, want to contain 'attachment'", cd)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "schema_version") {
+		t.Errorf("yaml should contain schema_version: %s", body[:minInt(200, len(body))])
+	}
+	if !strings.Contains(body, "test-agent") {
+		t.Errorf("yaml should contain the agent name: %s", body[:minInt(200, len(body))])
+	}
+}
+
+func TestConfigurator_DownloadYAML_RoundTrip(t *testing.T) {
+	cfg := sampleConfig()
+	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.DownloadYAML(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	var decoded types.FlowMapConfig
+	if err := yaml.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+
+	if decoded.Name != cfg.Name {
+		t.Errorf("Name mismatch: %q vs %q", decoded.Name, cfg.Name)
+	}
+	if len(decoded.Flows) != len(cfg.Flows) {
+		t.Fatalf("Flows len mismatch: %d vs %d", len(decoded.Flows), len(cfg.Flows))
+	}
+	if decoded.Flows[0].Workflow.Mermaid != cfg.Flows[0].Workflow.Mermaid {
+		t.Errorf("Workflow.Mermaid not preserved")
+	}
+	if len(decoded.Skills) != len(cfg.Skills) {
+		t.Errorf("Skills len mismatch: %d vs %d", len(decoded.Skills), len(cfg.Skills))
+	}
+	if len(decoded.Capabilities) != len(cfg.Capabilities) {
+		t.Errorf("Capabilities len mismatch: %d vs %d", len(decoded.Capabilities), len(cfg.Capabilities))
 	}
 }
