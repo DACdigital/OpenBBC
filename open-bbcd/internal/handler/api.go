@@ -82,6 +82,9 @@ func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConf
 	mux.HandleFunc("POST /agents/{id}/configure/skills/{skillId}", configuratorHandler.SkillUpdate)
 	mux.HandleFunc("DELETE /agents/{id}/configure/skills/{skillId}", configuratorHandler.SkillDelete)
 	mux.HandleFunc("POST /agents/{id}/configure/flows/{flowId}/workflow", configuratorHandler.WorkflowUpdate)
+	mux.HandleFunc("GET /agents/{id}/configure/finalize", configuratorHandler.FinalizeConfirm)
+	mux.HandleFunc("POST /agents/{id}/finalize", configuratorHandler.Finalize)
+	mux.HandleFunc("GET /agents/{id}/config.yaml", configuratorHandler.DownloadYAML)
 
 	mux.HandleFunc("GET /health", Health)
 	mux.HandleFunc("POST /agents", agentHandler.Create)
