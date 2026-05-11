@@ -10,7 +10,7 @@
   </aside>
   <main class="config-detail-pane">
     {{if .SelectedFlow}}
-      {{template "flow_detail" (dict "AgentID" .AgentID "Flow" .SelectedFlow)}}
+      {{template "flow_detail" (dict "AgentID" .AgentID "Flow" .SelectedFlow "Skills" .Config.Skills)}}
     {{else}}
       <p class="config-detail-empty">Select a flow on the left.</p>
     {{end}}

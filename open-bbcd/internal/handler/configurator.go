@@ -50,6 +50,9 @@ func NewConfiguratorHandler(repo ConfigStore, webFS fs.FS) (*ConfiguratorHandler
 			}
 			return c.Name
 		},
+		"json":          tplJSON,
+		"skillIds":      tplSkillIDs,
+		"workflowState": tplWorkflowState,
 	}
 	parse := func(name string) (*template.Template, error) {
 		return template.New("").Funcs(funcs).ParseFS(webFS,
@@ -523,6 +526,36 @@ func (h *ConfiguratorHandler) WorkflowUpdate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// tplJSON marshals v to JSON suitable for embedding as a single-quoted HTML
+// attribute value or a <script type="application/json"> body. Used by the
+// workflow editor's data-skills attribute and data-obf-state element.
+func tplJSON(v any) (template.JS, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return template.JS(b), nil
+}
+
+// tplSkillIDs extracts the id slice from a []types.Skill.
+func tplSkillIDs(skills []types.Skill) []string {
+	out := make([]string, len(skills))
+	for i, s := range skills {
+		out[i] = s.ID
+	}
+	return out
+}
+
+// tplWorkflowState marshals a Workflow as JSON for the inline state element
+// the workflow editor reads.
+func tplWorkflowState(wf types.Workflow) (template.JS, error) {
+	b, err := json.Marshal(wf)
+	if err != nil {
+		return "", err
+	}
+	return template.JS(b), nil
 }
 
 // SkillUpdate applies form values to an existing skill in place.
