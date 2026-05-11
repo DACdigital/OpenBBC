@@ -1,0 +1,6 @@
+flowchart TD
+  start([start]) --> s_read[read-product-catalog]
+  s_read --> d{cart empty?}
+  d -- yes --> e([end])
+  d -- no --> s_place[place-order]
+  s_place --> e
