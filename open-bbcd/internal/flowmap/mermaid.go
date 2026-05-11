@@ -27,3 +27,14 @@ func validateWorkflowSkillRefs(mermaid string, skills map[string]struct{}) error
 	}
 	return nil
 }
+
+// WorkflowReferencesSkill returns true if the mermaid string declares any
+// id[<skill-id>] rectangle node whose label equals the given skill id.
+func WorkflowReferencesSkill(mermaid, skillID string) bool {
+	for _, m := range skillNodeRe.FindAllStringSubmatch(mermaid, -1) {
+		if m[2] == skillID {
+			return true
+		}
+	}
+	return false
+}

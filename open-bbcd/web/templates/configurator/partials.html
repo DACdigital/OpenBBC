@@ -1,10 +1,17 @@
 {{define "flow_row"}}
-<a href="/agents/{{.AgentID}}/configure/flows/{{.Flow.ID}}"
-   class="config-list-row {{if and .SelectedID (eq .SelectedID .Flow.ID)}}selected{{end}}">
-  <span class="config-list-row-icon">{{if .Flow.Included}}☑{{else}}☐{{end}}</span>
-  <span class="config-list-row-name">{{.Flow.ID}}</span>
-  <span class="config-list-row-meta">{{len .Flow.Workflow.Layout}} nodes</span>
-</a>
+<div id="flow-row-{{.Flow.ID}}" class="config-list-row {{if and .SelectedID (eq .SelectedID .Flow.ID)}}selected{{end}}">
+  <input type="checkbox" class="config-list-row-toggle"
+         {{if .Flow.Included}}checked{{end}}
+         hx-post="/agents/{{.AgentID}}/configure/flows/{{.Flow.ID}}/included"
+         hx-trigger="change"
+         hx-vals='js:{included: event.target.checked}'
+         hx-target="#flow-row-{{.Flow.ID}}"
+         hx-swap="outerHTML">
+  <a href="/agents/{{.AgentID}}/configure/flows/{{.Flow.ID}}" class="config-list-row-link">
+    <span class="config-list-row-name">{{.Flow.ID}}</span>
+    <span class="config-list-row-meta">{{len .Flow.Workflow.Layout}} nodes</span>
+  </a>
+</div>
 {{end}}
 
 {{define "flow_detail"}}
@@ -41,15 +48,70 @@
 {{end}}
 
 {{define "skill_row"}}
-<a href="/agents/{{.AgentID}}/configure/skills/{{.Skill.ID}}"
-   class="config-list-row {{if and .SelectedID (eq .SelectedID .Skill.ID)}}selected{{end}}">
-  <span class="config-list-row-name">{{.Skill.ID}}</span>
-  <span class="config-list-row-meta">
-    <span class="badge badge-{{.Skill.Origin}}">{{.Skill.Origin}}</span>
-    {{if .Skill.External}}<span class="badge">external</span>{{else}}<span class="muted">{{.Skill.CapabilityRef}}</span>{{end}}
-    <code>{{.Skill.ProposedTool}}</code>
-  </span>
-</a>
+<div id="skill-row-{{.Skill.ID}}">
+  <a href="/agents/{{.AgentID}}/configure/skills/{{.Skill.ID}}"
+     class="config-list-row {{if and .SelectedID (eq .SelectedID .Skill.ID)}}selected{{end}}">
+    <span class="config-list-row-name">{{.Skill.ID}}</span>
+    <span class="config-list-row-meta">
+      <span class="badge badge-{{.Skill.Origin}}">{{.Skill.Origin}}</span>
+      {{if .Skill.External}}<span class="badge">external</span>{{else}}<span class="muted">{{.Skill.CapabilityRef}}</span>{{end}}
+      <code>{{.Skill.ProposedTool}}</code>
+    </span>
+  </a>
+</div>
+{{end}}
+
+{{define "skill_form_fields"}}
+<input type="hidden" name="agent_id" value="{{.AgentID}}">
+
+<label>Name
+  <input type="text" name="name" value="{{.Skill.Name}}" required>
+</label>
+
+<label>Description
+  <textarea name="description" rows="2">{{.Skill.Description}}</textarea>
+</label>
+
+<div class="form-row">
+  <label>Role
+    <select name="role">
+      <option value="read"  {{if eq .Skill.Role "read"}}selected{{end}}>read</option>
+      <option value="write" {{if eq .Skill.Role "write"}}selected{{end}}>write</option>
+    </select>
+  </label>
+  <label>Proposed tool
+    <input type="text" name="proposed_tool" value="{{.Skill.ProposedTool}}" placeholder="e.g. orders.create">
+  </label>
+</div>
+
+<label>User phrases
+  <div class="chip-input"
+       data-chip-input
+       data-name="user_phrases"
+       data-value="{{range $i, $p := .Skill.UserPhrases}}{{if $i}},{{end}}{{$p}}{{end}}"></div>
+</label>
+
+<label>Capability
+  <select name="capability"
+          hx-on:change="
+            const isExt = this.value === '__external__';
+            this.form.querySelector('[name=external]').value = isExt ? 'true' : 'false';
+            this.form.querySelector('.external-note-row').style.display = isExt ? '' : 'none';
+          ">
+    {{range .Capabilities}}
+    <option value="{{.Name}}" {{if and (not $.Skill.External) (eq .Name $.Skill.CapabilityRef)}}selected{{end}}>{{.Name}}</option>
+    {{end}}
+    <option value="__external__" {{if .Skill.External}}selected{{end}}>External (no discovered capability)</option>
+  </select>
+</label>
+
+<input type="hidden" name="external" value="{{if .Skill.External}}true{{else}}false{{end}}">
+
+<div class="external-note-row" style="{{if not .Skill.External}}display:none{{end}}">
+  <label>External note
+    <textarea name="external_note" rows="2" placeholder="why this skill has no discovered capability">{{.Skill.ExternalNote}}</textarea>
+  </label>
+</div>
 {{end}}
 
 {{define "skill_detail"}}
@@ -57,16 +119,29 @@
   <h2>{{.Skill.Name}}</h2>
   <p class="config-detail-id"><code>{{.Skill.ID}}</code> · <span class="badge badge-{{.Skill.Origin}}">{{.Skill.Origin}}</span></p>
 
-  <div class="config-section">
-    <h3>Metadata</h3>
-    <dl class="config-meta">
-      <dt>Description</dt>   <dd>{{.Skill.Description}}</dd>
-      <dt>Role</dt>          <dd>{{.Skill.Role}}</dd>
-      <dt>User phrases</dt>  <dd>{{range .Skill.UserPhrases}}<span class="chip">{{.}}</span>{{end}}</dd>
-      <dt>Capability</dt>    <dd>{{if .Skill.External}}external{{else}}<a href="/agents/{{.AgentID}}/configure/capabilities/{{.Skill.CapabilityRef}}">{{.Skill.CapabilityRef}}</a>{{end}}</dd>
-      <dt>Proposed tool</dt> <dd><code>{{.Skill.ProposedTool}}</code></dd>
-    </dl>
-  </div>
+  <form class="config-form"
+        hx-post="/agents/{{.AgentID}}/configure/skills/{{.Skill.ID}}"
+        hx-target="closest .config-detail"
+        hx-swap="outerHTML"
+        hx-indicator=".config-form-saved">
+    {{template "skill_form_fields" (dict
+      "AgentID"     .AgentID
+      "Skill"       .Skill
+      "Capabilities" .Capabilities)}}
+
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">Save</button>
+      {{if eq .Skill.Origin "custom"}}
+      <button type="button"
+              class="btn-secondary danger-button"
+              hx-delete="/agents/{{.AgentID}}/configure/skills/{{.Skill.ID}}"
+              hx-target="#skill-row-{{.Skill.ID}}"
+              hx-swap="delete"
+              hx-confirm="Delete this custom skill?">Delete</button>
+      {{end}}
+      <span class="config-form-saved">Saved</span>
+    </div>
+  </form>
 
   {{if .Skill.ProseMD}}
   <div class="config-section">
@@ -74,6 +149,29 @@
     <div class="prose">{{renderMarkdown .Skill.ProseMD}}</div>
   </div>
   {{end}}
+</div>
+{{end}}
+
+{{define "skill_new_form"}}
+<div class="config-detail">
+  <h2>New custom skill</h2>
+  <p class="config-detail-id">A new id will be generated from the name.</p>
+
+  <form class="config-form"
+        hx-post="/agents/{{.AgentID}}/configure/skills"
+        hx-target="#skill-list-rows"
+        hx-swap="beforeend"
+        hx-indicator=".config-form-saved">
+    {{template "skill_form_fields" (dict
+      "AgentID"     .AgentID
+      "Skill"       .Skill
+      "Capabilities" .Capabilities)}}
+
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">Create</button>
+      <span class="config-form-saved">Created</span>
+    </div>
+  </form>
 </div>
 {{end}}
 
