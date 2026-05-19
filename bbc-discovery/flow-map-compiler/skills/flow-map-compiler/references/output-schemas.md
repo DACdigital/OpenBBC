@@ -298,13 +298,24 @@ prose body remains for human readers.
 
 Required node shapes (do not invent new ones):
 
-| Shape           | Mermaid syntax                  | Meaning                              |
-|-----------------|---------------------------------|--------------------------------------|
-| Start           | `id([start])`                   | Single entry node, label = `start`   |
-| End             | `id([end])`                     | Terminal node(s), label = `end`      |
-| Skill call      | `id[<skill-id>]`                | Invokes the named agent skill        |
-| Decision        | `id{<question?>}`               | Two-way branch, label edges `yes`/`no` |
-| Parallel fanout | `id{{<label>}}`                 | Fan into multiple branches with `&`  |
+| Shape      | Mermaid syntax    | Meaning                              |
+|------------|-------------------|--------------------------------------|
+| Start      | `id([start])`     | Single entry node, label = `start`   |
+| End        | `id([end])`       | Terminal node(s), label = `end`      |
+| Skill call | `id[<skill-id>]`  | Invokes the named agent skill        |
+| Decision   | `id{<question?>}` | Two-way branch                       |
+
+Required edge shapes:
+
+| Shape         | Mermaid syntax       |
+|---------------|----------------------|
+| Plain         | `a --> b`            |
+| Labeled       | `a -- yes --> b`     |
+
+**Forbidden** (the downstream editor's parser rejects them): parallel-fanout
+shapes (`id{{label}}`), `&`-joined fanouts (`a & b --> c`), and pipe-delimited
+edge labels (`a -->|yes| b`). Express parallel awaits as a serial sequence in
+declared order; express fanouts as separate plain edges.
 
 Every `id[<skill-id>]` skill node's label MUST equal a `skills_used[].skill`
 entry on the same flow. Loops are modeled as back-edges between existing

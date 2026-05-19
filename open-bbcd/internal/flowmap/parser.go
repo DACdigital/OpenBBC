@@ -241,6 +241,11 @@ func parseFlow(name string, b []byte) (types.Flow, error) {
 	if wf == "" {
 		wf = linearFallback(fm.SkillsUsed)
 	}
+	normalized, err := NormalizeMermaid(wf)
+	if err != nil {
+		return types.Flow{}, fmt.Errorf("%w: %s: %v", types.ErrFlowMapInvalid, name, err)
+	}
+	wf = normalized
 
 	return types.Flow{
 		ID:             fm.ID,

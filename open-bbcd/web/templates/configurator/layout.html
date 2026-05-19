@@ -1,8 +1,9 @@
 {{define "content"}}
-<div class="config-page">
+<div class="config-page {{if .ReadOnly}}config-readonly{{end}}">
   <div class="config-header">
     <a href="/agents/ui" class="config-back">← Back to Agents</a>
     <h1>{{.AgentName}}</h1>
+    {{if .AgentStatus}}<span class="badge badge-{{.AgentStatus | statusClass}}">{{.AgentStatus}}</span>{{end}}
   </div>
 
   <nav class="config-tabs">
@@ -13,9 +14,20 @@
     <a href="/agents/{{.AgentID}}/configure/capabilities"
        class="config-tab {{if eq .Tab "capabilities"}}active{{end}}">Capabilities</a>
     <span class="config-spacer"></span>
-    <a href="/agents/{{.AgentID}}/configure/finalize"
-       class="config-tab {{if eq .Tab "finalize"}}active{{end}}">Finalize →</a>
+    {{if .ReadOnly}}
+      <a href="/agents/{{.AgentID}}/config.yaml" class="config-tab">Download YAML</a>
+    {{else}}
+      <a href="/agents/{{.AgentID}}/configure/finalize"
+         class="config-tab {{if eq .Tab "finalize"}}active{{end}}">Finalize →</a>
+    {{end}}
   </nav>
+
+  {{if .ReadOnly}}
+  <div class="config-banner config-banner-readonly">
+    <strong>Read-only preview.</strong> This agent is {{.AgentStatus}}; the configurator is locked.
+    Re-run the wizard to start a new version.
+  </div>
+  {{end}}
 
   {{if .ParseError}}
   <div class="config-banner config-banner-error">

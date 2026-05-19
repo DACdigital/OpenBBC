@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/flowmap"
@@ -33,6 +34,7 @@ type ConfiguratorHandler struct {
 func NewConfiguratorHandler(repo ConfigStore, webFS fs.FS) (*ConfiguratorHandler, error) {
 	funcs := template.FuncMap{
 		"renderMarkdown": renderMarkdown,
+		"statusClass":    statusClass,
 		"dict":           tplDict,
 		"selectedFlowID": func(f *types.Flow) string {
 			if f == nil {
@@ -52,9 +54,11 @@ func NewConfiguratorHandler(repo ConfigStore, webFS fs.FS) (*ConfiguratorHandler
 			}
 			return c.Name
 		},
-		"json":          tplJSON,
-		"skillIds":      tplSkillIDs,
-		"workflowState": tplWorkflowState,
+		"json":               tplJSON,
+		"skillIds":           tplSkillIDs,
+		"workflowState":      tplWorkflowState,
+		"workflowNodeCount":  tplWorkflowNodeCount,
+		"includedFlowsCount": tplIncludedFlowsCount,
 	}
 	parse := func(name string) (*template.Template, error) {
 		return template.New("").Funcs(funcs).ParseFS(webFS,
@@ -89,11 +93,22 @@ func NewConfiguratorHandler(repo ConfigStore, webFS fs.FS) (*ConfiguratorHandler
 	}, nil
 }
 
-// renderMarkdown is a template func that converts markdown prose to HTML.
-// Trusted source: prose came from the discovery skill, not user input.
-func renderMarkdown(md string) template.HTML {
+// proseRelLink matches `../<section>/<id>.md` inside a markdown link
+// destination, where <section> is one of the .flow-map directory names
+// the discovery skill emits.
+var proseRelLink = regexp.MustCompile(`\.\./(skills|capabilities|flows)/([^)\s]+?)\.md`)
+
+// renderMarkdown converts a prose markdown blob (from the discovery
+// skill) to HTML. Relative links into the .flow-map directory layout
+// are rewritten to the agent's in-app configurator routes so they
+// actually navigate. Trusted input — prose is generated, not user-typed.
+func renderMarkdown(agentID, md string) template.HTML {
 	if md == "" {
 		return ""
+	}
+	if agentID != "" {
+		base := "/agents/" + agentID + "/configure/"
+		md = proseRelLink.ReplaceAllString(md, base+"$1/$2")
 	}
 	var buf bytes.Buffer
 	if err := goldmark.Convert([]byte(md), &buf); err != nil {
@@ -106,6 +121,8 @@ type configPageData struct {
 	Active        string
 	AgentID       string
 	AgentName     string
+	AgentStatus   string
+	ReadOnly      bool   // true for non-INITIALIZING agents (DRAFT, TESTED, DEPLOYED)
 	Tab           string // "flows" | "skills" | "capabilities"
 	Config        types.FlowMapConfig
 	ParseError    string
@@ -131,11 +148,13 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 		}
 	}
 	return configPageData{
-		Active:     "agents",
-		AgentID:    agentID,
-		AgentName:  agent.Name,
-		Config:     cfg,
-		ParseError: parseErr,
+		Active:      "agents",
+		AgentID:     agentID,
+		AgentName:   agent.Name,
+		AgentStatus: agent.Status,
+		ReadOnly:    agent.Status != "INITIALIZING",
+		Config:      cfg,
+		ParseError:  parseErr,
 	}, nil
 }
 
@@ -241,6 +260,21 @@ func tplDict(kv ...any) (map[string]any, error) {
 	return m, nil
 }
 
+// requireEditable returns ErrInvalidAgentStatus if the agent isn't in
+// INITIALIZING — the only state where the configurator accepts edits.
+// Used as a guard at the top of every mutating handler so a stale tab
+// or a hand-crafted request can't change a finalized agent.
+func (h *ConfiguratorHandler) requireEditable(ctx context.Context, agentID string) error {
+	agent, err := h.repo.GetByID(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	if agent.Status != "INITIALIZING" {
+		return types.ErrInvalidAgentStatus
+	}
+	return nil
+}
+
 // loadConfig fetches the agent's flow_map_config and unmarshals into a
 // FlowMapConfig. Returns ErrNotFound if the agent does not exist or has no
 // config persisted (the configurator pages assume the wizard already ran).
@@ -280,6 +314,10 @@ func (h *ConfiguratorHandler) FlowIncluded(w http.ResponseWriter, r *http.Reques
 
 	agentID := r.PathValue("id")
 	flowID := r.PathValue("flowId")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
 	cfg, err := h.loadConfig(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
@@ -371,6 +409,10 @@ func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	agentID := r.PathValue("id")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
 	cfg, err := h.loadConfig(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
@@ -419,6 +461,10 @@ func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request
 func (h *ConfiguratorHandler) SkillDelete(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("id")
 	skillID := r.PathValue("skillId")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
 	cfg, err := h.loadConfig(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
@@ -492,6 +538,10 @@ func (h *ConfiguratorHandler) WorkflowUpdate(w http.ResponseWriter, r *http.Requ
 
 	agentID := r.PathValue("id")
 	flowID := r.PathValue("flowId")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
 	cfg, err := h.loadConfig(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
@@ -555,9 +605,45 @@ func tplSkillIDs(skills []types.Skill) []string {
 	return out
 }
 
+// tplIncludedFlowsCount returns the number of flows that are toggled
+// on. Used by the finalize summary so the count matches what will
+// actually ship downstream.
+func tplIncludedFlowsCount(flows []types.Flow) int {
+	n := 0
+	for _, f := range flows {
+		if f.Included {
+			n++
+		}
+	}
+	return n
+}
+
+// tplWorkflowNodeCount returns the number of nodes the editor will render
+// for a workflow — i.e. the node count after normalization. Falls back to
+// 0 when the mermaid can't be parsed.
+func tplWorkflowNodeCount(wf types.Workflow) int {
+	src := wf.Mermaid
+	if normalized, err := flowmap.NormalizeMermaid(src); err == nil {
+		src = normalized
+	}
+	pw, err := flowmap.ParseWorkflow(src)
+	if err != nil {
+		return 0
+	}
+	return len(pw.Nodes)
+}
+
 // tplWorkflowState marshals a Workflow as JSON for the inline state element
 // the workflow editor reads.
+//
+// The mermaid is normalized best-effort so flows compiled against older
+// dialect rules (parallel-fanout, pipe-labels) still render. Normalization
+// failures are non-fatal — the raw mermaid is passed through and the
+// editor will surface its own parse error.
 func tplWorkflowState(wf types.Workflow) (template.JS, error) {
+	if normalized, err := flowmap.NormalizeMermaid(wf.Mermaid); err == nil {
+		wf.Mermaid = normalized
+	}
 	b, err := json.Marshal(wf)
 	if err != nil {
 		return "", err
@@ -683,6 +769,10 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 	}
 	agentID := r.PathValue("id")
 	skillID := r.PathValue("skillId")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
 	cfg, err := h.loadConfig(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)

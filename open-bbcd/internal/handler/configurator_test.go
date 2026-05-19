@@ -110,6 +110,25 @@ func TestConfigurator_FlowsTab_RendersFlowsList(t *testing.T) {
 	}
 }
 
+func TestConfigurator_FlowsTab_NodeCountReflectsMermaid(t *testing.T) {
+	cfg := sampleConfig()
+	// Three nodes: start, one skill (place-order), end. Layout intentionally empty.
+	cfg.Flows[0].Workflow = types.Workflow{
+		Mermaid: "flowchart TD\n  start([start]) --> s_po[place-order]\n  s_po --> e([end])\n",
+	}
+	h := newConfigHandler(t, &stubConfigStore{cfg: cfg})
+	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure/flows", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.Flows(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "3 nodes") {
+		t.Errorf("flow row should show 3 nodes; body did not contain it")
+	}
+}
+
 func TestConfigurator_SkillsTab_ShowsSkillRow(t *testing.T) {
 	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig()})
 	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure/skills", nil)

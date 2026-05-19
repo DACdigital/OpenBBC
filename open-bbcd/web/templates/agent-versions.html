@@ -21,7 +21,9 @@
       <td class="col-date">{{.Agent.CreatedAt.Format "Jan 2, 2006"}}</td>
       <td>
         {{if ne .Agent.Status "INITIALIZING"}}
-          <a href="/agents/{{.Agent.ID}}/config.yaml" class="agent-link">Download YAML</a>
+          <a href="/agents/{{.Agent.ID}}/configure" class="agent-link">Preview →</a>
+          <span style="color:#4f5a66;margin:0 6px">·</span>
+          <a href="/agents/{{.Agent.ID}}/config.yaml" class="agent-link">YAML</a>
         {{else}}
           <a href="/agents/{{.Agent.ID}}/configure" class="agent-link">Resume setup →</a>
         {{end}}

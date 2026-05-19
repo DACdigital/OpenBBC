@@ -4,6 +4,7 @@
 .claude/
 .superpowers/
 .worktrees/
+docs/superpowers/
 
 # =========================
 # Test project
@@ -104,6 +105,7 @@ pkg/
 go.work
 go.work.sum
 vendor/
+open-bbcd/open-bbcd
 
 # Build output
 /aicademy

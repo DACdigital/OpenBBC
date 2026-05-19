@@ -14,11 +14,22 @@
   </div>
   {{end}}
 
-  <ul class="config-finalize-summary">
-    <li><strong>{{len .Config.Flows}}</strong> flows</li>
-    <li><strong>{{len .Config.Skills}}</strong> skills</li>
-    <li><strong>{{len .Config.Capabilities}}</strong> capabilities</li>
-  </ul>
+  <div class="finalize-stats">
+    <div class="finalize-stat">
+      <div class="finalize-stat-value">
+        {{includedFlowsCount .Config.Flows}}<span class="finalize-stat-divider">/</span><span class="finalize-stat-total">{{len .Config.Flows}}</span>
+      </div>
+      <div class="finalize-stat-label">flows included</div>
+    </div>
+    <div class="finalize-stat">
+      <div class="finalize-stat-value">{{len .Config.Skills}}</div>
+      <div class="finalize-stat-label">skills</div>
+    </div>
+    <div class="finalize-stat">
+      <div class="finalize-stat-value">{{len .Config.Capabilities}}</div>
+      <div class="finalize-stat-label">capabilities</div>
+    </div>
+  </div>
 
   <form method="POST" action="/agents/{{.AgentID}}/finalize" class="config-finalize-form">
     <button type="submit" class="btn-primary">Yes, finalize →</button>

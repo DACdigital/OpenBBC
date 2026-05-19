@@ -2,14 +2,16 @@
 <div id="flow-row-{{.Flow.ID}}" class="config-list-row {{if and .SelectedID (eq .SelectedID .Flow.ID)}}selected{{end}}">
   <input type="checkbox" class="config-list-row-toggle"
          {{if .Flow.Included}}checked{{end}}
+         {{if .ReadOnly}}disabled{{else}}
          hx-post="/agents/{{.AgentID}}/configure/flows/{{.Flow.ID}}/included"
          hx-trigger="change"
          hx-vals='js:{included: event.target.checked}'
          hx-target="#flow-row-{{.Flow.ID}}"
-         hx-swap="outerHTML">
+         hx-swap="outerHTML"
+         {{end}}>
   <a href="/agents/{{.AgentID}}/configure/flows/{{.Flow.ID}}" class="config-list-row-link">
     <span class="config-list-row-name">{{.Flow.ID}}</span>
-    <span class="config-list-row-meta">{{len .Flow.Workflow.Layout}} nodes</span>
+    <span class="config-list-row-meta">{{workflowNodeCount .Flow.Workflow}} nodes</span>
   </a>
 </div>
 {{end}}
@@ -23,9 +25,11 @@
     <h3>Workflow</h3>
     <div class="obf-editor"
          data-obf-editor
+         {{if .ReadOnly}}data-obf-readonly="1"{{end}}
          data-agent-id="{{.AgentID}}"
          data-flow-id="{{.Flow.ID}}"
          data-skills='{{json (skillIds .Skills)}}'>
+      {{if not .ReadOnly}}
       <div class="obf-toolbar">
         <button type="button" data-obf-add="skill">+ skill</button>
         <button type="button" data-obf-add="decision">+ decision</button>
@@ -34,6 +38,12 @@
         <button type="button" data-obf-action="reset">Reset to source</button>
         <span class="obf-saved-indicator"></span>
       </div>
+      {{else}}
+      <div class="obf-toolbar">
+        <button type="button" data-obf-action="auto-layout">Auto-layout</button>
+        <span class="obf-saved-indicator obf-readonly-tag">read-only</span>
+      </div>
+      {{end}}
       <div class="obf-canvas"></div>
       <script type="application/json" data-obf-state>{{workflowState .Flow.Workflow}}</script>
     </div>
@@ -55,7 +65,7 @@
   {{if .Flow.ProseMD}}
   <div class="config-section">
     <h3>Description (from discovery)</h3>
-    <div class="prose">{{renderMarkdown .Flow.ProseMD}}</div>
+    <div class="prose">{{renderMarkdown .AgentID .Flow.ProseMD}}</div>
   </div>
   {{end}}
 </div>
@@ -133,16 +143,21 @@
   <h2>{{.Skill.Name}}</h2>
   <p class="config-detail-id"><code>{{.Skill.ID}}</code> · <span class="badge badge-{{.Skill.Origin}}">{{.Skill.Origin}}</span></p>
 
-  <form class="config-form"
+  <form class="config-form {{if .ReadOnly}}config-form-readonly{{end}}"
+        {{if not .ReadOnly}}
         hx-post="/agents/{{.AgentID}}/configure/skills/{{.Skill.ID}}"
         hx-target="closest .config-detail"
         hx-swap="outerHTML"
-        hx-indicator=".config-form-saved">
+        hx-indicator=".config-form-saved"
+        {{end}}>
+    <fieldset {{if .ReadOnly}}disabled{{end}} style="border:none;padding:0;margin:0;display:contents">
     {{template "skill_form_fields" (dict
       "AgentID"     .AgentID
       "Skill"       .Skill
       "Capabilities" .Capabilities)}}
+    </fieldset>
 
+    {{if not .ReadOnly}}
     <div class="form-actions">
       <button type="submit" class="btn-primary">Save</button>
       {{if eq .Skill.Origin "custom"}}
@@ -155,12 +170,13 @@
       {{end}}
       <span class="config-form-saved">Saved</span>
     </div>
+    {{end}}
   </form>
 
   {{if .Skill.ProseMD}}
   <div class="config-section">
     <h3>Source (from discovery)</h3>
-    <div class="prose">{{renderMarkdown .Skill.ProseMD}}</div>
+    <div class="prose">{{renderMarkdown .AgentID .Skill.ProseMD}}</div>
   </div>
   {{end}}
 </div>
@@ -222,7 +238,7 @@
   {{if .Cap.ProseMD}}
   <div class="config-section">
     <h3>Documentation (from discovery)</h3>
-    <div class="prose">{{renderMarkdown .Cap.ProseMD}}</div>
+    <div class="prose">{{renderMarkdown .AgentID .Cap.ProseMD}}</div>
   </div>
   {{end}}
 </div>
