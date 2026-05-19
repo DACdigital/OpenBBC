@@ -1,10 +1,21 @@
-/* Page-scoped: the configurator wants more room than the default .content cap. */
-.content:has(.config-page) { max-width: 1280px; }
+/* Page-scoped: the configurator wants the full viewport width and a
+   workflow editor that fills the remaining vertical space. */
+.content:has(.config-page) {
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+}
 
 .config-page {
   width: 100%;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
+
+.config-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 .config-header {
   display: flex;
@@ -73,16 +84,38 @@
   background: #2d1418;
 }
 
+.config-banner-readonly {
+  border-left-color: #d29922;
+  background: #1f1c10;
+}
+
 .config-banner .hint {
   margin: 4px 0 0;
   font-size: 13px;
   color: #8b949e;
 }
 
+/* Read-only preview tweaks. */
+.config-readonly .config-list-row-toggle { cursor: not-allowed; opacity: .5; }
+.config-readonly .config-list-row-toggle:hover { box-shadow: none; }
+.obf-readonly-tag {
+  background: #1f1c10;
+  border: 1px solid #d29922;
+  color: #d29922;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-left: auto;
+}
+
 .config-two-pane {
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 16px;
+  flex: 1;
   min-height: 480px;
 }
 
@@ -103,9 +136,10 @@
 }
 
 .config-list-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
   padding: 10px 14px;
   border-bottom: 1px solid #21262d;
   text-decoration: none;
@@ -115,10 +149,55 @@
 .config-list-row:hover { background: #1c2128; }
 .config-list-row.selected { background: #1f2937; }
 
+.config-list-row-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+  order: -1; /* link on the left, checkbox on the right */
+}
+
 .config-list-row-icon { font-size: 14px; }
 .config-list-row-name { font-weight: 600; font-size: 14px; }
 .config-list-row-meta { font-size: 12px; color: #8b949e; display: flex; gap: 8px; align-items: center; }
 .config-list-row-meta code { background: #21262d; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+
+/* Toggle switch: pill-shaped track with a sliding thumb. Off = grey
+   track, thumb on the left; on = blue track, thumb on the right. The
+   colour shift and thumb position read clearly at a glance. */
+.config-list-row-toggle {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 30px;
+  height: 16px;
+  margin: 0;
+  border: none;
+  border-radius: 999px;
+  background: #30363d;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background .15s ease;
+}
+.config-list-row-toggle::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #c9d1d9;
+  transition: transform .15s ease, background .15s ease;
+}
+.config-list-row-toggle:hover { box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15); }
+.config-list-row-toggle:checked { background: #238636; }
+.config-list-row-toggle:checked::before {
+  transform: translateX(14px);
+  background: #fff;
+}
 
 .config-detail-pane {
   border: 1px solid #30363d;
@@ -172,12 +251,54 @@
 .badge-discovered { background: #1f6feb; }
 .badge-custom { background: #d29922; color: #0d1117; }
 
-.prose { line-height: 1.6; }
-.prose h1, .prose h2, .prose h3 { margin-top: 16px; }
-.prose pre { background: #0d1117; padding: 8px; border-radius: 4px; overflow-x: auto; }
-.prose code { background: #21262d; padding: 1px 6px; border-radius: 3px; }
-.prose table { border-collapse: collapse; margin: 12px 0; }
-.prose th, .prose td { border: 1px solid #30363d; padding: 6px 10px; }
+.prose { line-height: 1.55; color: #c9d1d9; font-size: 14px; }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child  { margin-bottom: 0; }
+.prose p { margin: 0 0 12px; }
+.prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+  margin: 18px 0 8px;
+  color: #e6edf3;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.prose h1 { font-size: 18px; }
+.prose h2 { font-size: 16px; }
+.prose h3 { font-size: 14px; }
+.prose h4, .prose h5, .prose h6 { font-size: 13px; color: #8b949e; }
+.prose ul, .prose ol { padding-left: 22px; margin: 0 0 12px; }
+.prose ul { list-style: disc; }
+.prose ol { list-style: decimal; }
+.prose li { margin: 4px 0; }
+.prose li > ul, .prose li > ol { margin: 4px 0; }
+.prose a { color: #58a6ff; text-decoration: none; }
+.prose a:hover { text-decoration: underline; }
+.prose pre {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+.prose code {
+  background: #21262d;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+.prose pre code { background: transparent; padding: 0; font-size: inherit; }
+.prose blockquote {
+  margin: 0 0 12px;
+  padding: 2px 12px;
+  border-left: 3px solid #30363d;
+  color: #8b949e;
+}
+.prose hr { border: none; border-top: 1px solid #21262d; margin: 16px 0; }
+.prose table { border-collapse: collapse; margin: 0 0 12px; font-size: 13px; }
+.prose th, .prose td { border: 1px solid #30363d; padding: 6px 10px; text-align: left; }
+.prose th { background: #161b22; font-weight: 600; }
+.prose img { max-width: 100%; }
 
 .chip-input {
   display: flex;
@@ -273,7 +394,8 @@
   border: 1px solid #30363d;
   border-radius: 6px;
   background: #0d1117;
-  height: 520px;
+  min-height: 520px;
+  height: 65vh;
 }
 
 .obf-toolbar {
@@ -312,12 +434,62 @@
 .obf-canvas .drawflow {
   background: #0d1117;
 }
+/* Shrink-wrap the Drawflow node container so input/output ports sit flush
+   against the actual pill/rect/diamond instead of against Drawflow's
+   default 160px container. */
 .obf-canvas .drawflow .drawflow-node {
   background: transparent;
   border: none;
   padding: 0;
   box-shadow: none;
+  width: auto;
+  min-height: auto;
 }
+.obf-canvas .drawflow .drawflow-node .drawflow_content_node {
+  width: auto;
+  display: inline-block;
+}
+.obf-canvas .drawflow .drawflow-node.selected { background: transparent; }
+
+/* Ports: small dots centred ON the top/bottom edges so edges run
+   top-to-bottom matching the TB flow direction and the arrowheads
+   land at the node boundary instead of floating outside. Hidden by
+   default to keep the canvas clean — fade in on node hover so the
+   user can still grab a port to draw a new connection. */
+.obf-canvas .drawflow .drawflow-node .input,
+.obf-canvas .drawflow .drawflow-node .output {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  background: #0d1117;
+  border: 1.5px solid #58a6ff;
+  left: 50%;
+  right: auto;
+  margin: 0;
+  transform: translate(-50%, 0);
+  opacity: 0;
+  pointer-events: auto;
+  transition: transform .12s ease, background .12s ease, opacity .12s ease;
+}
+.obf-canvas .drawflow .drawflow-node .input  { top: -6px;   bottom: auto; }
+.obf-canvas .drawflow .drawflow-node .output { bottom: -6px; top: auto; }
+.obf-canvas .drawflow .drawflow-node:hover .input,
+.obf-canvas .drawflow .drawflow-node:hover .output {
+  opacity: 1;
+}
+.obf-canvas .drawflow .drawflow-node .input:hover,
+.obf-canvas .drawflow .drawflow-node .output:hover {
+  transform: translate(-50%, 0) scale(1.5);
+  background: #58a6ff;
+}
+
+/* Edges: medium accent stroke + arrowhead at the destination. */
+.obf-canvas .drawflow .connection .main-path {
+  stroke: #58a6ff;
+  stroke-width: 2px;
+  marker-end: url(#obf-arrow);
+}
+.obf-canvas .drawflow .connection .main-path:hover { stroke: #79c0ff; }
 
 /* Custom node shapes. */
 .obf-pill {
@@ -329,13 +501,13 @@
   color: #e6edf3;
   font-size: 12px;
 }
-.obf-pill.obf-end { border-color: #58a6ff; }
+.obf-pill.obf-end { border-color: #3fb950; }
 
 .obf-rect {
   display: inline-block;
   padding: 8px 14px;
   border-radius: 4px;
-  background: #161b22;
+  background: #1c2128;
   border: 1px solid #6e7681;
   color: #e6edf3;
   font-size: 12px;
@@ -344,36 +516,170 @@
 .obf-diamond {
   position: relative;
   width: 140px;
-  height: 60px;
+  height: 80px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #e6edf3;
   font-size: 12px;
 }
-.obf-diamond::before {
-  content: "";
+/* The SVG fills the container exactly; overflow:visible lets the
+   stroke extend slightly past the polygon vertices so the diamond tips
+   touch the container's top/bottom edges where the ports sit. */
+.obf-diamond svg {
   position: absolute;
   inset: 0;
-  background: #161b22;
-  border: 2px solid #d29922;
-  transform: rotate(45deg) scale(0.7);
-  border-radius: 4px;
-  z-index: -1;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.obf-diamond .obf-label {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  max-width: 90px;
+  line-height: 1.2;
+  word-break: break-word;
+  padding: 0 4px;
+}
+
+/* SVG <text> labels overlaid at the midpoint of each connection. */
+.obf-canvas .drawflow .connection text.obf-edge-label {
+  fill: #e6edf3;
+  font-size: 11px;
+  font-family: inherit;
+  paint-order: stroke;
+  stroke: #0d1117;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  pointer-events: none;
 }
 
 .config-finalize { max-width: 640px; }
 .config-finalize h2 { margin: 0 0 12px; }
 .config-finalize p { margin: 0 0 16px; line-height: 1.5; color: #c9d1d9; }
 
-.config-finalize-summary {
-  list-style: none;
-  padding: 12px 16px;
-  margin: 0 0 16px;
-  border: 1px solid #30363d;
-  border-radius: 6px;
-  background: #161b22;
+.finalize-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 0 0 20px;
 }
-.config-finalize-summary li { margin: 4px 0; color: #c9d1d9; }
+.finalize-stat {
+  background: #1c2230;
+  border: 1px solid #2d333b;
+  border-radius: 8px;
+  padding: 18px 16px;
+  text-align: center;
+}
+.finalize-stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: #f0f6fc;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.finalize-stat-divider { color: #4f5a66; font-weight: 500; margin: 0 2px; }
+.finalize-stat-total { color: #8b949e; font-weight: 500; }
+.finalize-stat-label {
+  margin-top: 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #a8b3c1;
+}
 
 .config-finalize-form { display: flex; gap: 8px; }
+
+/* Modal dialogs used by the workflow editor (replace browser prompt/confirm). */
+.obf-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: obf-modal-fade .12s ease-out;
+}
+@keyframes obf-modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.obf-modal {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  min-width: 360px;
+  max-width: 480px;
+  width: 100%;
+  margin: 24px;
+  padding: 20px 22px;
+  color: #e6edf3;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.obf-modal h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.obf-modal-message { margin: 0; color: #c9d1d9; font-size: 14px; line-height: 1.4; }
+.obf-modal-input {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  color: #e6edf3;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.obf-modal-input:focus { outline: none; border-color: #58a6ff; }
+.obf-modal-list {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  background: #0d1117;
+}
+.obf-modal-item {
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid #1c2128;
+}
+.obf-modal-item:last-child { border-bottom: none; }
+.obf-modal-item:hover { background: #1c2128; }
+.obf-modal-item.active { background: #1f6feb; color: #fff; }
+.obf-modal-empty { padding: 12px; color: #8b949e; font-size: 13px; text-align: center; }
+.obf-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.obf-modal-btn {
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.obf-modal-btn:hover { background: #1c2128; }
+.obf-modal-btn-primary {
+  background: #238636;
+  border-color: #238636;
+  color: #fff;
+}
+.obf-modal-btn-primary:hover { background: #2ea043; border-color: #2ea043; }
+.obf-modal-btn-danger {
+  background: #21262d;
+  border-color: #30363d;
+  color: #f85149;
+}
+.obf-modal-btn-danger:hover { background: #2d1418; border-color: #f85149; }

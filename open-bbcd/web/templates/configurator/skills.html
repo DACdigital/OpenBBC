@@ -9,16 +9,18 @@
         <p class="empty-state">No skills in this discovery snapshot.</p>
       {{end}}
     </div>
+    {{if not .ReadOnly}}
     <button class="skill-add-trigger"
             hx-get="/agents/{{.AgentID}}/configure/skills/new"
             hx-target=".config-detail-pane"
             hx-swap="innerHTML">+ Add skill</button>
+    {{end}}
   </aside>
   <main class="config-detail-pane">
     {{if .SelectedSkill}}
-      {{template "skill_detail" (dict "AgentID" .AgentID "Skill" .SelectedSkill "Capabilities" .Config.Capabilities)}}
+      {{template "skill_detail" (dict "AgentID" .AgentID "Skill" .SelectedSkill "Capabilities" .Config.Capabilities "ReadOnly" .ReadOnly)}}
     {{else}}
-      <p class="config-detail-empty">Select a skill on the left or click + Add skill.</p>
+      <p class="config-detail-empty">{{if .ReadOnly}}Select a skill on the left to preview.{{else}}Select a skill on the left or click + Add skill.{{end}}</p>
     {{end}}
   </main>
 </div>

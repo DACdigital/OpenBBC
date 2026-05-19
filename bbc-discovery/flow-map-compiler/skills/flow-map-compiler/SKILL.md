@@ -255,11 +255,30 @@ corresponding wiki file. Write under `<repo>/.flow-map/`:
 plus its near transitive imports for control-flow signal. Translate
 into a mermaid `flowchart TD` per `references/output-schemas.md`'s
 "Workflow notation" subsection. Map call-site sequences to skill nodes
-(`id[<skill-id>]`), early-return / guard checks to decision nodes
-(`id{<question?>}`), and `Promise.all` / parallel awaits to a parallel
-fanout (`id{{parallel}}` with `& joins`). Loops in the source
-(while, for-each polling) become back-edges between existing nodes;
-do not introduce a dedicated loop node.
+(`id[<skill-id>]`) and early-return / guard checks to decision nodes
+(`id{<question?>}`). Loops in the source (while, for-each polling)
+become back-edges between existing nodes; do not introduce a
+dedicated loop node.
+
+**Supported mermaid dialect (strict — emit only these shapes):**
+
+- Header: `flowchart TD` (or `flowchart LR`). Nothing else.
+- Stadium start/end: `start([start])`, `e([end])`.
+- Skill rectangle: `id[<skill-id>]`.
+- Decision diamond: `id{<question?>}`.
+- Plain edge: `a --> b`.
+- Labeled edge: `a -- yes --> b` (with single spaces around the
+  label; typically `yes` or `no`).
+
+**Do NOT emit:**
+
+- `id{{label}}` parallel-fanout nodes. Flatten `Promise.all` and
+  parallel awaits to a serial sequence in declared order — the
+  downstream editor models flows as a single-output graph.
+- `&`-joined fanouts (`a & b --> c`). Emit two edges: `a --> c` and
+  `b --> c`.
+- Pipe-delimited edge labels (`a -->|yes| b`). Use the `--` form
+  shown above instead.
 
 When control flow can't be determined with `medium`+ confidence,
 fall back to a linear chain through `skills_used` in declared
