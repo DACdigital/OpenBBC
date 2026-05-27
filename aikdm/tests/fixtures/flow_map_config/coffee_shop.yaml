@@ -1,0 +1,75 @@
+schema_version: 1
+name: coffee_shop_agent
+scope: "Help customers order coffee and track loyalty rewards."
+should_do: "Take orders, modify orders, look up rewards balance."
+should_not_do: "Process refunds, share other customers' data."
+business_domain: "Independent coffee shop with mobile ordering."
+source:
+  compiler_schema_version: 1
+  generated_from_sha: "abc123"
+  app_name: "coffeeshop-web"
+  stack:
+    framework: "next"
+    language: "typescript"
+capabilities:
+  - name: "order_create"
+    summary: "Create a new coffee order."
+    tools:
+      - name: "createOrder"
+        method: "POST"
+        path: "/api/orders"
+    prose_md: "Creates a new order with line items and customer ref."
+  - name: "rewards_lookup"
+    summary: "Look up rewards balance for a customer."
+    tools:
+      - name: "getRewards"
+        method: "GET"
+        path: "/api/rewards/{customer_id}"
+    prose_md: "Returns the current points balance and tier."
+skills:
+  - id: place_order
+    origin: discovered
+    name: "Place an order"
+    description: "Guide the user through choosing items and placing an order."
+    user_phrases: ["I want a latte", "place an order"]
+    role: write
+    capability_ref: "order_create"
+    external: false
+    proposed_tool: "place_order"
+    prose_md: "Internal skill that wraps order_create."
+  - id: check_rewards
+    origin: discovered
+    name: "Check rewards"
+    description: "Tell the user their rewards balance."
+    user_phrases: ["how many points do I have", "check my rewards"]
+    role: read
+    capability_ref: "rewards_lookup"
+    external: false
+    proposed_tool: "check_rewards"
+    prose_md: "Internal read skill."
+  - id: file_complaint
+    origin: custom
+    name: "File a complaint"
+    description: "Direct the user to file complaints in the customer portal."
+    user_phrases: ["I want to complain"]
+    role: write
+    capability_ref: ""
+    external: true
+    external_note: "Customers file complaints in the support portal at support.example.com."
+    proposed_tool: ""
+    prose_md: ""
+flows:
+  - id: order_flow
+    origin: discovered
+    included: true
+    name: "Place order flow"
+    description: "Customer browses menu and places an order."
+    intent: "Order a coffee"
+    user_phrases: ["I want coffee"]
+    preconditions: ["Customer is identified"]
+    postconditions: ["Order is submitted"]
+    side_effects: ["Inventory decremented"]
+    confidence: "high"
+    workflow:
+      mermaid: "graph TD; A-->B"
+    prose_md: "Standard order placement flow."
