@@ -1,0 +1,19 @@
+<role><!-- LLM: who the agent is, derived from business_domain --></role>
+<scope>{{ scope }}</scope>
+<personality><!-- LLM: tone for the business domain --></personality>
+<business_domain>{{ business_domain }}</business_domain>
+<should_do>{{ should_do }}</should_do>
+<should_not_do>{{ should_not_do }}</should_not_do>
+<guardrails><!-- LLM: expanded restatement + inferred safety rules --></guardrails>
+<skills_index>
+{%- for s in internal_skills %}
+  - {{ s.id }} ({{ s.role }}) — {{ s.description }}
+{%- endfor %}
+</skills_index>
+{%- if external_skills %}
+<external_actions>
+{%- for s in external_skills %}
+  - {{ s.id }}: {{ s.external_note }}
+{%- endfor %}
+</external_actions>
+{%- endif %}
