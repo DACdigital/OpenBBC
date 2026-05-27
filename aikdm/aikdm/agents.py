@@ -9,11 +9,14 @@ models.build_model).
 
 from __future__ import annotations
 
+import uuid
 import xml.sax.saxutils as _su
 from dataclasses import dataclass
 from typing import Any
 
 from google.adk.agents import LlmAgent  # type: ignore[import-untyped]
+from google.adk.runners import InMemoryRunner
+from google.genai import types as _genai_types
 from pydantic import BaseModel
 
 from aikdm.schemas import Bundle, FlowMapConfig
@@ -144,30 +147,101 @@ def _render_config_as_xml(config: FlowMapConfig) -> str:
     return "\n".join(lines)
 
 
-def _run_generator(  # noqa: ARG001
+def _adk_run_once(*, agent: LlmAgent, user_message_xml: str) -> tuple[str, int, int]:
+    """Invoke the ADK InMemoryRunner synchronously for a single user turn.
+
+    Returns a tuple of (response_text, tokens_in, tokens_out) where
+    response_text is the raw text of the final model response (JSON when
+    output_schema is set on the agent).
+
+    ADK's Runner.run() is already sync — it bridges to async internally via a
+    background thread, so no asyncio.run() wrapping is needed here.
+
+    Reference: https://google.github.io/adk-docs/runners/
+    """
+    runner = InMemoryRunner(agent=agent)
+
+    user_id = "aikdm"
+    session_id = uuid.uuid4().hex
+    runner.session_service.create_session_sync(
+        app_name=runner.app_name,
+        user_id=user_id,
+        session_id=session_id,
+    )
+
+    new_message = _genai_types.Content(
+        parts=[_genai_types.Part.from_text(text=user_message_xml)],
+        role="user",
+    )
+
+    response_text = ""
+    tokens_in = 0
+    tokens_out = 0
+
+    for event in runner.run(
+        user_id=user_id,
+        session_id=session_id,
+        new_message=new_message,
+    ):
+        # Accumulate token usage from any event that carries it.
+        if event.usage_metadata is not None:
+            um = event.usage_metadata
+            # TODO: capture token usage more precisely per provider
+            tokens_in = um.prompt_token_count or 0
+            tokens_out = um.candidates_token_count or 0
+
+        # Capture the final model response text.
+        if event.is_final_response() and event.content and event.content.parts:
+            response_text = "".join(
+                part.text
+                for part in event.content.parts
+                if part.text and not getattr(part, "thought", False)
+            )
+
+    if not response_text:
+        raise RuntimeError(
+            "ADK runner produced no final response text — "
+            "check model credentials and agent configuration."
+        )
+
+    return response_text, tokens_in, tokens_out
+
+
+def _run_generator(
     *,
     agent: LlmAgent,
     user_message_xml: str,
 ) -> GeneratorResult:
-    """Execute the ADK agent. Consult ADK docs for the runner pattern; this
-    is the single place real LLM traffic happens for generation.
+    """Execute the ADK agent for generation.
+
+    The generator agent has output_schema=Bundle, so ADK instructs the model
+    to return structured JSON. We parse the final response text as a Bundle.
 
     Reference: https://google.github.io/adk-docs/agents/llm-agents/
     """
-    raise NotImplementedError(
-        "Wire to ADK Runner: run agent with user_message_xml, parse Bundle "
-        "from structured output, return GeneratorResult."
+    response_text, tokens_in, tokens_out = _adk_run_once(
+        agent=agent, user_message_xml=user_message_xml
     )
+    bundle = Bundle.model_validate_json(response_text)
+    return GeneratorResult(bundle=bundle, tokens_in=tokens_in, tokens_out=tokens_out)
 
 
-def _run_critic(  # noqa: ARG001
+def _run_critic(
     *,
     agent: LlmAgent,
     user_message_xml: str,
 ) -> CriticResult:
-    raise NotImplementedError(
-        "Wire to ADK Runner: run agent with user_message_xml, parse "
-        "{issues:[...]} from structured output, return CriticResult."
+    """Execute the ADK agent for criticism.
+
+    The critic agent has output_schema=_CriticOutput, so the model returns
+    {"issues": [...]}. We parse and return a CriticResult.
+    """
+    response_text, tokens_in, tokens_out = _adk_run_once(
+        agent=agent, user_message_xml=user_message_xml
+    )
+    critic_output = _CriticOutput.model_validate_json(response_text)
+    return CriticResult(
+        issues=critic_output.issues, tokens_in=tokens_in, tokens_out=tokens_out
     )
 
 
