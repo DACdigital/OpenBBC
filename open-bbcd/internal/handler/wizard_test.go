@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -73,7 +73,7 @@ func newTestWizardHandler(t *testing.T, repo WizardAgentRepository, store storag
 	if err := yaml.Unmarshal([]byte(wizardTestSchema), &schema); err != nil {
 		t.Fatalf("parse schema: %v", err)
 	}
-	return NewWizardHandler(repo, &schema, store, testMaxUploadBytes)
+	return NewWizardHandler(repo, &schema, store, testMaxUploadBytes, testLogger())
 }
 
 // buildWizardForm returns a multipart body with the given text fields and an
@@ -227,7 +227,7 @@ func TestWizardHandler_Submit_TooLarge(t *testing.T) {
 		t.Fatalf("parse schema: %v", err)
 	}
 	// Tiny cap so a small body trips the pre-check.
-	h := NewWizardHandler(repo, &schema, store, 16)
+	h := NewWizardHandler(repo, &schema, store, 16, testLogger())
 
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "X", "scope": "Y"},
@@ -279,9 +279,7 @@ func TestWizardHandler_Submit_StorageFails(t *testing.T) {
 
 func TestWizardHandler_Submit_RepoFailLogsOrphan(t *testing.T) {
 	var logBuf bytes.Buffer
-	origOut := log.Writer()
-	log.SetOutput(&logBuf)
-	defer log.SetOutput(origOut)
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
 	repo := &mockWizardRepo{
 		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
@@ -297,7 +295,11 @@ func TestWizardHandler_Submit_RepoFailLogsOrphan(t *testing.T) {
 		},
 	}
 
-	h := newTestWizardHandler(t, repo, store)
+	var schema types.WizardSchema
+	if err := yaml.Unmarshal([]byte(wizardTestSchema), &schema); err != nil {
+		t.Fatalf("parse schema: %v", err)
+	}
+	h := NewWizardHandler(repo, &schema, store, testMaxUploadBytes, logger)
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "X", "scope": "Y"},
 		"flow-map.zip", []byte("zip body"),

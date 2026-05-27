@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -25,14 +25,16 @@ type WizardHandler struct {
 	schema         *types.WizardSchema
 	store          storage.Storage
 	maxUploadBytes int64
+	logger         *slog.Logger
 }
 
-func NewWizardHandler(agentRepo WizardAgentRepository, schema *types.WizardSchema, store storage.Storage, maxUploadBytes int64) *WizardHandler {
+func NewWizardHandler(agentRepo WizardAgentRepository, schema *types.WizardSchema, store storage.Storage, maxUploadBytes int64, logger *slog.Logger) *WizardHandler {
 	return &WizardHandler{
 		agentRepo:      agentRepo,
 		schema:         schema,
 		store:          store,
 		maxUploadBytes: maxUploadBytes,
+		logger:         logger,
 	}
 }
 
@@ -75,7 +77,7 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 			b, err := io.ReadAll(file)
 			file.Close()
 			if err != nil {
-				log.Printf("wizard: read upload: %v", err)
+				h.logger.Error("wizard: read upload", slog.Any("error", err))
 				http.Error(w, "failed to read upload", http.StatusInternalServerError)
 				return
 			}
@@ -83,7 +85,7 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 
 			discoveryKey = agentID + ".zip"
 			if err := h.store.Put(r.Context(), discoveryKey, bytes.NewReader(zipBytes)); err != nil {
-				log.Printf("wizard: storage.Put %s: %v", discoveryKey, err)
+				h.logger.Error("wizard: storage.Put", slog.String("key", discoveryKey), slog.Any("error", err))
 				http.Error(w, "failed to save discovery file", http.StatusInternalServerError)
 				return
 			}
@@ -117,7 +119,7 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	} else {
 		b, err := json.Marshal(cfg)
 		if err != nil {
-			log.Printf("wizard: marshal flow_map_config: %v", err)
+			h.logger.Error("wizard: marshal flow_map_config", slog.Any("error", err))
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -133,9 +135,9 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if discoveryKey != "" {
-			log.Printf("wizard: orphan discovery file %s after insert failure: %v", discoveryKey, err)
+			h.logger.Error("wizard: orphan discovery file after insert failure", slog.String("key", discoveryKey), slog.Any("error", err))
 		} else {
-			log.Printf("wizard: CreateFromWizard: %v", err)
+			h.logger.Error("wizard: CreateFromWizard", slog.Any("error", err))
 		}
 		Error(w, err)
 		return

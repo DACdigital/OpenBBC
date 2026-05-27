@@ -3,8 +3,9 @@ package handler
 import (
 	"database/sql"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
@@ -21,30 +22,35 @@ const (
 	IdleTimeout  = 60 * time.Second
 )
 
-func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConfig) http.Handler {
+func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConfig, logger *slog.Logger) http.Handler {
+	fatal := func(msg string, err error) {
+		logger.Error(msg, slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	agentRepo := repository.NewAgentRepository(db)
 	resourceRepo := repository.NewResourceRepository(db)
 
 	// Load wizard schema from embedded FS.
 	schemaBytes, err := web.Assets.ReadFile("schemas/wizard-v1.yaml")
 	if err != nil {
-		log.Fatalf("load wizard schema: %v", err)
+		fatal("load wizard schema", err)
 	}
 	var schema types.WizardSchema
 	if err := yaml.Unmarshal(schemaBytes, &schema); err != nil {
-		log.Fatalf("parse wizard schema: %v", err)
+		fatal("parse wizard schema", err)
 	}
 
-	uiHandler, err := NewUIHandler(agentRepo, &schema, web.Assets)
+	uiHandler, err := NewUIHandler(agentRepo, &schema, web.Assets, logger)
 	if err != nil {
-		log.Fatalf("init UI handler: %v", err)
+		fatal("init UI handler", err)
 	}
 	maxUploadBytes := int64(discoveryCfg.MaxUploadMB) << 20
-	wizardHandler := NewWizardHandler(agentRepo, &schema, store, maxUploadBytes)
+	wizardHandler := NewWizardHandler(agentRepo, &schema, store, maxUploadBytes, logger)
 
 	configuratorHandler, err := NewConfiguratorHandler(agentRepo, web.Assets)
 	if err != nil {
-		log.Fatalf("init configurator handler: %v", err)
+		fatal("init configurator handler", err)
 	}
 
 	agentHandler := NewAgentHandler(agentRepo)
@@ -54,7 +60,7 @@ func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConf
 
 	staticFS, err := fs.Sub(web.Assets, "static")
 	if err != nil {
-		log.Fatalf("sub static FS: %v", err)
+		fatal("sub static FS", err)
 	}
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 
@@ -94,5 +100,5 @@ func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConf
 	mux.HandleFunc("GET /resources/{id}", resourceHandler.Get)
 	mux.HandleFunc("GET /agents/{agent_id}/resources", resourceHandler.ListByAgent)
 
-	return mux
+	return RequestLogger(logger, mux)
 }
