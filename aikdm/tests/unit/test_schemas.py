@@ -1,6 +1,8 @@
 from pathlib import Path
 
+import pytest
 import yaml
+from pydantic import ValidationError
 
 from aikdm.schemas import FlowMapConfig
 
@@ -32,8 +34,5 @@ def test_flow_map_config_partitions_internal_and_external_skills():
 
 
 def test_flow_map_config_rejects_missing_required_fields():
-    import pytest
-    from pydantic import ValidationError
-
     with pytest.raises(ValidationError):
         FlowMapConfig.model_validate({"schema_version": 1})  # missing name + others

@@ -63,7 +63,7 @@ class Flow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    origin: str
+    origin: Literal["discovered", "custom"]
     included: bool
     name: str
     description: str = ""
