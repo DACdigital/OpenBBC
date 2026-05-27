@@ -54,7 +54,7 @@ def _stub_llm(monkeypatch):
 
 def test_generate_agent_writes_bundle_to_stdout(monkeypatch, tmp_path):
     _stub_llm(monkeypatch)
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", str(CONFIG)])
 
     assert result.exit_code == 0, result.stderr
@@ -66,7 +66,7 @@ def test_generate_agent_writes_bundle_to_stdout(monkeypatch, tmp_path):
 def test_generate_agent_writes_bundle_to_output_path(monkeypatch, tmp_path):
     _stub_llm(monkeypatch)
     out = tmp_path / "bundle.yaml"
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     result = runner.invoke(
         main, ["generate-agent", "--config", str(CONFIG), "--output", str(out)]
     )
@@ -78,7 +78,7 @@ def test_generate_agent_writes_bundle_to_output_path(monkeypatch, tmp_path):
 
 def test_generate_agent_emits_progress_events_to_stderr(monkeypatch):
     _stub_llm(monkeypatch)
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", str(CONFIG)])
 
     assert result.exit_code == 0
@@ -91,7 +91,7 @@ def test_input_validation_failure_returns_exit_2(monkeypatch, tmp_path):
     _stub_llm(monkeypatch)
     bad = tmp_path / "bad.yaml"
     bad.write_text("schema_version: 1\n")  # missing required fields
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", str(bad)])
 
     assert result.exit_code == 2
@@ -100,7 +100,7 @@ def test_input_validation_failure_returns_exit_2(monkeypatch, tmp_path):
 
 def test_missing_config_file_returns_exit_2(monkeypatch, tmp_path):
     _stub_llm(monkeypatch)
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", "/tmp/missing-xyz.yaml"])
 
     assert result.exit_code == 2
@@ -111,7 +111,7 @@ def test_missing_api_key_returns_exit_2(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", str(CONFIG)])
 
     assert result.exit_code == 2
@@ -120,7 +120,7 @@ def test_missing_api_key_returns_exit_2(monkeypatch):
 
 def test_full_pipeline_golden_file(monkeypatch):
     _stub_llm(monkeypatch)
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", str(CONFIG)])
 
     assert result.exit_code == 0, result.stderr
