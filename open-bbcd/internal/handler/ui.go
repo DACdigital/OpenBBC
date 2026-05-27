@@ -5,7 +5,7 @@ import (
 	"context"
 	"html/template"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -18,12 +18,13 @@ type GroupedAgentRepository interface {
 }
 
 type UIHandler struct {
-	agentRepo       GroupedAgentRepository
-	schema          *types.WizardSchema
-	agentsTmpl      *template.Template
+	agentRepo         GroupedAgentRepository
+	schema            *types.WizardSchema
+	logger            *slog.Logger
+	agentsTmpl        *template.Template
 	agentVersionsTmpl *template.Template
-	wizardTmpl      *template.Template
-	stepTmpl        *template.Template
+	wizardTmpl        *template.Template
+	stepTmpl          *template.Template
 }
 
 func statusClass(status string) string {
@@ -39,7 +40,7 @@ func statusClass(status string) string {
 	}
 }
 
-func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, webFS fs.FS) (*UIHandler, error) {
+func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, webFS fs.FS, logger *slog.Logger) (*UIHandler, error) {
 	funcs := template.FuncMap{
 		"statusClass": statusClass,
 		"add":         func(a, b int) int { return a + b },
@@ -81,6 +82,7 @@ func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, 
 	return &UIHandler{
 		agentRepo:         agentRepo,
 		schema:            schema,
+		logger:            logger,
 		agentsTmpl:        agentsTmpl,
 		agentVersionsTmpl: agentVersionsTmpl,
 		wizardTmpl:        wizardTmpl,
@@ -92,7 +94,7 @@ func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, 
 func renderTemplate(w http.ResponseWriter, tmpl *template.Template, name string, data any) {
 	var buf bytes.Buffer
 	if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
-		log.Printf("template %q error: %v", name, err)
+		slog.Error("template execution failed", slog.String("template", name), slog.Any("error", err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,29 +28,34 @@ func main() {
 }
 
 func run() error {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	log.Printf("connecting to database...")
+	logger.Info("connecting to database")
 	db, err := database.NewPostgres(cfg.Database.URL)
 	if err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
 	defer db.Close()
-	log.Printf("database connected")
+	logger.Info("database connected")
 
 	store, err := storage.NewLocalDisk(cfg.Discovery.StorageDir)
 	if err != nil {
 		return fmt.Errorf("init storage: %w", err)
 	}
-	log.Printf("discovery storage rooted at %s", cfg.Discovery.StorageDir)
+	logger.Info("discovery storage rooted", slog.String("dir", cfg.Discovery.StorageDir))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      handler.NewAPI(db, store, cfg.Discovery),
+		Handler:      handler.NewAPI(db, store, cfg.Discovery, logger),
 		ReadTimeout:  handler.ReadTimeout,
 		WriteTimeout: handler.WriteTimeout,
 		IdleTimeout:  handler.IdleTimeout,
@@ -60,14 +65,15 @@ func run() error {
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("open-bbcd listening on %s", addr)
+		logger.Info("open-bbcd listening", slog.String("addr", addr))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server error: %v", err)
+			logger.Error("server error", slog.Any("error", err))
+			os.Exit(1)
 		}
 	}()
 
 	<-done
-	log.Printf("shutting down...")
+	logger.Info("shutting down")
 
 	ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 	defer cancel()
