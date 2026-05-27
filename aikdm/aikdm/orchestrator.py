@@ -13,6 +13,7 @@ from aikdm.schemas import (
     ExternalAction,
     FlowMapConfig,
     PromptSchema,
+    Skill,
     SkillPrompt,
     TokenUsage,
 )
@@ -77,6 +78,7 @@ def run_generation(
     finalized = _finalize_bundle(
         bundle=bundle,
         config=config,
+        prompt_schema=prompt_schema,
         external_skills=external_skills,
         settings=settings,
         rounds_run=rounds_run,
@@ -94,7 +96,8 @@ def _finalize_bundle(
     *,
     bundle: Bundle,
     config: FlowMapConfig,
-    external_skills,
+    prompt_schema: PromptSchema,
+    external_skills: list[Skill],
     settings: Settings,
     rounds_run: int,
     final_issues: list[str],
@@ -112,7 +115,7 @@ def _finalize_bundle(
     ]
     metadata = BundleMetadata(
         config_schema_version=config.schema_version,
-        prompt_schema_version="v1",
+        prompt_schema_version=prompt_schema.version,
         model_generator=settings.model_generator,
         model_critic=settings.model_critic,
         generated_at=datetime.now(UTC).isoformat(),

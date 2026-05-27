@@ -110,6 +110,10 @@ def test_orchestrator_runs_full_max_rounds_when_issues_persist(monkeypatch):
     assert call_log == {"gen": 2, "crit": 2}
     assert bundle.metadata.critic_rounds_run == 2
     assert bundle.metadata.critic_notes == ["still wrong"]
+    assert bundle.metadata.tokens_used.generator_in == 20
+    assert bundle.metadata.tokens_used.generator_out == 40
+    assert bundle.metadata.tokens_used.critic_in == 10
+    assert bundle.metadata.tokens_used.critic_out == 10
 
 
 def test_orchestrator_emits_lifecycle_events(monkeypatch):
@@ -135,6 +139,12 @@ def test_orchestrator_emits_lifecycle_events(monkeypatch):
     assert "draft_done" in events
     assert "critic_done" in events
     assert events[-1] == "done"
+
+    done_lines = [line for line in sink.getvalue().splitlines() if '"event":"done"' in line]
+    assert len(done_lines) == 1
+    done_payload = json.loads(done_lines[0])
+    assert done_payload["rounds_run"] == 1
+    assert done_payload["total_tokens"] == 40  # 10+20+5+5
 
 
 def test_orchestrator_populates_external_actions(monkeypatch):
@@ -162,6 +172,9 @@ def test_orchestrator_populates_external_actions(monkeypatch):
 
     assert len(bundle.external_actions) == 1
     assert bundle.external_actions[0].skill_id == "file_complaint"
+    assert bundle.external_actions[0].external_note == (
+        "Customers file complaints in the support portal at support.example.com."
+    )
 
 
 def test_orchestrator_drops_skill_prompts_for_external_skills(monkeypatch):
