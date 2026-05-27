@@ -44,7 +44,7 @@
                               ▼                                                ▼                    ▼
                       ┌───────────────┐                               ┌───────────────┐    ┌───────────────┐
                       │               │      async jobs               │               │    │               │
-                      │   aicademy    │ ◄─────────────────────────────│  PostgreSQL   │    │    Client     │
+                      │   aikdm    │ ◄─────────────────────────────│  PostgreSQL   │    │    Client     │
                       │    (CLI)      │ ─────────────────────────────►│               │    │  (Frontend)   │
                       │               │      read/write               │               │    │               │
                       └───────────────┘                               └───────────────┘    └───────────────┘
@@ -119,32 +119,31 @@ Constraints:
 
 ---
 
-### 3. aicademy
+### 3. aikdm
 
 **Type:** Python CLI
-**Purpose:** Agent generation, training, evaluation (async jobs)
+**Purpose:** Agent generation (alpha) today. Geval and training planned.
 
 **Tech Stack:**
-- Python
-- click (CLI framework)
-- Google ADK (agent framework)
+- Python 3.12+, uv
+- click (CLI), Pydantic (schemas), Jinja2 (templates), PyYAML
+- Google ADK with LiteLLM backends (multi-provider: Anthropic, OpenAI, Gemini)
 
 #### Capabilities
 
 | Command | Description |
 |---------|-------------|
-| Alpha Generator | Generate alpha agent from discovery output |
-| Geval | Evaluate agent on dataset |
-| Training | RL-based agent improvement (future) |
+| `aikdm generate-agent` | Generate alpha agent prompt bundle from FlowMapConfig YAML. |
 
 #### Prompt Output Format
 
-Supports both formats:
+Single YAML bundle:
+- `metadata` — schema versions, models used, critic rounds, token usage, critic notes
+- `main_prompt` — assembled XML system prompt (role, scope, personality, guardrails, etc.)
+- `skills[]` — per-skill prompts with `<resources>` blocks naming each skill as an MCP server
+- `external_actions[]` — non-internal skills the agent must redirect users to
 
-| Format | Description |
-|--------|-------------|
-| **Regular** | Plain markdown prompt |
-| **Structural** | Grouped by category (guardrails, personality, resources, etc.) |
+Section structure is declared in `aikdm/schemas/prompt-v1.yaml` (versioned).
 
 ---
 
@@ -238,7 +237,7 @@ User session is **passed/proxied** through the entire chain:
 
 ```
 ┌──────────┐    scan     ┌──────────┐   structured   ┌──────────┐   generate   ┌──────────┐
-│  Client  │ ─────────►  │    CC    │ ────────────►  │ open-bbcd│ ──────────►  │ aicademy │
+│  Client  │ ─────────►  │    CC    │ ────────────►  │ open-bbcd│ ──────────►  │ aikdm │
 │   Repo   │             │ Discovery│      data      │   API    │   request    │  alpha   │
 └──────────┘             └──────────┘                └──────────┘              └────┬─────┘
                                                                                     │
@@ -264,7 +263,7 @@ User session is **passed/proxied** through the entire chain:
 
 ```
 ┌──────────┐  trigger   ┌──────────┐   fetch    ┌──────────┐
-│ open-bbcd│ ────────►  │ aicademy │ ─────────► │ Postgres │
+│ open-bbcd│ ────────►  │ aikdm │ ─────────► │ Postgres │
 │   (BO)   │            │  (geval) │ ◄───────── │          │
 └──────────┘            └────┬─────┘   data     └──────────┘
                              │                        ▲
@@ -297,8 +296,8 @@ User session is **passed/proxied** through the entire chain:
 | Client ↔ Agent | AG-UI | Frontend chat integration |
 | Agent ↔ Backend | MCP (SSE/HTTP) | Tool calls to client's backend |
 | Admin ↔ open-bbcd | REST/HTTP | Backoffice API |
-| aicademy ↔ open-bbcd | REST/HTTP | Job coordination |
-| aicademy ↔ Postgres | SQL | Direct DB access for heavy jobs |
+| aikdm ↔ open-bbcd | REST/HTTP | Job coordination |
+| aikdm ↔ Postgres | SQL | Direct DB access for heavy jobs |
 
 ---
 
