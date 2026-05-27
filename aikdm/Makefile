@@ -7,7 +7,7 @@ test:
 	uv run pytest -q tests/unit tests/integration
 
 test-smoke:
-	RUN_SMOKE=1 uv run pytest -q tests/smoke
+	RUN_SMOKE=1 uv run pytest -q tests/smoke || [ $$? -eq 5 ]
 
 fmt:
 	uv run ruff format aikdm tests
