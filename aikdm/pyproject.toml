@@ -3,6 +3,7 @@ name = "aikdm"
 version = "0.1.0"
 description = "Prompt-generation and evaluation toolkit (alpha agent generation)"
 requires-python = ">=3.12"
+readme = "README.md"
 dependencies = [
   "click>=8.1.7",
   "pydantic>=2.7",
