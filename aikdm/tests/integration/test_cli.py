@@ -116,3 +116,22 @@ def test_missing_api_key_returns_exit_2(monkeypatch):
 
     assert result.exit_code == 2
     assert '"error":"config"' in result.stderr
+
+
+def test_full_pipeline_golden_file(monkeypatch):
+    _stub_llm(monkeypatch)
+    runner = CliRunner(mix_stderr=False)
+    result = runner.invoke(main, ["generate-agent", "--config", str(CONFIG)])
+
+    assert result.exit_code == 0, result.stderr
+    actual = yaml.safe_load(result.stdout)
+    expected_path = (
+        Path(__file__).parents[1] / "fixtures" / "expected_bundles" / "coffee_shop.yaml"
+    )
+    expected = yaml.safe_load(expected_path.read_text())
+
+    # Normalize fields that vary by run
+    actual["metadata"].pop("generated_at", None)
+    expected["metadata"].pop("generated_at", None)
+
+    assert actual == expected

@@ -1,0 +1,27 @@
+metadata:
+  config_schema_version: 1
+  prompt_schema_version: v1
+  model_generator: claude-opus-4-7
+  model_critic: claude-opus-4-7
+  critic_rounds_run: 1
+  critic_notes: []
+  tokens_used:
+    generator_in: 10
+    generator_out: 20
+    critic_in: 5
+    critic_out: 5
+main_prompt: <role>r</role>
+skills:
+  - id: place_order
+    role: write
+    user_phrases:
+      - x
+    prompt: <role>p</role>
+  - id: check_rewards
+    role: read
+    user_phrases:
+      - y
+    prompt: <role>p</role>
+external_actions:
+  - skill_id: file_complaint
+    external_note: Customers file complaints in the support portal at support.example.com.
