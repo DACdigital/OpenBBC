@@ -94,3 +94,78 @@ class FlowMapConfig(BaseModel):
     capabilities: list[Capability] = Field(default_factory=list)
     skills: list[Skill] = Field(default_factory=list)
     flows: list[Flow] = Field(default_factory=list)
+
+
+# ---------- Output bundle ----------
+
+
+class TokenUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generator_in: int = 0
+    generator_out: int = 0
+    critic_in: int = 0
+    critic_out: int = 0
+
+
+class BundleMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config_schema_version: int
+    prompt_schema_version: str
+    model_generator: str
+    model_critic: str
+    generated_at: str
+    critic_rounds_run: int
+    critic_notes: list[str] = Field(default_factory=list)
+    tokens_used: TokenUsage
+
+
+class SkillPrompt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    role: Literal["read", "write"]
+    user_phrases: list[str] = Field(default_factory=list)
+    prompt: str
+
+
+class ExternalAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str
+    external_note: str
+
+
+class Bundle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    metadata: BundleMetadata
+    main_prompt: str
+    skills: list[SkillPrompt] = Field(default_factory=list)
+    external_actions: list[ExternalAction] = Field(default_factory=list)
+
+
+# ---------- Prompt schema (drives section/tag layout) ----------
+
+
+SectionSource = Literal["wizard_copied", "llm_synthesized", "config_derived"]
+
+
+class PromptSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str                           # logical identifier
+    tag: str                            # XML tag rendered in the final prompt
+    source: SectionSource
+    source_field: str = ""              # for wizard_copied: which FlowMapConfig field
+    required: bool = True
+    guidance: str = ""                  # short note rendered into the generator system prompt
+
+
+class PromptSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: str
+    main_prompt: list[PromptSection]
+    skill_prompt: list[PromptSection]
