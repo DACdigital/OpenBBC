@@ -1,7 +1,6 @@
 import io
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
 
 from aikdm import agents, models, orchestrator
 from aikdm.loader import load_flow_map_config, load_prompt_schema
@@ -17,10 +16,11 @@ CONFIG_PATH = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coff
 SCHEMA_PATH = Path(__file__).parents[2] / "schemas" / "prompt-v1.yaml"
 
 
-def _patch_agents(monkeypatch):
-    """Patch ADK agent constructors so MagicMock model objects are accepted."""
-    monkeypatch.setattr(agents, "build_generator_agent", lambda model: MagicMock())
-    monkeypatch.setattr(agents, "build_critic_agent", lambda model: MagicMock())
+def _patch_adk(mocker):
+    """Bypass ADK so LlmAgent never sees a real model."""
+    mocker.patch.object(models, "build_model", return_value=mocker.MagicMock())
+    mocker.patch.object(agents, "build_generator_agent", return_value=mocker.MagicMock())
+    mocker.patch.object(agents, "build_critic_agent", return_value=mocker.MagicMock())
 
 
 def _fake_bundle(main: str = "<role>r</role>") -> Bundle:
@@ -41,23 +41,21 @@ def _fake_bundle(main: str = "<role>r</role>") -> Bundle:
     )
 
 
-def test_orchestrator_early_exits_when_first_critic_returns_no_issues(monkeypatch, settings):
-    monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
-    _patch_agents(monkeypatch)
+def _generator_result(bundle=None):
+    return agents.GeneratorResult(
+        bundle=bundle if bundle is not None else _fake_bundle(),
+        tokens_in=10, tokens_out=20,
+    )
 
-    call_log = {"gen": 0, "crit": 0}
 
-    def fake_generator(agent, config, scaffold_main, scaffold_skills,
-                       previous_bundle=None, previous_issues=None):
-        call_log["gen"] += 1
-        return agents.GeneratorResult(bundle=_fake_bundle(), tokens_in=10, tokens_out=20)
+def _critic_result(*issues):
+    return agents.CriticResult(issues=list(issues), tokens_in=5, tokens_out=5)
 
-    def fake_critic(agent, config, bundle):
-        call_log["crit"] += 1
-        return agents.CriticResult(issues=[], tokens_in=5, tokens_out=5)
 
-    monkeypatch.setattr(agents, "call_generator", fake_generator)
-    monkeypatch.setattr(agents, "call_critic", fake_critic)
+def test_orchestrator_early_exits_when_first_critic_returns_no_issues(mocker, settings):
+    _patch_adk(mocker)
+    gen = mocker.patch.object(agents, "call_generator", return_value=_generator_result())
+    crit = mocker.patch.object(agents, "call_critic", return_value=_critic_result())
 
     sink = io.StringIO()
     bundle = orchestrator.run_generation(
@@ -67,28 +65,16 @@ def test_orchestrator_early_exits_when_first_critic_returns_no_issues(monkeypatc
         ProgressEmitter(sink),
     )
 
-    assert call_log == {"gen": 1, "crit": 1}
+    assert gen.call_count == 1
+    assert crit.call_count == 1
     assert bundle.metadata.critic_rounds_run == 1
     assert bundle.metadata.critic_notes == []
 
 
-def test_orchestrator_runs_full_max_rounds_when_issues_persist(monkeypatch, settings):
-    monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
-    _patch_agents(monkeypatch)
-
-    call_log = {"gen": 0, "crit": 0}
-
-    def fake_generator(agent, config, scaffold_main, scaffold_skills,
-                       previous_bundle=None, previous_issues=None):
-        call_log["gen"] += 1
-        return agents.GeneratorResult(bundle=_fake_bundle(), tokens_in=10, tokens_out=20)
-
-    def fake_critic(agent, config, bundle):
-        call_log["crit"] += 1
-        return agents.CriticResult(issues=["still wrong"], tokens_in=5, tokens_out=5)
-
-    monkeypatch.setattr(agents, "call_generator", fake_generator)
-    monkeypatch.setattr(agents, "call_critic", fake_critic)
+def test_orchestrator_runs_full_max_rounds_when_issues_persist(mocker, settings):
+    _patch_adk(mocker)
+    gen = mocker.patch.object(agents, "call_generator", return_value=_generator_result())
+    crit = mocker.patch.object(agents, "call_critic", return_value=_critic_result("still wrong"))
 
     bundle = orchestrator.run_generation(
         load_flow_map_config(CONFIG_PATH),
@@ -97,7 +83,8 @@ def test_orchestrator_runs_full_max_rounds_when_issues_persist(monkeypatch, sett
         ProgressEmitter(io.StringIO()),
     )
 
-    assert call_log == {"gen": 2, "crit": 2}
+    assert gen.call_count == 2
+    assert crit.call_count == 2
     assert bundle.metadata.critic_rounds_run == 2
     assert bundle.metadata.critic_notes == ["still wrong"]
     assert bundle.metadata.tokens_used.generator_in == 20
@@ -106,13 +93,10 @@ def test_orchestrator_runs_full_max_rounds_when_issues_persist(monkeypatch, sett
     assert bundle.metadata.tokens_used.critic_out == 10
 
 
-def test_orchestrator_emits_lifecycle_events(monkeypatch, settings):
-    monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
-    _patch_agents(monkeypatch)
-    monkeypatch.setattr(agents, "call_generator", lambda *a, **kw: agents.GeneratorResult(
-        bundle=_fake_bundle(), tokens_in=10, tokens_out=20))
-    monkeypatch.setattr(agents, "call_critic", lambda *a, **kw: agents.CriticResult(
-        issues=[], tokens_in=5, tokens_out=5))
+def test_orchestrator_emits_lifecycle_events(mocker, settings):
+    _patch_adk(mocker)
+    mocker.patch.object(agents, "call_generator", return_value=_generator_result())
+    mocker.patch.object(agents, "call_critic", return_value=_critic_result())
 
     sink = io.StringIO()
     orchestrator.run_generation(
@@ -136,20 +120,13 @@ def test_orchestrator_emits_lifecycle_events(monkeypatch, settings):
     assert done_payload["total_tokens"] == 40  # 10+20+5+5
 
 
-def test_orchestrator_populates_external_actions(monkeypatch, settings):
+def test_orchestrator_populates_external_actions(mocker, settings):
     """External skills in input must surface as bundle.external_actions
     even if the generator forgets — the orchestrator owns this invariant."""
-    monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
-    _patch_agents(monkeypatch)
-
-    def fake_generator(*a, **kw):
-        # generator returns a bundle WITHOUT external_actions
-        b = _fake_bundle()
-        return agents.GeneratorResult(bundle=b, tokens_in=10, tokens_out=20)
-
-    monkeypatch.setattr(agents, "call_generator", fake_generator)
-    monkeypatch.setattr(agents, "call_critic", lambda *a, **kw: agents.CriticResult(
-        issues=[], tokens_in=5, tokens_out=5))
+    _patch_adk(mocker)
+    # Generator returns a bundle WITHOUT external_actions.
+    mocker.patch.object(agents, "call_generator", return_value=_generator_result())
+    mocker.patch.object(agents, "call_critic", return_value=_critic_result())
 
     bundle = orchestrator.run_generation(
         load_flow_map_config(CONFIG_PATH),
@@ -165,20 +142,14 @@ def test_orchestrator_populates_external_actions(monkeypatch, settings):
     )
 
 
-def test_orchestrator_drops_skill_prompts_for_external_skills(monkeypatch, settings):
-    monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
-    _patch_agents(monkeypatch)
-
-    def fake_generator(*a, **kw):
-        b = _fake_bundle()
-        # generator hallucinates a skill prompt for an external skill
-        b.skills.append(SkillPrompt(id="file_complaint", role="write",
-                                    user_phrases=[], prompt="<role>bad</role>"))
-        return agents.GeneratorResult(bundle=b, tokens_in=10, tokens_out=20)
-
-    monkeypatch.setattr(agents, "call_generator", fake_generator)
-    monkeypatch.setattr(agents, "call_critic", lambda *a, **kw: agents.CriticResult(
-        issues=[], tokens_in=5, tokens_out=5))
+def test_orchestrator_drops_skill_prompts_for_external_skills(mocker, settings):
+    _patch_adk(mocker)
+    # Generator hallucinates a skill prompt for an external skill.
+    hallucinated = _fake_bundle()
+    hallucinated.skills.append(SkillPrompt(id="file_complaint", role="write",
+                                           user_phrases=[], prompt="<role>bad</role>"))
+    mocker.patch.object(agents, "call_generator", return_value=_generator_result(hallucinated))
+    mocker.patch.object(agents, "call_critic", return_value=_critic_result())
 
     bundle = orchestrator.run_generation(
         load_flow_map_config(CONFIG_PATH),

@@ -40,8 +40,8 @@ def test_build_critic_agent_returns_llm_agent():
     assert getattr(agent, "name", None) == "aikdm_critic"
 
 
-def test_call_generator_signature_returns_generator_result(monkeypatch):
-    """We monkey-patch the underlying ADK runner so we don't make a real call.
+def test_call_generator_signature_returns_generator_result(mocker):
+    """Stub the underlying ADK runner so we don't make a real call.
     This verifies our wrapper passes the right inputs and returns the right shape.
     """
     fake_bundle = Bundle(
@@ -58,7 +58,7 @@ def test_call_generator_signature_returns_generator_result(monkeypatch):
         assert "<flow_map_config>" in user_message_xml
         return agents.GeneratorResult(bundle=fake_bundle, tokens_in=10, tokens_out=20)
 
-    monkeypatch.setattr(agents, "_run_generator", fake_run)
+    mocker.patch.object(agents, "_run_generator", side_effect=fake_run)
     cfg = load_flow_map_config(CONFIG)
     agent = _StubLlm(model="stub-model")
     result = agents.call_generator(agent, cfg, scaffold_main="<x></x>",
@@ -68,11 +68,11 @@ def test_call_generator_signature_returns_generator_result(monkeypatch):
     assert result.tokens_in == 10
 
 
-def test_call_critic_signature_returns_critic_result(monkeypatch):
-    def fake_run(*, agent, user_message_xml, **_):
-        return agents.CriticResult(issues=["one issue"], tokens_in=5, tokens_out=5)
-
-    monkeypatch.setattr(agents, "_run_critic", fake_run)
+def test_call_critic_signature_returns_critic_result(mocker):
+    mocker.patch.object(
+        agents, "_run_critic",
+        return_value=agents.CriticResult(issues=["one issue"], tokens_in=5, tokens_out=5),
+    )
     cfg = load_flow_map_config(CONFIG)
     bundle = Bundle(
         metadata=BundleMetadata(

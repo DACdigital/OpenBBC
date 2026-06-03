@@ -1,5 +1,4 @@
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 import yaml
@@ -15,6 +14,8 @@ from aikdm.schemas import (
     TokenUsage,
 )
 
+CONFIG = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coffee_shop.yaml"
+
 
 @pytest.fixture(autouse=True)
 def _isolate_from_dotenv(tmp_path, monkeypatch):
@@ -29,47 +30,48 @@ def _clear_settings_cache():
     yield
     load_settings.cache_clear()
 
-CONFIG = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coffee_shop.yaml"
 
+@pytest.fixture
+def stub_llm(mocker, monkeypatch):
+    """CLI runs end-to-end against a deterministic stubbed LLM pipeline.
 
-def _stub_llm(monkeypatch):
+    Sets ANTHROPIC_API_KEY so Settings validation passes, then replaces
+    every ADK / agents seam so no network traffic happens.
+    """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-xxx")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
-    # Same pattern as Task 10 — also patch the agent factories so LlmAgent
-    # doesn't try to validate the MagicMock as a model.
-    monkeypatch.setattr(agents, "build_generator_agent", lambda model: MagicMock())
-    monkeypatch.setattr(agents, "build_critic_agent", lambda model: MagicMock())
 
-    def fake_generator(*a, **kw):
-        return agents.GeneratorResult(
-            bundle=Bundle(
-                metadata=BundleMetadata(
-                    config_schema_version=1, prompt_schema_version="v1",
-                    model_generator="m", model_critic="m",
-                    generated_at="t", critic_rounds_run=0, critic_notes=[],
-                    tokens_used=TokenUsage(),
-                ),
-                main_prompt="<role>r</role>",
-                skills=[
-                    SkillPrompt(id="place_order", role="write",
-                                user_phrases=["x"], prompt="<role>p</role>"),
-                    SkillPrompt(id="check_rewards", role="read",
-                                user_phrases=["y"], prompt="<role>p</role>"),
-                ],
-            ),
-            tokens_in=10, tokens_out=20,
-        )
+    mocker.patch.object(models, "build_model", return_value=mocker.MagicMock())
+    mocker.patch.object(agents, "build_generator_agent", return_value=mocker.MagicMock())
+    mocker.patch.object(agents, "build_critic_agent", return_value=mocker.MagicMock())
 
-    monkeypatch.setattr(agents, "call_generator", fake_generator)
-    monkeypatch.setattr(agents, "call_critic",
-                        lambda *a, **kw: agents.CriticResult(
-                            issues=[], tokens_in=5, tokens_out=5))
+    bundle = Bundle(
+        metadata=BundleMetadata(
+            config_schema_version=1, prompt_schema_version="v1",
+            model_generator="m", model_critic="m",
+            generated_at="t", critic_rounds_run=0, critic_notes=[],
+            tokens_used=TokenUsage(),
+        ),
+        main_prompt="<role>r</role>",
+        skills=[
+            SkillPrompt(id="place_order", role="write",
+                        user_phrases=["x"], prompt="<role>p</role>"),
+            SkillPrompt(id="check_rewards", role="read",
+                        user_phrases=["y"], prompt="<role>p</role>"),
+        ],
+    )
+    mocker.patch.object(
+        agents, "call_generator",
+        return_value=agents.GeneratorResult(bundle=bundle, tokens_in=10, tokens_out=20),
+    )
+    mocker.patch.object(
+        agents, "call_critic",
+        return_value=agents.CriticResult(issues=[], tokens_in=5, tokens_out=5),
+    )
 
 
-def test_generate_agent_writes_bundle_to_stdout(monkeypatch, tmp_path):
-    _stub_llm(monkeypatch)
+def test_generate_agent_writes_bundle_to_stdout(stub_llm):
     runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", str(CONFIG)])
 
@@ -79,8 +81,7 @@ def test_generate_agent_writes_bundle_to_stdout(monkeypatch, tmp_path):
     assert bundle["metadata"]["prompt_schema_version"] == "v1"
 
 
-def test_generate_agent_writes_bundle_to_output_path(monkeypatch, tmp_path):
-    _stub_llm(monkeypatch)
+def test_generate_agent_writes_bundle_to_output_path(stub_llm, tmp_path):
     out = tmp_path / "bundle.yaml"
     runner = CliRunner()
     result = runner.invoke(
@@ -92,8 +93,7 @@ def test_generate_agent_writes_bundle_to_output_path(monkeypatch, tmp_path):
     assert bundle["main_prompt"] == "<role>r</role>"
 
 
-def test_generate_agent_emits_progress_events_to_stderr(monkeypatch):
-    _stub_llm(monkeypatch)
+def test_generate_agent_emits_progress_events_to_stderr(stub_llm):
     runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", str(CONFIG)])
 
@@ -103,8 +103,7 @@ def test_generate_agent_emits_progress_events_to_stderr(monkeypatch):
     assert any('"event":"done"' in e for e in events)
 
 
-def test_input_validation_failure_returns_exit_2(monkeypatch, tmp_path):
-    _stub_llm(monkeypatch)
+def test_input_validation_failure_returns_exit_2(stub_llm, tmp_path):
     bad = tmp_path / "bad.yaml"
     bad.write_text("schema_version: 1\n")  # missing required fields
     runner = CliRunner()
@@ -114,8 +113,7 @@ def test_input_validation_failure_returns_exit_2(monkeypatch, tmp_path):
     assert '"error":"input_validation"' in result.stderr
 
 
-def test_missing_config_file_returns_exit_2(monkeypatch, tmp_path):
-    _stub_llm(monkeypatch)
+def test_missing_config_file_returns_exit_2(stub_llm):
     runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", "/tmp/missing-xyz.yaml"])
 
@@ -134,8 +132,7 @@ def test_missing_api_key_returns_exit_2(monkeypatch):
     assert '"error":"config"' in result.stderr
 
 
-def test_full_pipeline_golden_file(monkeypatch):
-    _stub_llm(monkeypatch)
+def test_full_pipeline_golden_file(stub_llm):
     runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", str(CONFIG)])
 
