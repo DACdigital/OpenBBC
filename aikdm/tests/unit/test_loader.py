@@ -91,6 +91,36 @@ def test_write_bundle_to_stdout(capsys):
     assert "main_prompt:" in out
 
 
+def test_write_bundle_splits_adjacent_xml_tags_into_block_scalar(tmp_path):
+    """LLM sometimes emits skill prompts as one long `<a/><b/><c/>` line.
+    The dumper splits adjacent tags onto separate lines so YAML uses `|`."""
+    from aikdm.schemas import SkillPrompt
+    bundle = Bundle(
+        metadata=BundleMetadata(
+            config_schema_version=1, prompt_schema_version="v1",
+            model_generator="m", model_critic="m",
+            generated_at="t", critic_rounds_run=0, critic_notes=[],
+            tokens_used=TokenUsage(),
+        ),
+        main_prompt="<role>R</role><scope>S</scope>",
+        skills=[
+            SkillPrompt(
+                name="x", description="d",
+                prompt="<role>R</role><objective>O</objective><resources/>",
+            ),
+        ],
+    )
+    out = tmp_path / "bundle.yaml"
+    write_bundle(bundle, out)
+    text = out.read_text()
+    assert "main_prompt: |" in text
+    # Each top-level tag should sit on its own line in the rendered block.
+    assert "<role>R</role>\n  <scope>S</scope>" in text
+    # And the skill's prompt is block-formatted too.
+    assert "prompt: |" in text
+    assert "<role>R</role>\n    <objective>O</objective>" in text
+
+
 def test_write_bundle_uses_block_style_for_multiline_strings(tmp_path):
     """Multi-line prompt content should serialise with `|` (block literal),
     not quoted single-line with \\n escapes — readable YAML."""
