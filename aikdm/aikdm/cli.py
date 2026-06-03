@@ -3,6 +3,7 @@ is the smallest possible adapter — real work lives in orchestrator + loader.""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sys
@@ -78,7 +79,9 @@ def generate_agent(config_path: Path, output_path: Path | None) -> None:
 
     emitter = ProgressEmitter(sys.stderr)
     try:
-        bundle = orchestrator.run_generation(config, prompt_schema, settings, emitter)
+        bundle = asyncio.run(
+            orchestrator.run_generation(config, prompt_schema, settings, emitter)
+        )
     except Exception as e:
         _print_error("llm_unavailable", str(e))
         sys.exit(3)

@@ -1,4 +1,4 @@
-"""Atomic per-unit generation + per-unit critic, fanned out in parallel.
+"""Atomic per-unit generation + per-unit critic, fanned out in parallel via asyncio.
 
 Each unit (main_prompt and every internal skill) runs its OWN atomic loop:
 gen -> crit -> maybe regen -> crit -> ... up to settings.critic_rounds.
@@ -10,14 +10,15 @@ There is no bundle-wide critic. Cross-unit consistency comes from:
 - Orchestrator-enforced coverage (we loop over input skills; LLM cannot drop one).
 - Description verbatim from input (LLM cannot wordsmith).
 
-Units run in parallel via a ThreadPoolExecutor. Settings.parallelism bounds
-the worker pool (default 10 — enough for most agents to run fully concurrent).
+Units run concurrently as asyncio tasks. An asyncio.Semaphore sized by
+settings.parallelism caps in-flight LLM calls (default 10 — enough for
+most agents to run fully concurrent).
 """
 
 from __future__ import annotations
 
-import threading
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -47,7 +48,7 @@ class _UnitOutcome:
     crit_out: int
 
 
-def run_generation(
+async def run_generation(
     config: FlowMapConfig,
     prompt_schema: PromptSchema,
     settings: Settings,
@@ -77,10 +78,10 @@ def run_generation(
         for s in internal_skills
     }
 
-    progress_lock = threading.Lock()
+    sem = asyncio.Semaphore(settings.parallelism)
 
-    def main_unit_task() -> _UnitOutcome:
-        return _run_unit_atomic(
+    async def main_unit_task() -> _UnitOutcome:
+        return await _run_unit_atomic(
             unit_name="main_prompt",
             max_rounds=settings.critic_rounds,
             generate=lambda prev, issues: _gen_main(
@@ -88,13 +89,13 @@ def run_generation(
             ),
             criticise=lambda body: _crit_main(main_critic, config, body),
             progress=progress,
-            progress_lock=progress_lock,
+            semaphore=sem,
         )
 
-    def skill_unit_task(skill: Skill) -> _UnitOutcome:
+    async def skill_unit_task(skill: Skill) -> _UnitOutcome:
         scaffold = skill_scaffolds[skill.id]
         capability = capability_by_name.get(skill.capability_ref)
-        return _run_unit_atomic(
+        return await _run_unit_atomic(
             unit_name=f"skill:{skill.id}",
             max_rounds=settings.critic_rounds,
             generate=lambda prev, issues: _gen_skill(
@@ -104,14 +105,13 @@ def run_generation(
                 skill_critic, config, skill, capability, body
             ),
             progress=progress,
-            progress_lock=progress_lock,
+            semaphore=sem,
         )
 
-    with ThreadPoolExecutor(max_workers=settings.parallelism) as pool:
-        main_future = pool.submit(main_unit_task)
-        skill_futures = {s.id: pool.submit(skill_unit_task, s) for s in internal_skills}
-        main_outcome = main_future.result()
-        skill_outcomes = {sid: f.result() for sid, f in skill_futures.items()}
+    main_task = asyncio.create_task(main_unit_task())
+    skill_tasks = {s.id: asyncio.create_task(skill_unit_task(s)) for s in internal_skills}
+    main_outcome = await main_task
+    skill_outcomes = {sid: await t for sid, t in skill_tasks.items()}
 
     bundle = _assemble_bundle(
         config=config,
@@ -143,51 +143,49 @@ def run_generation(
     return bundle
 
 
-def _run_unit_atomic(
+async def _run_unit_atomic(
     *,
     unit_name: str,
     max_rounds: int,
-    generate,
-    criticise,
+    generate: Callable[[str | None, list[str]], Awaitable[tuple[str, int, int]]],
+    criticise: Callable[[str], Awaitable[tuple[list[str], int, int]]],
     progress: ProgressEmitter,
-    progress_lock: threading.Lock,
+    semaphore: asyncio.Semaphore,
 ) -> _UnitOutcome:
     body: str | None = None
     issues: list[str] = []
     gen_in = gen_out = crit_in = crit_out = 0
     rounds_run = 0
 
-    with progress_lock:
-        progress.emit("unit_started", unit=unit_name, max_rounds=max_rounds)
+    progress.emit("unit_started", unit=unit_name, max_rounds=max_rounds)
 
     for round_index in range(1, max_rounds + 1):
-        body, g_in, g_out = generate(body, issues)
+        async with semaphore:
+            body, g_in, g_out = await generate(body, issues)
         gen_in += g_in
         gen_out += g_out
-        with progress_lock:
-            progress.emit(
-                "draft_done", unit=unit_name, round=round_index,
-                tokens_in=g_in, tokens_out=g_out,
-            )
+        progress.emit(
+            "draft_done", unit=unit_name, round=round_index,
+            tokens_in=g_in, tokens_out=g_out,
+        )
 
-        issues, c_in, c_out = criticise(body)
+        async with semaphore:
+            issues, c_in, c_out = await criticise(body)
         crit_in += c_in
         crit_out += c_out
-        with progress_lock:
-            progress.emit(
-                "critic_done", unit=unit_name, round=round_index,
-                issues_count=len(issues), tokens_in=c_in, tokens_out=c_out,
-            )
+        progress.emit(
+            "critic_done", unit=unit_name, round=round_index,
+            issues_count=len(issues), tokens_in=c_in, tokens_out=c_out,
+        )
 
         rounds_run = round_index
         if not issues:
             break
 
-    with progress_lock:
-        progress.emit(
-            "unit_completed", unit=unit_name,
-            rounds_run=rounds_run, final_issues=len(issues),
-        )
+    progress.emit(
+        "unit_completed", unit=unit_name,
+        rounds_run=rounds_run, final_issues=len(issues),
+    )
 
     assert body is not None
     return _UnitOutcome(
@@ -201,37 +199,39 @@ def _run_unit_atomic(
     )
 
 
-def _gen_main(
+async def _gen_main(
     agent, config: FlowMapConfig, scaffold: str,
     prev: str | None, issues: list[str],
 ) -> tuple[str, int, int]:
-    res = agents.call_main_prompt(
+    res = await agents.call_main_prompt(
         agent, config, scaffold,
         previous_output=prev, critic_issues=issues,
     )
     return res.main_prompt, res.tokens_in, res.tokens_out
 
 
-def _crit_main(agent, config: FlowMapConfig, body: str) -> tuple[list[str], int, int]:
-    res = agents.call_main_prompt_critic(agent, config, body)
+async def _crit_main(
+    agent, config: FlowMapConfig, body: str,
+) -> tuple[list[str], int, int]:
+    res = await agents.call_main_prompt_critic(agent, config, body)
     return res.issues, res.tokens_in, res.tokens_out
 
 
-def _gen_skill(
+async def _gen_skill(
     agent, config: FlowMapConfig, skill: Skill, capability, scaffold: str,
     prev: str | None, issues: list[str],
 ) -> tuple[str, int, int]:
-    res = agents.call_skill_prompt(
+    res = await agents.call_skill_prompt(
         agent, config, skill, capability, scaffold,
         previous_output=prev, critic_issues=issues,
     )
     return res.prompt, res.tokens_in, res.tokens_out
 
 
-def _crit_skill(
+async def _crit_skill(
     agent, config: FlowMapConfig, skill: Skill, capability, body: str,
 ) -> tuple[list[str], int, int]:
-    res = agents.call_skill_prompt_critic(agent, config, skill, capability, body)
+    res = await agents.call_skill_prompt_critic(agent, config, skill, capability, body)
     return res.issues, res.tokens_in, res.tokens_out
 
 
@@ -247,7 +247,7 @@ def _assemble_bundle(
 ) -> Bundle:
     """Build the canonical Bundle from collected per-unit outcomes. Invariants:
     - One SkillPrompt per internal skill in input (in input order). Missing
-      raises — this should be unreachable since we loop over input skills.
+      raises — this should be unreachable since we await one task per skill.
     - description is sourced verbatim from input.
     - external_actions reflects every external skill in input.
     - metadata.critic_notes aggregates residual issues across all units,
@@ -257,7 +257,7 @@ def _assemble_bundle(
     if missing:
         raise RuntimeError(
             f"skill prompts missing for internal skills: {missing}. "
-            "This should be unreachable — orchestrator iterates over input skills."
+            "This should be unreachable — orchestrator awaits one task per skill."
         )
 
     skills = [

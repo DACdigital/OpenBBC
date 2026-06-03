@@ -22,8 +22,8 @@ def _env(monkeypatch, **kwargs):
 def test_defaults(monkeypatch):
     _env(monkeypatch, ANTHROPIC_API_KEY="sk-xxx")
     s = load_settings()
-    assert s.model_generator == "claude-opus-4-7"
-    assert s.model_critic == "claude-opus-4-7"
+    assert s.model_generator == "claude-haiku-4-5"
+    assert s.model_critic == "claude-haiku-4-5"
     assert s.critic_rounds == 2
     assert s.log_level == "info"
 

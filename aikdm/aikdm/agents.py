@@ -264,12 +264,12 @@ def _render_target_skill_as_xml(skill: Skill, capability: Capability | None) -> 
     return "\n".join(lines)
 
 
-def _adk_run_once(*, agent: LlmAgent, user_message_xml: str) -> tuple[str, int, int]:
+async def _adk_run_once(*, agent: LlmAgent, user_message_xml: str) -> tuple[str, int, int]:
     runner = InMemoryRunner(agent=agent)
 
     user_id = "aikdm"
     session_id = uuid.uuid4().hex
-    runner.session_service.create_session_sync(
+    await runner.session_service.create_session(
         app_name=runner.app_name,
         user_id=user_id,
         session_id=session_id,
@@ -284,7 +284,7 @@ def _adk_run_once(*, agent: LlmAgent, user_message_xml: str) -> tuple[str, int, 
     tokens_in = 0
     tokens_out = 0
 
-    for event in runner.run(
+    async for event in runner.run_async(
         user_id=user_id,
         session_id=session_id,
         new_message=new_message,
@@ -310,8 +310,8 @@ def _adk_run_once(*, agent: LlmAgent, user_message_xml: str) -> tuple[str, int, 
     return response_text, tokens_in, tokens_out
 
 
-def _run_main_prompt(*, agent: LlmAgent, user_message_xml: str) -> MainPromptResult:
-    response_text, tokens_in, tokens_out = _adk_run_once(
+async def _run_main_prompt(*, agent: LlmAgent, user_message_xml: str) -> MainPromptResult:
+    response_text, tokens_in, tokens_out = await _adk_run_once(
         agent=agent, user_message_xml=user_message_xml
     )
     parsed = _MainPromptOutput.model_validate_json(response_text)
@@ -320,8 +320,8 @@ def _run_main_prompt(*, agent: LlmAgent, user_message_xml: str) -> MainPromptRes
     )
 
 
-def _run_skill_prompt(*, agent: LlmAgent, user_message_xml: str) -> SkillPromptResult:
-    response_text, tokens_in, tokens_out = _adk_run_once(
+async def _run_skill_prompt(*, agent: LlmAgent, user_message_xml: str) -> SkillPromptResult:
+    response_text, tokens_in, tokens_out = await _adk_run_once(
         agent=agent, user_message_xml=user_message_xml
     )
     parsed = _SkillPromptOutput.model_validate_json(response_text)
@@ -333,8 +333,8 @@ def _run_skill_prompt(*, agent: LlmAgent, user_message_xml: str) -> SkillPromptR
     )
 
 
-def _run_critic(*, agent: LlmAgent, user_message_xml: str) -> CriticResult:
-    response_text, tokens_in, tokens_out = _adk_run_once(
+async def _run_critic(*, agent: LlmAgent, user_message_xml: str) -> CriticResult:
+    response_text, tokens_in, tokens_out = await _adk_run_once(
         agent=agent, user_message_xml=user_message_xml
     )
     parsed = _CriticOutput.model_validate_json(response_text)
@@ -343,7 +343,7 @@ def _run_critic(*, agent: LlmAgent, user_message_xml: str) -> CriticResult:
     )
 
 
-def call_main_prompt(
+async def call_main_prompt(
     agent: LlmAgent,
     config: FlowMapConfig,
     scaffold: str,
@@ -366,10 +366,10 @@ def call_main_prompt(
             parts.append(f"  - {issue}")
         parts.append("</critic_issues>")
         parts.append("Rewrite main_prompt addressing every issue.")
-    return _run_main_prompt(agent=agent, user_message_xml="\n".join(parts))
+    return await _run_main_prompt(agent=agent, user_message_xml="\n".join(parts))
 
 
-def call_skill_prompt(
+async def call_skill_prompt(
     agent: LlmAgent,
     config: FlowMapConfig,
     skill: Skill,
@@ -395,10 +395,10 @@ def call_skill_prompt(
             parts.append(f"  - {issue}")
         parts.append("</critic_issues>")
         parts.append("Rewrite this skill prompt addressing every issue.")
-    return _run_skill_prompt(agent=agent, user_message_xml="\n".join(parts))
+    return await _run_skill_prompt(agent=agent, user_message_xml="\n".join(parts))
 
 
-def call_main_prompt_critic(
+async def call_main_prompt_critic(
     agent: LlmAgent, config: FlowMapConfig, main_prompt: str
 ) -> CriticResult:
     user_message_xml = "\n".join([
@@ -407,10 +407,10 @@ def call_main_prompt_critic(
         main_prompt,
         "</main_prompt>",
     ])
-    return _run_critic(agent=agent, user_message_xml=user_message_xml)
+    return await _run_critic(agent=agent, user_message_xml=user_message_xml)
 
 
-def call_skill_prompt_critic(
+async def call_skill_prompt_critic(
     agent: LlmAgent,
     config: FlowMapConfig,
     skill: Skill,
@@ -424,4 +424,4 @@ def call_skill_prompt_critic(
         skill_prompt,
         "</skill_prompt>",
     ])
-    return _run_critic(agent=agent, user_message_xml=user_message_xml)
+    return await _run_critic(agent=agent, user_message_xml=user_message_xml)

@@ -46,13 +46,13 @@ def stub_llm(mocker, monkeypatch):
 
     mocker.patch.object(
         agents, "call_main_prompt",
-        return_value=agents.MainPromptResult(
+        new=mocker.AsyncMock(return_value=agents.MainPromptResult(
             main_prompt="<role>r</role>", tokens_in=10, tokens_out=20,
-        ),
+        )),
     )
 
-    def fake_skill(agent, config, skill, capability, scaffold,
-                   *, previous_output=None, critic_issues=None):
+    async def fake_skill(agent, config, skill, capability, scaffold,
+                         *, previous_output=None, critic_issues=None):
         return agents.SkillPromptResult(
             skill_name=skill.id, prompt="<role>p</role>",
             tokens_in=2, tokens_out=3,
@@ -61,11 +61,15 @@ def stub_llm(mocker, monkeypatch):
     mocker.patch.object(agents, "call_skill_prompt", side_effect=fake_skill)
     mocker.patch.object(
         agents, "call_main_prompt_critic",
-        return_value=agents.CriticResult(issues=[], tokens_in=1, tokens_out=1),
+        new=mocker.AsyncMock(return_value=agents.CriticResult(
+            issues=[], tokens_in=1, tokens_out=1,
+        )),
     )
     mocker.patch.object(
         agents, "call_skill_prompt_critic",
-        return_value=agents.CriticResult(issues=[], tokens_in=1, tokens_out=1),
+        new=mocker.AsyncMock(return_value=agents.CriticResult(
+            issues=[], tokens_in=1, tokens_out=1,
+        )),
     )
 
 
