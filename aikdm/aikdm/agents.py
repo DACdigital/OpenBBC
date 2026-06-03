@@ -31,8 +31,23 @@ endpoints), skills (the agent's high-level abilities), and flows
 
 Your job: emit a Bundle (main_prompt + per-skill prompts + external_actions)
 following the prompt schema. Honor the user-provided scaffolds — fill in
-LLM-synthesized sections, keep wizard-copied sections verbatim, never
-remove tags from the scaffolds.
+every LLM-synthesized section with your own prose, never copy wizard
+fields verbatim. The wizard fields (scope, business_domain, should_do,
+should_not_do) are reference material to refine and ground your output,
+not text to paste back. The agent at runtime needs polished, concrete
+instructions — not the user's terse one-line wizard answers.
+
+main_prompt MUST include a <workflows> section synthesized from the
+included flows (flows where included=true). For each workflow describe:
+name, intent, preconditions, ordered steps (referencing skill names),
+postconditions, side-effects. Goal: at runtime the agent can identify
+"I am at step N of workflow X". If no flows are included, emit an empty
+<workflows></workflows> block.
+
+main_prompt MUST also include an <examples> section showing 2-3 short
+user interactions that demonstrate skill routing (user says X -> agent
+picks skill Y / declines / redirects). These are distinct from per-skill
+examples (which show execution within one skill).
 
 Constraints:
 - One skill entry per internal (external=false) skill.
@@ -145,8 +160,15 @@ def _render_config_as_xml(config: FlowMapConfig) -> str:
     for f in config.flows:
         lines.append(
             f'    <flow id="{_esc(f.id)}" included="{str(f.included).lower()}" '
-            f'intent="{_esc(f.intent)}">{_esc(f.description)}</flow>'
+            f'intent="{_esc(f.intent)}">'
         )
+        lines.append(f"      <name>{_esc(f.name)}</name>")
+        lines.append(f"      <description>{_esc(f.description)}</description>")
+        lines.append(f"      <preconditions>{_esc('; '.join(f.preconditions))}</preconditions>")
+        lines.append(f"      <postconditions>{_esc('; '.join(f.postconditions))}</postconditions>")
+        lines.append(f"      <side_effects>{_esc('; '.join(f.side_effects))}</side_effects>")
+        lines.append(f"      <prose>{_esc(f.prose_md)}</prose>")
+        lines.append("    </flow>")
     lines.append("  </flows>")
     lines.append("</flow_map_config>")
     return "\n".join(lines)

@@ -8,9 +8,9 @@ main_prompt:
     guidance: "One-sentence statement of who the agent is, derived from business_domain and name."
   - name: scope
     tag: scope
-    source: wizard_copied
-    source_field: scope
+    source: llm_synthesized
     required: true
+    guidance: "Refine the user's `scope` wizard input. Stay faithful to intent; polish phrasing for clarity. Never copy verbatim."
   - name: personality
     tag: personality
     source: llm_synthesized
@@ -18,29 +18,39 @@ main_prompt:
     guidance: "Tone and style appropriate for business_domain. 1-3 sentences."
   - name: business_domain
     tag: business_domain
-    source: wizard_copied
-    source_field: business_domain
+    source: llm_synthesized
     required: true
+    guidance: "Refine the user's `business_domain` wizard input into the context the agent needs to make decisions. Add grounding the LLM-at-runtime would benefit from."
   - name: should_do
     tag: should_do
-    source: wizard_copied
-    source_field: should_do
+    source: llm_synthesized
     required: true
+    guidance: "Refine the user's `should_do` wizard input into clear, actionable instructions. Concrete and specific."
   - name: should_not_do
     tag: should_not_do
-    source: wizard_copied
-    source_field: should_not_do
+    source: llm_synthesized
     required: true
+    guidance: "Refine the user's `should_not_do` wizard input into clear prohibitions. Concrete and specific."
   - name: guardrails
     tag: guardrails
     source: llm_synthesized
     required: true
-    guidance: "Expanded restatement of should_not_do plus inferred safety rules."
+    guidance: "Expanded restatement of should_not_do plus inferred safety rules grounded in the business_domain."
+  - name: workflows
+    tag: workflows
+    source: llm_synthesized
+    required: true
+    guidance: "From flows with included=true, write a structured description of each business process so the agent can locate itself at runtime (e.g. 'I am at step 2 of place-order'). For each workflow: name, intent, preconditions, ordered steps (referencing skill names where applicable), postconditions, side-effects. Exclude flows with included=false. If no flows are included, write an empty <workflows></workflows> block."
+  - name: examples
+    tag: examples
+    source: llm_synthesized
+    required: true
+    guidance: "2-3 short example user interactions showing the agent's tone, scope-awareness, and skill-routing behaviour (user says X -> agent picks skill Y / declines / redirects). Distinct from per-skill examples — these are about routing, not execution."
   - name: skills_index
     tag: skills_index
     source: config_derived
     required: true
-    guidance: "Bulleted index of internal skills with role + one-line description."
+    guidance: "Bulleted index of internal skills with one-line description."
   - name: external_actions
     tag: external_actions
     source: config_derived
@@ -72,4 +82,4 @@ skill_prompt:
     tag: examples
     source: llm_synthesized
     required: true
-    guidance: "2-3 short example exchanges showing correct skill usage."
+    guidance: "2-3 short example exchanges showing correct skill execution."
