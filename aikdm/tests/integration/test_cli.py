@@ -7,12 +7,6 @@ from click.testing import CliRunner
 from aikdm import agents, models
 from aikdm.cli import main
 from aikdm.config import load_settings
-from aikdm.schemas import (
-    Bundle,
-    BundleMetadata,
-    SkillPrompt,
-    TokenUsage,
-)
 
 CONFIG = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coffee_shop.yaml"
 
@@ -43,30 +37,25 @@ def stub_llm(mocker, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     mocker.patch.object(models, "build_model", return_value=mocker.MagicMock())
-    mocker.patch.object(agents, "build_generator_agent", return_value=mocker.MagicMock())
+    mocker.patch.object(agents, "build_main_prompt_agent", return_value=mocker.MagicMock())
+    mocker.patch.object(agents, "build_skill_prompt_agent", return_value=mocker.MagicMock())
     mocker.patch.object(agents, "build_critic_agent", return_value=mocker.MagicMock())
 
-    bundle = Bundle(
-        metadata=BundleMetadata(
-            config_schema_version=1, prompt_schema_version="v1",
-            model_generator="m", model_critic="m",
-            generated_at="t", critic_rounds_run=0, critic_notes=[],
-            tokens_used=TokenUsage(),
-        ),
-        main_prompt="<role>r</role>",
-        skills=[
-            SkillPrompt(name="place_order",
-                        description="Guide the user through choosing items and placing an order.",
-                        prompt="<role>p</role>"),
-            SkillPrompt(name="check_rewards",
-                        description="Tell the user their rewards balance.",
-                        prompt="<role>p</role>"),
-        ],
-    )
     mocker.patch.object(
-        agents, "call_generator",
-        return_value=agents.GeneratorResult(bundle=bundle, tokens_in=10, tokens_out=20),
+        agents, "call_main_prompt",
+        return_value=agents.MainPromptResult(
+            main_prompt="<role>r</role>", tokens_in=10, tokens_out=20,
+        ),
     )
+
+    def fake_skill(agent, config, skill, capability, scaffold, main_prompt_for_context,
+                   *, previous_output=None, critic_issues=None):
+        return agents.SkillPromptResult(
+            skill_name=skill.id, prompt="<role>p</role>",
+            tokens_in=2, tokens_out=3,
+        )
+
+    mocker.patch.object(agents, "call_skill_prompt", side_effect=fake_skill)
     mocker.patch.object(
         agents, "call_critic",
         return_value=agents.CriticResult(issues=[], tokens_in=5, tokens_out=5),

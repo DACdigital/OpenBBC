@@ -1,10 +1,17 @@
 """ADK agent factories + thin callers.
 
-The orchestrator depends on `call_generator` and `call_critic`. Tests for
-the orchestrator monkey-patch `_run_generator` and `_run_critic` to avoid
-any LLM calls. Real ADK invocation lives only in those two underscore
-functions, making them the second mocking seam (in addition to
-models.build_model).
+aikdm generates a bundle in *three* call kinds, not one:
+- main_prompt agent emits only the main_prompt XML body
+- skill_prompt agent emits one skill's prompt XML body per call (one call per
+  internal skill in the input)
+- critic agent reads the *assembled* bundle and reports issues
+
+The orchestrator depends on `call_main_prompt`, `call_skill_prompt`, and
+`call_critic`. Tests substitute the `_run_*` helpers to avoid LLM traffic.
+
+Generating skills in separate calls (one per skill) lets the orchestrator
+enforce coverage by construction: it loops over the input's internal skills
+and demands one response each. The LLM cannot silently drop a skill.
 """
 
 from __future__ import annotations
@@ -19,64 +26,79 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types as _genai_types
 from pydantic import BaseModel
 
-from aikdm.schemas import Bundle, FlowMapConfig
+from aikdm.schemas import Bundle, Capability, FlowMapConfig, Skill
 
-GENERATOR_SYSTEM_PROMPT = """\
-You are aikdm's prompt generator.
+MAIN_PROMPT_SYSTEM_PROMPT = """\
+You are aikdm's main-prompt generator.
 
 You receive a <flow_map_config> describing a planned AI agent: business
 domain, scope, what it should and should not do, capabilities (backend
 endpoints), skills (the agent's high-level abilities), and flows
-(business processes).
+(business processes), plus a <main_prompt_scaffold> showing the section
+layout you must produce.
 
-Your job: emit a Bundle (main_prompt + per-skill prompts + external_actions)
-following the prompt schema. Honor the user-provided scaffolds — fill in
-every LLM-synthesized section with your own prose, never copy wizard
-fields verbatim. The wizard fields (scope, business_domain, should_do,
-should_not_do) are reference material to refine and ground your output,
-not text to paste back. The agent at runtime needs polished, concrete
-instructions — not the user's terse one-line wizard answers.
+Your only output is the main system prompt as a single XML string in
+the `main_prompt` field. You DO NOT emit skills here — each skill is
+generated in a separate call. The main prompt references skills by name
+through <skills_index>; you do not write their prompt bodies.
 
-main_prompt MUST include a <workflows> section synthesized from the
-included flows (flows where included=true). For each workflow describe:
-name, intent, preconditions, ordered steps (referencing skill names),
-postconditions, side-effects. Goal: at runtime the agent can identify
-"I am at step N of workflow X". If no flows are included, emit an empty
-<workflows></workflows> block.
+Rules:
+- Fill every LLM-synthesized tag with your own prose. Never copy the
+  wizard fields (scope, business_domain, should_do, should_not_do) verbatim
+  — refine them into polished, concrete instructions.
+- The <workflows> section must begin with the <usage> sub-block copied
+  verbatim from the scaffold, then synthesize each included flow
+  (name, intent, preconditions, ordered steps referencing skill names,
+  postconditions, side-effects). Exclude flows with included=false.
+- The <examples> section shows 2-3 routing examples (user says X ->
+  agent picks skill Y / declines / redirects). Distinct from per-skill
+  examples.
+- The <skills_index> lists every internal skill (name + one-line
+  description) — keep it in sync with the input.
+- The <external_actions> section names every external skill from input
+  (skill id + external_note). Empty if there are none.
+- All XML tags use Anthropic-style.
 
-main_prompt MUST also include an <examples> section showing 2-3 short
-user interactions that demonstrate skill routing (user says X -> agent
-picks skill Y / declines / redirects). These are distinct from per-skill
-examples (which show execution within one skill).
+Return structured output: {"main_prompt": "<role>...</role>...<external_actions/>"}
+"""
 
-Constraints:
-- One skill entry per internal (external=false) skill.
-- Each skill entry has: name (matches the input skill id), description
-  (one-line summary used by the dispatcher to decide when to load this
-  skill — Anthropic skill style), and prompt (the XML body loaded when
-  the dispatcher selects this skill).
-- External (external=true) skills appear ONLY in main_prompt's
-  <external_actions> and the bundle's external_actions list — never as
-  a skill entry.
-- Each skill's <resources> block in its prompt names a single mcp_server
-  with name=proposed_tool. Never include HTTP method, path, or parameters.
-- All XML tags inside main_prompt and skill prompt bodies use
-  Anthropic-style XML.
+SKILL_PROMPT_SYSTEM_PROMPT = """\
+You are aikdm's skill-prompt generator.
 
-Return structured output matching the Bundle schema.
+You receive a <flow_map_config>, a single <target_skill> (the skill you
+must write the prompt for), and a <skill_scaffold> showing the section
+layout. You produce the prompt body for THIS ONE skill, returning only
+its name and prompt XML.
+
+Rules:
+- Fill every LLM-synthesized tag in the scaffold with your own prose.
+- The <resources> block names a single mcp_server with name=proposed_tool
+  from the input. Never include HTTP method, path, or parameters.
+- The <examples> block shows 2-3 execution-level examples for this skill
+  (a representative turn inside the skill, not skill routing).
+- The skill body's tone and guardrails must be consistent with the
+  main_prompt scaffold (provided alongside for context).
+- All XML tags use Anthropic-style.
+
+Return structured output: {"name": "<skill-id>", "prompt": "<role>...</role>...<examples/>"}
+
+`name` must equal the target_skill's id verbatim.
 """
 
 CRITIC_SYSTEM_PROMPT = """\
 You are aikdm's prompt critic. You receive the original <flow_map_config>
-and the generator's <bundle>. Your job: identify substantive issues that
-would mislead an agent at runtime.
+and the assembled <bundle> (main_prompt + skills + external_actions).
+Your job: identify substantive issues that would mislead an agent at
+runtime.
 
 Focus on:
 - Inconsistency between main_prompt guardrails and skill-level guardrails.
 - Skills that contradict should_not_do.
-- Missing skills for capabilities the user clearly wants used.
-- External actions promised as internal skills.
+- A skill prompt that references a tool/capability not present in the input.
+- External actions promised as internal skills (or vice-versa).
 - Examples that imply forbidden behavior.
+- The main_prompt's <workflows> section: steps referencing skills that
+  don't exist, missing pre/postconditions, missing <usage> sub-block.
 
 Do NOT flag stylistic preferences, alternative phrasings, or things
 already correct. Return an empty list if the bundle is acceptable.
@@ -86,8 +108,16 @@ Return structured output: {"issues": [string, ...]}.
 
 
 @dataclass(frozen=True)
-class GeneratorResult:
-    bundle: Bundle
+class MainPromptResult:
+    main_prompt: str
+    tokens_in: int
+    tokens_out: int
+
+
+@dataclass(frozen=True)
+class SkillPromptResult:
+    skill_name: str
+    prompt: str
     tokens_in: int
     tokens_out: int
 
@@ -99,16 +129,34 @@ class CriticResult:
     tokens_out: int
 
 
+class _MainPromptOutput(BaseModel):
+    main_prompt: str
+
+
+class _SkillPromptOutput(BaseModel):
+    name: str
+    prompt: str
+
+
 class _CriticOutput(BaseModel):
     issues: list[str]
 
 
-def build_generator_agent(model: Any) -> LlmAgent:
+def build_main_prompt_agent(model: Any) -> LlmAgent:
     return LlmAgent(
-        name="aikdm_generator",
+        name="aikdm_main_prompt",
         model=model,
-        instruction=GENERATOR_SYSTEM_PROMPT,
-        output_schema=Bundle,
+        instruction=MAIN_PROMPT_SYSTEM_PROMPT,
+        output_schema=_MainPromptOutput,
+    )
+
+
+def build_skill_prompt_agent(model: Any) -> LlmAgent:
+    return LlmAgent(
+        name="aikdm_skill_prompt",
+        model=model,
+        instruction=SKILL_PROMPT_SYSTEM_PROMPT,
+        output_schema=_SkillPromptOutput,
     )
 
 
@@ -127,8 +175,7 @@ def _esc(s: str) -> str:
 
 def _render_config_as_xml(config: FlowMapConfig) -> str:
     """Render the FlowMapConfig as a single <flow_map_config> XML block.
-    Used as the user message body for both generator and critic.
-    """
+    Used as the user message body for every agent call."""
     lines: list[str] = ["<flow_map_config>"]
     lines.append(f"  <name>{_esc(config.name)}</name>")
     lines.append(f"  <business_domain>{_esc(config.business_domain)}</business_domain>")
@@ -174,17 +221,26 @@ def _render_config_as_xml(config: FlowMapConfig) -> str:
     return "\n".join(lines)
 
 
+def _render_target_skill_as_xml(skill: Skill, capability: Capability | None) -> str:
+    lines: list[str] = [f'<target_skill id="{_esc(skill.id)}">']
+    lines.append(f"  <name>{_esc(skill.name)}</name>")
+    lines.append(f"  <description>{_esc(skill.description)}</description>")
+    lines.append(f"  <proposed_tool>{_esc(skill.proposed_tool)}</proposed_tool>")
+    lines.append(f"  <capability_ref>{_esc(skill.capability_ref)}</capability_ref>")
+    if capability is not None:
+        lines.append(f'  <linked_capability name="{_esc(capability.name)}">')
+        lines.append(f"    <summary>{_esc(capability.summary)}</summary>")
+        lines.append(f"    <prose>{_esc(capability.prose_md)}</prose>")
+        lines.append("  </linked_capability>")
+    lines.append(f"  <prose>{_esc(skill.prose_md)}</prose>")
+    lines.append("</target_skill>")
+    return "\n".join(lines)
+
+
 def _adk_run_once(*, agent: LlmAgent, user_message_xml: str) -> tuple[str, int, int]:
     """Invoke the ADK InMemoryRunner synchronously for a single user turn.
 
-    Returns a tuple of (response_text, tokens_in, tokens_out) where
-    response_text is the raw text of the final model response (JSON when
-    output_schema is set on the agent).
-
-    ADK's Runner.run() is already sync — it bridges to async internally via a
-    background thread, so no asyncio.run() wrapping is needed here.
-
-    Reference: https://google.github.io/adk-docs/runners/
+    Returns (response_text, tokens_in, tokens_out).
     """
     runner = InMemoryRunner(agent=agent)
 
@@ -210,14 +266,11 @@ def _adk_run_once(*, agent: LlmAgent, user_message_xml: str) -> tuple[str, int, 
         session_id=session_id,
         new_message=new_message,
     ):
-        # Accumulate token usage from any event that carries it.
         if event.usage_metadata is not None:
             um = event.usage_metadata
-            # TODO: capture token usage more precisely per provider
             tokens_in = um.prompt_token_count or 0
             tokens_out = um.candidates_token_count or 0
 
-        # Capture the final model response text.
         if event.is_final_response() and event.content and event.content.parts:
             response_text = "".join(
                 part.text
@@ -234,75 +287,96 @@ def _adk_run_once(*, agent: LlmAgent, user_message_xml: str) -> tuple[str, int, 
     return response_text, tokens_in, tokens_out
 
 
-def _run_generator(
-    *,
-    agent: LlmAgent,
-    user_message_xml: str,
-) -> GeneratorResult:
-    """Execute the ADK agent for generation.
-
-    The generator agent has output_schema=Bundle, so ADK instructs the model
-    to return structured JSON. We parse the final response text as a Bundle.
-
-    Reference: https://google.github.io/adk-docs/agents/llm-agents/
-    """
+def _run_main_prompt(*, agent: LlmAgent, user_message_xml: str) -> MainPromptResult:
     response_text, tokens_in, tokens_out = _adk_run_once(
         agent=agent, user_message_xml=user_message_xml
     )
-    bundle = Bundle.model_validate_json(response_text)
-    return GeneratorResult(bundle=bundle, tokens_in=tokens_in, tokens_out=tokens_out)
+    parsed = _MainPromptOutput.model_validate_json(response_text)
+    return MainPromptResult(
+        main_prompt=parsed.main_prompt, tokens_in=tokens_in, tokens_out=tokens_out
+    )
 
 
-def _run_critic(
-    *,
-    agent: LlmAgent,
-    user_message_xml: str,
-) -> CriticResult:
-    """Execute the ADK agent for criticism.
-
-    The critic agent has output_schema=_CriticOutput, so the model returns
-    {"issues": [...]}. We parse and return a CriticResult.
-    """
+def _run_skill_prompt(*, agent: LlmAgent, user_message_xml: str) -> SkillPromptResult:
     response_text, tokens_in, tokens_out = _adk_run_once(
         agent=agent, user_message_xml=user_message_xml
     )
-    critic_output = _CriticOutput.model_validate_json(response_text)
+    parsed = _SkillPromptOutput.model_validate_json(response_text)
+    return SkillPromptResult(
+        skill_name=parsed.name,
+        prompt=parsed.prompt,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+    )
+
+
+def _run_critic(*, agent: LlmAgent, user_message_xml: str) -> CriticResult:
+    response_text, tokens_in, tokens_out = _adk_run_once(
+        agent=agent, user_message_xml=user_message_xml
+    )
+    parsed = _CriticOutput.model_validate_json(response_text)
     return CriticResult(
-        issues=critic_output.issues, tokens_in=tokens_in, tokens_out=tokens_out
+        issues=parsed.issues, tokens_in=tokens_in, tokens_out=tokens_out
     )
 
 
-def call_generator(
+def call_main_prompt(
     agent: LlmAgent,
     config: FlowMapConfig,
-    scaffold_main: str,
-    scaffold_skills: dict[str, str],
-    previous_bundle: Bundle | None = None,
-    previous_issues: list[str] | None = None,
-) -> GeneratorResult:
+    scaffold: str,
+    *,
+    previous_output: str | None = None,
+    critic_issues: list[str] | None = None,
+) -> MainPromptResult:
     parts = [
         _render_config_as_xml(config),
         "<main_prompt_scaffold>",
-        scaffold_main,
+        scaffold,
         "</main_prompt_scaffold>",
-        "<skill_scaffolds>",
     ]
-    for sid, scaff in scaffold_skills.items():
-        parts.append(f'  <skill_scaffold id="{sid}">')
-        parts.append(scaff)
-        parts.append("  </skill_scaffold>")
-    parts.append("</skill_scaffolds>")
-    if previous_bundle is not None and previous_issues:
-        parts.append("<previous_bundle>")
-        parts.append(previous_bundle.model_dump_json(indent=2))
-        parts.append("</previous_bundle>")
+    if previous_output is not None and critic_issues:
+        parts.append("<previous_main_prompt>")
+        parts.append(previous_output)
+        parts.append("</previous_main_prompt>")
         parts.append("<critic_issues>")
-        for issue in previous_issues:
+        for issue in critic_issues:
             parts.append(f"  - {issue}")
         parts.append("</critic_issues>")
-        parts.append("Rewrite the bundle addressing every issue.")
-    user_message_xml = "\n".join(parts)
-    return _run_generator(agent=agent, user_message_xml=user_message_xml)
+        parts.append("Rewrite main_prompt addressing every issue.")
+    return _run_main_prompt(agent=agent, user_message_xml="\n".join(parts))
+
+
+def call_skill_prompt(
+    agent: LlmAgent,
+    config: FlowMapConfig,
+    skill: Skill,
+    capability: Capability | None,
+    scaffold: str,
+    main_prompt_for_context: str,
+    *,
+    previous_output: str | None = None,
+    critic_issues: list[str] | None = None,
+) -> SkillPromptResult:
+    parts = [
+        _render_config_as_xml(config),
+        _render_target_skill_as_xml(skill, capability),
+        "<skill_scaffold>",
+        scaffold,
+        "</skill_scaffold>",
+        "<main_prompt_for_context>",
+        main_prompt_for_context,
+        "</main_prompt_for_context>",
+    ]
+    if previous_output is not None and critic_issues:
+        parts.append("<previous_skill_prompt>")
+        parts.append(previous_output)
+        parts.append("</previous_skill_prompt>")
+        parts.append("<critic_issues>")
+        for issue in critic_issues:
+            parts.append(f"  - {issue}")
+        parts.append("</critic_issues>")
+        parts.append("Rewrite this skill prompt addressing every issue relevant to it.")
+    return _run_skill_prompt(agent=agent, user_message_xml="\n".join(parts))
 
 
 def call_critic(agent: LlmAgent, config: FlowMapConfig, bundle: Bundle) -> CriticResult:

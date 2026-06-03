@@ -6,8 +6,8 @@ metadata:
   critic_rounds_run: 1
   critic_notes: []
   tokens_used:
-    generator_in: 10
-    generator_out: 20
+    generator_in: 14
+    generator_out: 26
     critic_in: 5
     critic_out: 5
 main_prompt: <role>r</role>

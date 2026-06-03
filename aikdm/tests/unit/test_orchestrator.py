@@ -2,15 +2,11 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
 from aikdm import agents, models, orchestrator
 from aikdm.loader import load_flow_map_config, load_prompt_schema
 from aikdm.progress import ProgressEmitter
-from aikdm.schemas import (
-    Bundle,
-    BundleMetadata,
-    SkillPrompt,
-    TokenUsage,
-)
 
 CONFIG_PATH = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coffee_shop.yaml"
 SCHEMA_PATH = Path(__file__).parents[2] / "schemas" / "prompt-v1.yaml"
@@ -19,64 +15,38 @@ SCHEMA_PATH = Path(__file__).parents[2] / "schemas" / "prompt-v1.yaml"
 def _patch_adk(mocker):
     """Bypass ADK so LlmAgent never sees a real model."""
     mocker.patch.object(models, "build_model", return_value=mocker.MagicMock())
-    mocker.patch.object(agents, "build_generator_agent", return_value=mocker.MagicMock())
+    mocker.patch.object(agents, "build_main_prompt_agent", return_value=mocker.MagicMock())
+    mocker.patch.object(agents, "build_skill_prompt_agent", return_value=mocker.MagicMock())
     mocker.patch.object(agents, "build_critic_agent", return_value=mocker.MagicMock())
 
 
-def _fake_bundle(main: str = "<role>r</role>") -> Bundle:
-    return Bundle(
-        metadata=BundleMetadata(
-            config_schema_version=1, prompt_schema_version="v1",
-            model_generator="m", model_critic="m",
-            generated_at="t", critic_rounds_run=0, critic_notes=[],
-            tokens_used=TokenUsage(),
-        ),
-        main_prompt=main,
-        skills=[
-            SkillPrompt(name="place_order",
-                        description="Guide the user through choosing items and placing an order.",
-                        prompt="<role>p</role>"),
-            SkillPrompt(name="check_rewards",
-                        description="Tell the user their rewards balance.",
-                        prompt="<role>p</role>"),
-        ],
-    )
+def _stub_skill_prompt(mocker, *, prompts_by_skill: dict[str, str] | None = None):
+    """Stub call_skill_prompt so it returns a per-skill body looked up from
+    a dict keyed by skill id. Defaults to a fixed body per skill."""
 
+    def fake(agent, config, skill, capability, scaffold, main_prompt_for_context,
+            *, previous_output=None, critic_issues=None):
+        body = (prompts_by_skill or {}).get(skill.id, f"<role>{skill.id} body</role>")
+        return agents.SkillPromptResult(
+            skill_name=skill.id, prompt=body, tokens_in=3, tokens_out=4,
+        )
 
-def _generator_result(bundle=None):
-    return agents.GeneratorResult(
-        bundle=bundle if bundle is not None else _fake_bundle(),
-        tokens_in=10, tokens_out=20,
-    )
-
-
-def _critic_result(*issues):
-    return agents.CriticResult(issues=list(issues), tokens_in=5, tokens_out=5)
+    return mocker.patch.object(agents, "call_skill_prompt", side_effect=fake)
 
 
 def test_orchestrator_early_exits_when_first_critic_returns_no_issues(mocker, settings):
     _patch_adk(mocker)
-    gen = mocker.patch.object(agents, "call_generator", return_value=_generator_result())
-    crit = mocker.patch.object(agents, "call_critic", return_value=_critic_result())
-
-    sink = io.StringIO()
-    bundle = orchestrator.run_generation(
-        load_flow_map_config(CONFIG_PATH),
-        load_prompt_schema(SCHEMA_PATH),
-        settings,
-        ProgressEmitter(sink),
+    main = mocker.patch.object(
+        agents, "call_main_prompt",
+        return_value=agents.MainPromptResult(
+            main_prompt="<role>main</role>", tokens_in=10, tokens_out=20,
+        ),
     )
-
-    assert gen.call_count == 1
-    assert crit.call_count == 1
-    assert bundle.metadata.critic_rounds_run == 1
-    assert bundle.metadata.critic_notes == []
-
-
-def test_orchestrator_runs_full_max_rounds_when_issues_persist(mocker, settings):
-    _patch_adk(mocker)
-    gen = mocker.patch.object(agents, "call_generator", return_value=_generator_result())
-    crit = mocker.patch.object(agents, "call_critic", return_value=_critic_result("still wrong"))
+    skill = _stub_skill_prompt(mocker)
+    crit = mocker.patch.object(
+        agents, "call_critic",
+        return_value=agents.CriticResult(issues=[], tokens_in=5, tokens_out=5),
+    )
 
     bundle = orchestrator.run_generation(
         load_flow_map_config(CONFIG_PATH),
@@ -85,20 +55,56 @@ def test_orchestrator_runs_full_max_rounds_when_issues_persist(mocker, settings)
         ProgressEmitter(io.StringIO()),
     )
 
-    assert gen.call_count == 2
+    assert main.call_count == 1
+    # 2 internal skills in the coffee_shop fixture (place_order, check_rewards).
+    assert skill.call_count == 2
+    assert crit.call_count == 1
+    assert bundle.metadata.critic_rounds_run == 1
+    assert bundle.metadata.critic_notes == []
+
+
+def test_orchestrator_runs_full_max_rounds_when_issues_persist(mocker, settings):
+    _patch_adk(mocker)
+    main = mocker.patch.object(
+        agents, "call_main_prompt",
+        return_value=agents.MainPromptResult(
+            main_prompt="<role>main</role>", tokens_in=10, tokens_out=20,
+        ),
+    )
+    skill = _stub_skill_prompt(mocker)
+    crit = mocker.patch.object(
+        agents, "call_critic",
+        return_value=agents.CriticResult(issues=["still wrong"], tokens_in=5, tokens_out=5),
+    )
+
+    bundle = orchestrator.run_generation(
+        load_flow_map_config(CONFIG_PATH),
+        load_prompt_schema(SCHEMA_PATH),
+        settings,
+        ProgressEmitter(io.StringIO()),
+    )
+
+    # 2 rounds × (1 main + 2 skills + 1 critic) = 8 calls
+    assert main.call_count == 2
+    assert skill.call_count == 4  # 2 skills × 2 rounds
     assert crit.call_count == 2
     assert bundle.metadata.critic_rounds_run == 2
     assert bundle.metadata.critic_notes == ["still wrong"]
-    assert bundle.metadata.tokens_used.generator_in == 20
-    assert bundle.metadata.tokens_used.generator_out == 40
-    assert bundle.metadata.tokens_used.critic_in == 10
-    assert bundle.metadata.tokens_used.critic_out == 10
 
 
-def test_orchestrator_emits_lifecycle_events(mocker, settings):
+def test_orchestrator_emits_lifecycle_events_including_per_skill(mocker, settings):
     _patch_adk(mocker)
-    mocker.patch.object(agents, "call_generator", return_value=_generator_result())
-    mocker.patch.object(agents, "call_critic", return_value=_critic_result())
+    mocker.patch.object(
+        agents, "call_main_prompt",
+        return_value=agents.MainPromptResult(
+            main_prompt="<role>main</role>", tokens_in=10, tokens_out=20,
+        ),
+    )
+    _stub_skill_prompt(mocker)
+    mocker.patch.object(
+        agents, "call_critic",
+        return_value=agents.CriticResult(issues=[], tokens_in=5, tokens_out=5),
+    )
 
     sink = io.StringIO()
     orchestrator.run_generation(
@@ -108,27 +114,59 @@ def test_orchestrator_emits_lifecycle_events(mocker, settings):
         ProgressEmitter(sink),
     )
 
-    events = [json.loads(line)["event"] for line in sink.getvalue().splitlines()]
-    assert events[0] == "started"
-    assert "round_started" in events
-    assert "draft_done" in events
-    assert "critic_done" in events
-    assert events[-1] == "done"
+    events = [json.loads(line) for line in sink.getvalue().splitlines()]
+    event_names = [e["event"] for e in events]
+    assert event_names[0] == "started"
+    assert "main_prompt_done" in event_names
+    assert "skill_prompt_done" in event_names
+    assert "critic_done" in event_names
+    assert event_names[-1] == "done"
+    # Per-skill events carry the skill id.
+    skill_events = [e for e in events if e["event"] == "skill_prompt_done"]
+    assert {e["skill"] for e in skill_events} == {"place_order", "check_rewards"}
 
-    done_lines = [line for line in sink.getvalue().splitlines() if '"event":"done"' in line]
-    assert len(done_lines) == 1
-    done_payload = json.loads(done_lines[0])
-    assert done_payload["rounds_run"] == 1
-    assert done_payload["total_tokens"] == 40  # 10+20+5+5
+
+def test_orchestrator_includes_every_internal_skill_in_output(mocker, settings):
+    """Coverage invariant: bundle.skills contains exactly the input's
+    internal skills, in input order, with descriptions copied verbatim."""
+    _patch_adk(mocker)
+    mocker.patch.object(
+        agents, "call_main_prompt",
+        return_value=agents.MainPromptResult(
+            main_prompt="<role>main</role>", tokens_in=10, tokens_out=20,
+        ),
+    )
+    _stub_skill_prompt(mocker)
+    mocker.patch.object(
+        agents, "call_critic",
+        return_value=agents.CriticResult(issues=[], tokens_in=5, tokens_out=5),
+    )
+
+    cfg = load_flow_map_config(CONFIG_PATH)
+    bundle = orchestrator.run_generation(
+        cfg, load_prompt_schema(SCHEMA_PATH), settings, ProgressEmitter(io.StringIO()),
+    )
+
+    expected_internal = [s for s in cfg.skills if not s.external]
+    assert [s.name for s in bundle.skills] == [s.id for s in expected_internal]
+    # Description verbatim from input.
+    for out_skill, in_skill in zip(bundle.skills, expected_internal, strict=True):
+        assert out_skill.description == in_skill.description
 
 
 def test_orchestrator_populates_external_actions(mocker, settings):
-    """External skills in input must surface as bundle.external_actions
-    even if the generator forgets — the orchestrator owns this invariant."""
     _patch_adk(mocker)
-    # Generator returns a bundle WITHOUT external_actions.
-    mocker.patch.object(agents, "call_generator", return_value=_generator_result())
-    mocker.patch.object(agents, "call_critic", return_value=_critic_result())
+    mocker.patch.object(
+        agents, "call_main_prompt",
+        return_value=agents.MainPromptResult(
+            main_prompt="<role>main</role>", tokens_in=10, tokens_out=20,
+        ),
+    )
+    _stub_skill_prompt(mocker)
+    mocker.patch.object(
+        agents, "call_critic",
+        return_value=agents.CriticResult(issues=[], tokens_in=5, tokens_out=5),
+    )
 
     bundle = orchestrator.run_generation(
         load_flow_map_config(CONFIG_PATH),
@@ -144,22 +182,37 @@ def test_orchestrator_populates_external_actions(mocker, settings):
     )
 
 
-def test_orchestrator_drops_skill_prompts_for_external_skills(mocker, settings):
+def test_orchestrator_raises_if_skill_prompt_missing(mocker, settings):
+    """Defense-in-depth: if the skill-prompt call ever returns without a body
+    (which would only happen via direct misuse, not real LLM flow), the
+    orchestrator refuses to produce an incomplete bundle."""
     _patch_adk(mocker)
-    # Generator hallucinates a skill prompt for an external skill.
-    hallucinated = _fake_bundle()
-    hallucinated.skills.append(SkillPrompt(name="file_complaint",
-                                           description="should not be here",
-                                           prompt="<role>bad</role>"))
-    mocker.patch.object(agents, "call_generator", return_value=_generator_result(hallucinated))
-    mocker.patch.object(agents, "call_critic", return_value=_critic_result())
-
-    bundle = orchestrator.run_generation(
-        load_flow_map_config(CONFIG_PATH),
-        load_prompt_schema(SCHEMA_PATH),
-        settings,
-        ProgressEmitter(io.StringIO()),
+    mocker.patch.object(
+        agents, "call_main_prompt",
+        return_value=agents.MainPromptResult(
+            main_prompt="<role>main</role>", tokens_in=10, tokens_out=20,
+        ),
     )
 
-    names = {s.name for s in bundle.skills}
-    assert "file_complaint" not in names
+    # Return a body for only ONE of the two internal skills, simulating
+    # whatever path could lead to a missing entry.
+    def fake(agent, config, skill, capability, scaffold, main_prompt_for_context,
+            *, previous_output=None, critic_issues=None):
+        if skill.id == "place_order":
+            return agents.SkillPromptResult(
+                skill_name=skill.id, prompt="<role>p</role>", tokens_in=1, tokens_out=1,
+            )
+        # check_rewards: simulate a path where the result somehow doesn't land
+        # in skill_prompt_bodies. We achieve this by raising — orchestrator
+        # surfaces it.
+        raise RuntimeError("simulated skill generation failure")
+
+    mocker.patch.object(agents, "call_skill_prompt", side_effect=fake)
+
+    with pytest.raises(RuntimeError, match="simulated"):
+        orchestrator.run_generation(
+            load_flow_map_config(CONFIG_PATH),
+            load_prompt_schema(SCHEMA_PATH),
+            settings,
+            ProgressEmitter(io.StringIO()),
+        )

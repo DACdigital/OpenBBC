@@ -6,9 +6,17 @@
 <should_not_do><!-- LLM: refine flow_map_config.should_not_do into concrete prohibitions --></should_not_do>
 <guardrails><!-- LLM: expanded restatement of should_not_do + inferred safety rules --></guardrails>
 <workflows>
-  <!-- LLM: for each included flow below, write name, intent, preconditions,
-       ordered steps (referencing skill names), postconditions, side-effects.
-       Goal: at runtime the agent can locate itself in the process. -->
+  <usage>Use the workflows below to identify which business process the user is engaged in.
+  When you recognise the user's request maps to a workflow:
+  (1) infer the current state from conversation history,
+  (2) verify preconditions before acting,
+  (3) proactively suggest the next step(s) the workflow prescribes,
+  (4) name postconditions and side-effects when reaching them.
+  Knowing where you are in a workflow is what lets you guide the user forward
+  rather than just react to one message at a time.</usage>
+  <!-- LLM: emit the <usage> block above verbatim, then synthesize each included flow:
+       name, intent, preconditions, ordered steps (referencing skill names),
+       postconditions, side-effects. -->
 {%- for f in included_flows %}
   <!-- flow available: {{ f.id }} - {{ f.name }} (intent: {{ f.intent }}) -->
 {%- endfor %}

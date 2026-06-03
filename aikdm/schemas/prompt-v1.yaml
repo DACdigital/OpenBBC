@@ -40,7 +40,7 @@ main_prompt:
     tag: workflows
     source: llm_synthesized
     required: true
-    guidance: "From flows with included=true, write a structured description of each business process so the agent can locate itself at runtime (e.g. 'I am at step 2 of place-order'). For each workflow: name, intent, preconditions, ordered steps (referencing skill names where applicable), postconditions, side-effects. Exclude flows with included=false. If no flows are included, write an empty <workflows></workflows> block."
+    guidance: "Two parts. (1) A literal <usage> sub-block at the top instructing the runtime agent to use workflows to identify its position in a process and proactively suggest next steps based on workflow shape + state — copy this block verbatim from the scaffold. (2) From flows with included=true, write a structured description of each business process so the agent can locate itself at runtime (e.g. 'I am at step 2 of place-order'). For each workflow: name, intent, preconditions, ordered steps (referencing skill names where applicable), postconditions, side-effects. Exclude flows with included=false. If no flows are included, emit the <usage> block followed by no workflow children."
   - name: examples
     tag: examples
     source: llm_synthesized
