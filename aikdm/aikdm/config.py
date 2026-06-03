@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Self
+from functools import cache
 
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -46,19 +46,26 @@ class Settings(BaseSettings):
     critic_rounds: int = Field(default=2, ge=1)
     log_level: str = "info"
 
-    @classmethod
-    def load(cls) -> Self:
-        try:
-            s = cls()
-        except ValidationError as e:
-            raise ConfigError(str(e)) from e
 
-        providers = {_provider_of(s.model_generator), _provider_of(s.model_critic)}
-        for p in providers:
-            env_name = _PROVIDER_KEYS.get(p)
-            if env_name is None:
-                raise ConfigError(f"unknown provider {p!r}")
-            if not os.environ.get(env_name):
-                raise ConfigError(f"missing {env_name} for provider {p}")
+@cache
+def load_settings() -> Settings:
+    """Single entrypoint for loading aikdm settings.
 
-        return s
+    Cached: returns the same Settings instance for the lifetime of the process.
+    Tests that need a fresh load (after monkeypatching env vars) must call
+    `load_settings.cache_clear()` first.
+    """
+    try:
+        s = Settings()
+    except ValidationError as e:
+        raise ConfigError(str(e)) from e
+
+    providers = {_provider_of(s.model_generator), _provider_of(s.model_critic)}
+    for p in providers:
+        env_name = _PROVIDER_KEYS.get(p)
+        if env_name is None:
+            raise ConfigError(f"unknown provider {p!r}")
+        if not os.environ.get(env_name):
+            raise ConfigError(f"missing {env_name} for provider {p}")
+
+    return s

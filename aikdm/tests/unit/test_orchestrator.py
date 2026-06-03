@@ -3,8 +3,10 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from aikdm import agents, models, orchestrator
-from aikdm.config import Settings
+from aikdm.config import load_settings
 from aikdm.loader import load_flow_map_config, load_prompt_schema
 from aikdm.progress import ProgressEmitter
 from aikdm.schemas import (
@@ -18,11 +20,18 @@ CONFIG_PATH = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coff
 SCHEMA_PATH = Path(__file__).parents[2] / "schemas" / "prompt-v1.yaml"
 
 
+@pytest.fixture(autouse=True)
+def _clear_settings_cache():
+    load_settings.cache_clear()
+    yield
+    load_settings.cache_clear()
+
+
 def _stub_settings(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-xxx")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    return Settings.load()
+    return load_settings()
 
 
 def _patch_agents(monkeypatch):

@@ -7,6 +7,7 @@ from click.testing import CliRunner
 
 from aikdm import agents, models
 from aikdm.cli import main
+from aikdm.config import load_settings
 from aikdm.schemas import (
     Bundle,
     BundleMetadata,
@@ -20,6 +21,13 @@ def _isolate_from_dotenv(tmp_path, monkeypatch):
     """The CLI auto-loads .env from cwd-and-above. Chdir to tmp_path so
     no real .env on the developer's machine pollutes tests."""
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_cache():
+    load_settings.cache_clear()
+    yield
+    load_settings.cache_clear()
 
 CONFIG = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coffee_shop.yaml"
 

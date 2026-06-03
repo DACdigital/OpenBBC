@@ -12,7 +12,7 @@ import click
 from dotenv import find_dotenv, load_dotenv
 
 from aikdm import orchestrator
-from aikdm.config import ConfigError, Settings
+from aikdm.config import ConfigError, load_settings
 from aikdm.loader import (
     InputIOError,
     InputValidationError,
@@ -51,7 +51,7 @@ def main() -> None:
 def generate_agent(config_path: Path, output_path: Path | None) -> None:
     load_dotenv(find_dotenv(usecwd=True))
     try:
-        settings = Settings.load()
+        settings = load_settings()
     except ConfigError as e:
         _print_error("config", str(e))
         sys.exit(2)
