@@ -132,6 +132,24 @@ def test_missing_api_key_returns_exit_2(monkeypatch):
     assert '"error":"config"' in result.stderr
 
 
+def test_generate_agent_expands_tilde_in_paths(stub_llm, monkeypatch, tmp_path):
+    """Click's Path type doesn't expand ~; the CLI must."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg_dir = tmp_path / "configs"
+    cfg_dir.mkdir()
+    cfg_file = cfg_dir / "test.yaml"
+    cfg_file.write_text(Path(str(CONFIG)).read_text())
+
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "generate-agent",
+        "--config", "~/configs/test.yaml",
+        "--output", "~/bundle.yaml",
+    ])
+    assert result.exit_code == 0, result.stderr
+    assert (tmp_path / "bundle.yaml").exists()
+
+
 def test_full_pipeline_golden_file(stub_llm):
     runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", str(CONFIG)])

@@ -49,6 +49,9 @@ def main() -> None:
               required=False, default=None,
               help="Output bundle path (omit for stdout).")
 def generate_agent(config_path: Path, output_path: Path | None) -> None:
+    config_path = config_path.expanduser()
+    if output_path is not None:
+        output_path = output_path.expanduser()
     load_dotenv(find_dotenv(usecwd=True))
     try:
         settings = load_settings()
