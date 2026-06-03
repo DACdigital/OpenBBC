@@ -654,6 +654,11 @@ func tplWorkflowState(wf types.Workflow) (template.JS, error) {
 // DownloadYAML renders the agent's flow_map_config as YAML and serves it
 // as a file attachment named "<agent-name>.yaml".
 //
+// Query parameter:
+//   - clean=true: emit a filtered view — flows with included=false dropped,
+//     and capabilities not referenced by any remaining skill dropped. The
+//     full view (default) preserves everything for audit and round-trip.
+//
 // Available for any agent (no status gate at the handler level — the link
 // in /agents/ui only appears for non-INITIALIZING agents). Returns 404 if
 // the agent doesn't exist or has no config persisted yet.
@@ -678,6 +683,10 @@ func (h *ConfiguratorHandler) DownloadYAML(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if r.URL.Query().Get("clean") == "true" {
+		cfg = filterAgentConfig(cfg)
+	}
+
 	yamlBytes, err := yaml.Marshal(cfg)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -690,6 +699,39 @@ func (h *ConfiguratorHandler) DownloadYAML(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(yamlBytes)
+}
+
+// filterAgentConfig returns a copy of cfg with curation noise stripped:
+//   - flows where Included=false are dropped
+//   - capabilities not referenced by any remaining skill are dropped
+//
+// Skills are not filtered (external skills remain — the agent needs to
+// know about them to redirect users). The full config remains in the
+// database; this function only shapes the YAML for export.
+func filterAgentConfig(cfg types.FlowMapConfig) types.FlowMapConfig {
+	keptFlows := make([]types.Flow, 0, len(cfg.Flows))
+	for _, f := range cfg.Flows {
+		if f.Included {
+			keptFlows = append(keptFlows, f)
+		}
+	}
+
+	referenced := make(map[string]struct{}, len(cfg.Skills))
+	for _, s := range cfg.Skills {
+		if s.CapabilityRef != "" {
+			referenced[s.CapabilityRef] = struct{}{}
+		}
+	}
+	keptCaps := make([]types.Capability, 0, len(cfg.Capabilities))
+	for _, c := range cfg.Capabilities {
+		if _, ok := referenced[c.Name]; ok {
+			keptCaps = append(keptCaps, c)
+		}
+	}
+
+	cfg.Flows = keptFlows
+	cfg.Capabilities = keptCaps
+	return cfg
 }
 
 // blockScalarIndentRE matches block-scalar headers with an explicit indent

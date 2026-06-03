@@ -738,3 +738,74 @@ func TestConfigurator_DownloadYAML_NoBlockScalarIndentIndicators(t *testing.T) {
 		t.Errorf("ProseMD content not preserved through normalization+roundtrip")
 	}
 }
+
+// TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans verifies the
+// ?clean=true query parameter strips flows with included=false and
+// capabilities not referenced by any remaining skill. The full export
+// (default) keeps everything for audit and round-trip.
+func TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans(t *testing.T) {
+	cfg := types.FlowMapConfig{
+		SchemaVersion: 1, Name: "test-agent",
+		Source: types.FlowMapSource{AppName: "sample"},
+		Capabilities: []types.Capability{
+			{Name: "orders", Summary: "used"},
+			{Name: "settings", Summary: "orphan — no skill references it"},
+		},
+		Skills: []types.Skill{{
+			ID: "place-order", Origin: "discovered", Name: "Place order",
+			Role: "write", CapabilityRef: "orders", ProposedTool: "orders.create",
+		}},
+		Flows: []types.Flow{
+			{
+				ID: "place-order-flow", Origin: "discovered", Included: true,
+				Name:     "Place order flow",
+				Workflow: types.Workflow{Mermaid: "flowchart TD\n  a-->b"},
+			},
+			{
+				ID: "abandoned-flow", Origin: "discovered", Included: false,
+				Name:     "Abandoned",
+				Workflow: types.Workflow{Mermaid: "flowchart TD\n  x-->y"},
+			},
+		},
+	}
+	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	// Default (no clean=true): full content preserved.
+	reqFull := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
+	reqFull.SetPathValue("id", "abc")
+	wFull := httptest.NewRecorder()
+	h.DownloadYAML(wFull, reqFull)
+	var full types.FlowMapConfig
+	if err := yaml.Unmarshal(wFull.Body.Bytes(), &full); err != nil {
+		t.Fatalf("full unmarshal: %v", err)
+	}
+	if len(full.Flows) != 2 {
+		t.Errorf("full export should keep both flows, got %d", len(full.Flows))
+	}
+	if len(full.Capabilities) != 2 {
+		t.Errorf("full export should keep both capabilities, got %d", len(full.Capabilities))
+	}
+
+	// ?clean=true: filtered.
+	reqClean := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml?clean=true", nil)
+	reqClean.SetPathValue("id", "abc")
+	wClean := httptest.NewRecorder()
+	h.DownloadYAML(wClean, reqClean)
+	var clean types.FlowMapConfig
+	if err := yaml.Unmarshal(wClean.Body.Bytes(), &clean); err != nil {
+		t.Fatalf("clean unmarshal: %v", err)
+	}
+	if len(clean.Flows) != 1 || clean.Flows[0].ID != "place-order-flow" {
+		t.Errorf("clean export should keep only the included flow, got %+v",
+			[]string{clean.Flows[0].ID})
+	}
+	if len(clean.Capabilities) != 1 || clean.Capabilities[0].Name != "orders" {
+		t.Errorf("clean export should drop the orphan capability, got %d caps",
+			len(clean.Capabilities))
+	}
+	if len(clean.Skills) != len(cfg.Skills) {
+		t.Errorf("clean export should not touch skills, got %d (want %d)",
+			len(clean.Skills), len(cfg.Skills))
+	}
+}
