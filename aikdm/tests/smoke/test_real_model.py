@@ -4,8 +4,11 @@ from pathlib import Path
 import pytest
 import yaml
 from click.testing import CliRunner
+from dotenv import find_dotenv, load_dotenv
 
 from aikdm.cli import main
+
+load_dotenv(find_dotenv(usecwd=True))
 
 CONFIG = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coffee_shop.yaml"
 
@@ -15,7 +18,7 @@ CONFIG = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coffee_sh
     reason="smoke test gated by RUN_SMOKE=1 and ANTHROPIC_API_KEY",
 )
 def test_real_model_generates_valid_bundle():
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     result = runner.invoke(main, ["generate-agent", "--config", str(CONFIG)])
     assert result.exit_code == 0, result.stderr
 
