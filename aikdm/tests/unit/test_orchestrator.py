@@ -3,10 +3,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from aikdm import agents, models, orchestrator
-from aikdm.config import load_settings
 from aikdm.loader import load_flow_map_config, load_prompt_schema
 from aikdm.progress import ProgressEmitter
 from aikdm.schemas import (
@@ -18,20 +15,6 @@ from aikdm.schemas import (
 
 CONFIG_PATH = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coffee_shop.yaml"
 SCHEMA_PATH = Path(__file__).parents[2] / "schemas" / "prompt-v1.yaml"
-
-
-@pytest.fixture(autouse=True)
-def _clear_settings_cache():
-    load_settings.cache_clear()
-    yield
-    load_settings.cache_clear()
-
-
-def _stub_settings(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-xxx")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    return load_settings()
 
 
 def _patch_agents(monkeypatch):
@@ -58,8 +41,7 @@ def _fake_bundle(main: str = "<role>r</role>") -> Bundle:
     )
 
 
-def test_orchestrator_early_exits_when_first_critic_returns_no_issues(monkeypatch):
-    settings = _stub_settings(monkeypatch)
+def test_orchestrator_early_exits_when_first_critic_returns_no_issues(monkeypatch, settings):
     monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
     _patch_agents(monkeypatch)
 
@@ -90,8 +72,7 @@ def test_orchestrator_early_exits_when_first_critic_returns_no_issues(monkeypatc
     assert bundle.metadata.critic_notes == []
 
 
-def test_orchestrator_runs_full_max_rounds_when_issues_persist(monkeypatch):
-    settings = _stub_settings(monkeypatch)
+def test_orchestrator_runs_full_max_rounds_when_issues_persist(monkeypatch, settings):
     monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
     _patch_agents(monkeypatch)
 
@@ -125,8 +106,7 @@ def test_orchestrator_runs_full_max_rounds_when_issues_persist(monkeypatch):
     assert bundle.metadata.tokens_used.critic_out == 10
 
 
-def test_orchestrator_emits_lifecycle_events(monkeypatch):
-    settings = _stub_settings(monkeypatch)
+def test_orchestrator_emits_lifecycle_events(monkeypatch, settings):
     monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
     _patch_agents(monkeypatch)
     monkeypatch.setattr(agents, "call_generator", lambda *a, **kw: agents.GeneratorResult(
@@ -156,10 +136,9 @@ def test_orchestrator_emits_lifecycle_events(monkeypatch):
     assert done_payload["total_tokens"] == 40  # 10+20+5+5
 
 
-def test_orchestrator_populates_external_actions(monkeypatch):
+def test_orchestrator_populates_external_actions(monkeypatch, settings):
     """External skills in input must surface as bundle.external_actions
     even if the generator forgets — the orchestrator owns this invariant."""
-    settings = _stub_settings(monkeypatch)
     monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
     _patch_agents(monkeypatch)
 
@@ -186,8 +165,7 @@ def test_orchestrator_populates_external_actions(monkeypatch):
     )
 
 
-def test_orchestrator_drops_skill_prompts_for_external_skills(monkeypatch):
-    settings = _stub_settings(monkeypatch)
+def test_orchestrator_drops_skill_prompts_for_external_skills(monkeypatch, settings):
     monkeypatch.setattr(models, "build_model", lambda role, settings: MagicMock())
     _patch_agents(monkeypatch)
 
