@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     model_generator: str = "claude-opus-4-7"
     model_critic: str = "claude-opus-4-7"
     critic_rounds: int = Field(default=2, ge=1)
+    parallelism: int = Field(default=10, ge=1)
     log_level: str = "info"
 
 

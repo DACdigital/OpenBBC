@@ -8,8 +8,8 @@ metadata:
   tokens_used:
     generator_in: 14
     generator_out: 26
-    critic_in: 5
-    critic_out: 5
+    critic_in: 3
+    critic_out: 3
 main_prompt: <role>r</role>
 skills:
   - name: place_order

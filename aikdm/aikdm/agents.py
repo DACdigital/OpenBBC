@@ -1,17 +1,17 @@
 """ADK agent factories + thin callers.
 
-aikdm generates a bundle in *three* call kinds, not one:
-- main_prompt agent emits only the main_prompt XML body
-- skill_prompt agent emits one skill's prompt XML body per call (one call per
-  internal skill in the input)
-- critic agent reads the *assembled* bundle and reports issues
+aikdm uses four agent kinds, each with a focused system prompt:
+- main_prompt agent emits the main_prompt XML body
+- main_prompt_critic agent critiques a main_prompt in isolation
+- skill_prompt agent emits a single skill's XML body
+- skill_prompt_critic agent critiques a single skill prompt in isolation
 
-The orchestrator depends on `call_main_prompt`, `call_skill_prompt`, and
-`call_critic`. Tests substitute the `_run_*` helpers to avoid LLM traffic.
+Each unit (main_prompt, every internal skill) runs its OWN atomic gen→crit
+loop. There is no bundle-wide critic — cross-unit consistency comes from
+construction (orchestrator iterates over input skills) and shared inputs
+(same flow_map_config + prompt schema).
 
-Generating skills in separate calls (one per skill) lets the orchestrator
-enforce coverage by construction: it loops over the input's internal skills
-and demands one response each. The LLM cannot silently drop a skill.
+Tests substitute the `_run_*` helpers to avoid LLM traffic.
 """
 
 from __future__ import annotations
@@ -26,21 +26,18 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types as _genai_types
 from pydantic import BaseModel
 
-from aikdm.schemas import Bundle, Capability, FlowMapConfig, Skill
+from aikdm.schemas import Capability, FlowMapConfig, Skill
 
 MAIN_PROMPT_SYSTEM_PROMPT = """\
 You are aikdm's main-prompt generator.
 
-You receive a <flow_map_config> describing a planned AI agent: business
-domain, scope, what it should and should not do, capabilities (backend
-endpoints), skills (the agent's high-level abilities), and flows
-(business processes), plus a <main_prompt_scaffold> showing the section
-layout you must produce.
+You receive a <flow_map_config> describing a planned AI agent and a
+<main_prompt_scaffold> showing the section layout you must produce.
 
-Your only output is the main system prompt as a single XML string in
-the `main_prompt` field. You DO NOT emit skills here — each skill is
-generated in a separate call. The main prompt references skills by name
-through <skills_index>; you do not write their prompt bodies.
+Your only output is the main system prompt as a single XML string.
+You do NOT emit skills — each skill is generated separately. The main
+prompt references skills by name through <skills_index>; you do not
+write their prompt bodies.
 
 Rules:
 - Fill every LLM-synthesized tag with your own prose. Never copy the
@@ -67,8 +64,7 @@ You are aikdm's skill-prompt generator.
 
 You receive a <flow_map_config>, a single <target_skill> (the skill you
 must write the prompt for), and a <skill_scaffold> showing the section
-layout. You produce the prompt body for THIS ONE skill, returning only
-its name and prompt XML.
+layout. You produce the prompt body for THIS ONE skill.
 
 Rules:
 - Fill every LLM-synthesized tag in the scaffold with your own prose.
@@ -76,8 +72,9 @@ Rules:
   from the input. Never include HTTP method, path, or parameters.
 - The <examples> block shows 2-3 execution-level examples for this skill
   (a representative turn inside the skill, not skill routing).
-- The skill body's tone and guardrails must be consistent with the
-  main_prompt scaffold (provided alongside for context).
+- Tone and guardrails must be consistent with the wider agent context
+  (flow_map_config.scope, business_domain, should_not_do). You do not
+  see the main_prompt body — rely on shared input for consistency.
 - All XML tags use Anthropic-style.
 
 Return structured output: {"name": "<skill-id>", "prompt": "<role>...</role>...<examples/>"}
@@ -85,23 +82,46 @@ Return structured output: {"name": "<skill-id>", "prompt": "<role>...</role>...<
 `name` must equal the target_skill's id verbatim.
 """
 
-CRITIC_SYSTEM_PROMPT = """\
-You are aikdm's prompt critic. You receive the original <flow_map_config>
-and the assembled <bundle> (main_prompt + skills + external_actions).
-Your job: identify substantive issues that would mislead an agent at
-runtime.
+MAIN_PROMPT_CRITIC_SYSTEM_PROMPT = """\
+You are aikdm's main-prompt critic. You receive the original
+<flow_map_config> and a <main_prompt> body. Your job: identify
+substantive issues IN THE MAIN PROMPT that would mislead an agent.
 
 Focus on:
-- Inconsistency between main_prompt guardrails and skill-level guardrails.
-- Skills that contradict should_not_do.
-- A skill prompt that references a tool/capability not present in the input.
-- External actions promised as internal skills (or vice-versa).
-- Examples that imply forbidden behavior.
-- The main_prompt's <workflows> section: steps referencing skills that
-  don't exist, missing pre/postconditions, missing <usage> sub-block.
+- Wizard fields copied verbatim instead of refined into instructions.
+- Missing <workflows> sub-block <usage>, or workflows omitted that have
+  included=true, or workflows included that are included=false.
+- Workflow steps referencing skill names not present in the input.
+- <skills_index> entries not matching the input's internal skills (missing
+  any, listing extra, name mismatches).
+- <external_actions> not matching the input's external skills.
+- Examples that imply forbidden behavior (contradicting should_not_do).
+- Internal contradictions between sections (e.g. should_do allowing a
+  thing the guardrails forbid).
 
-Do NOT flag stylistic preferences, alternative phrasings, or things
-already correct. Return an empty list if the bundle is acceptable.
+Do NOT critique skill prompt bodies — you don't see them. Do NOT flag
+stylistic preferences. Return an empty list if the main_prompt is acceptable.
+
+Return structured output: {"issues": [string, ...]}.
+"""
+
+SKILL_PROMPT_CRITIC_SYSTEM_PROMPT = """\
+You are aikdm's skill-prompt critic. You receive the original
+<flow_map_config>, a single <target_skill>, and a <skill_prompt> body.
+Your job: identify substantive issues IN THIS SKILL PROMPT that would
+mislead an agent.
+
+Focus on:
+- The <resources> block: mcp_server name must equal target_skill.proposed_tool.
+  No HTTP method/path/parameters allowed.
+- <examples> being routing examples rather than execution examples.
+- Skill body contradicting the input scope or should_not_do.
+- Missing or empty required sections.
+- Tone/guardrails clearly inconsistent with the input's business_domain.
+
+Do NOT critique the main_prompt — you don't see it. Do NOT flag
+stylistic preferences. Return an empty list if the skill prompt is
+acceptable.
 
 Return structured output: {"issues": [string, ...]}.
 """
@@ -160,11 +180,20 @@ def build_skill_prompt_agent(model: Any) -> LlmAgent:
     )
 
 
-def build_critic_agent(model: Any) -> LlmAgent:
+def build_main_prompt_critic_agent(model: Any) -> LlmAgent:
     return LlmAgent(
-        name="aikdm_critic",
+        name="aikdm_main_prompt_critic",
         model=model,
-        instruction=CRITIC_SYSTEM_PROMPT,
+        instruction=MAIN_PROMPT_CRITIC_SYSTEM_PROMPT,
+        output_schema=_CriticOutput,
+    )
+
+
+def build_skill_prompt_critic_agent(model: Any) -> LlmAgent:
+    return LlmAgent(
+        name="aikdm_skill_prompt_critic",
+        model=model,
+        instruction=SKILL_PROMPT_CRITIC_SYSTEM_PROMPT,
         output_schema=_CriticOutput,
     )
 
@@ -174,8 +203,6 @@ def _esc(s: str) -> str:
 
 
 def _render_config_as_xml(config: FlowMapConfig) -> str:
-    """Render the FlowMapConfig as a single <flow_map_config> XML block.
-    Used as the user message body for every agent call."""
     lines: list[str] = ["<flow_map_config>"]
     lines.append(f"  <name>{_esc(config.name)}</name>")
     lines.append(f"  <business_domain>{_esc(config.business_domain)}</business_domain>")
@@ -238,10 +265,6 @@ def _render_target_skill_as_xml(skill: Skill, capability: Capability | None) -> 
 
 
 def _adk_run_once(*, agent: LlmAgent, user_message_xml: str) -> tuple[str, int, int]:
-    """Invoke the ADK InMemoryRunner synchronously for a single user turn.
-
-    Returns (response_text, tokens_in, tokens_out).
-    """
     runner = InMemoryRunner(agent=agent)
 
     user_id = "aikdm"
@@ -352,7 +375,6 @@ def call_skill_prompt(
     skill: Skill,
     capability: Capability | None,
     scaffold: str,
-    main_prompt_for_context: str,
     *,
     previous_output: str | None = None,
     critic_issues: list[str] | None = None,
@@ -363,9 +385,6 @@ def call_skill_prompt(
         "<skill_scaffold>",
         scaffold,
         "</skill_scaffold>",
-        "<main_prompt_for_context>",
-        main_prompt_for_context,
-        "</main_prompt_for_context>",
     ]
     if previous_output is not None and critic_issues:
         parts.append("<previous_skill_prompt>")
@@ -375,15 +394,34 @@ def call_skill_prompt(
         for issue in critic_issues:
             parts.append(f"  - {issue}")
         parts.append("</critic_issues>")
-        parts.append("Rewrite this skill prompt addressing every issue relevant to it.")
+        parts.append("Rewrite this skill prompt addressing every issue.")
     return _run_skill_prompt(agent=agent, user_message_xml="\n".join(parts))
 
 
-def call_critic(agent: LlmAgent, config: FlowMapConfig, bundle: Bundle) -> CriticResult:
+def call_main_prompt_critic(
+    agent: LlmAgent, config: FlowMapConfig, main_prompt: str
+) -> CriticResult:
     user_message_xml = "\n".join([
         _render_config_as_xml(config),
-        "<bundle>",
-        bundle.model_dump_json(indent=2),
-        "</bundle>",
+        "<main_prompt>",
+        main_prompt,
+        "</main_prompt>",
+    ])
+    return _run_critic(agent=agent, user_message_xml=user_message_xml)
+
+
+def call_skill_prompt_critic(
+    agent: LlmAgent,
+    config: FlowMapConfig,
+    skill: Skill,
+    capability: Capability | None,
+    skill_prompt: str,
+) -> CriticResult:
+    user_message_xml = "\n".join([
+        _render_config_as_xml(config),
+        _render_target_skill_as_xml(skill, capability),
+        "<skill_prompt>",
+        skill_prompt,
+        "</skill_prompt>",
     ])
     return _run_critic(agent=agent, user_message_xml=user_message_xml)

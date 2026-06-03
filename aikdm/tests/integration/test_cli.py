@@ -39,7 +39,10 @@ def stub_llm(mocker, monkeypatch):
     mocker.patch.object(models, "build_model", return_value=mocker.MagicMock())
     mocker.patch.object(agents, "build_main_prompt_agent", return_value=mocker.MagicMock())
     mocker.patch.object(agents, "build_skill_prompt_agent", return_value=mocker.MagicMock())
-    mocker.patch.object(agents, "build_critic_agent", return_value=mocker.MagicMock())
+    mocker.patch.object(agents, "build_main_prompt_critic_agent",
+                        return_value=mocker.MagicMock())
+    mocker.patch.object(agents, "build_skill_prompt_critic_agent",
+                        return_value=mocker.MagicMock())
 
     mocker.patch.object(
         agents, "call_main_prompt",
@@ -48,7 +51,7 @@ def stub_llm(mocker, monkeypatch):
         ),
     )
 
-    def fake_skill(agent, config, skill, capability, scaffold, main_prompt_for_context,
+    def fake_skill(agent, config, skill, capability, scaffold,
                    *, previous_output=None, critic_issues=None):
         return agents.SkillPromptResult(
             skill_name=skill.id, prompt="<role>p</role>",
@@ -57,8 +60,12 @@ def stub_llm(mocker, monkeypatch):
 
     mocker.patch.object(agents, "call_skill_prompt", side_effect=fake_skill)
     mocker.patch.object(
-        agents, "call_critic",
-        return_value=agents.CriticResult(issues=[], tokens_in=5, tokens_out=5),
+        agents, "call_main_prompt_critic",
+        return_value=agents.CriticResult(issues=[], tokens_in=1, tokens_out=1),
+    )
+    mocker.patch.object(
+        agents, "call_skill_prompt_critic",
+        return_value=agents.CriticResult(issues=[], tokens_in=1, tokens_out=1),
     )
 
 
