@@ -1,7 +1,8 @@
 """Pydantic models for aikdm inputs and outputs.
 
-Input mirrors open-bbcd/internal/types/flow_map.go. Adding a field there
-requires adding it here too (and bumping schema_version).
+The input contract mirrors the upstream FlowMapConfig shape that
+producers emit. Adding a field upstream requires adding it here too
+(and bumping schema_version).
 """
 
 from __future__ import annotations
@@ -78,8 +79,8 @@ class Flow(BaseModel):
 
 
 class FlowMapConfig(BaseModel):
-    """Input contract: full agent configuration produced by open-bbcd's
-    configurator. Mirrors the Go struct in open-bbcd/internal/types/flow_map.go.
+    """Input contract: full agent configuration emitted by an upstream
+    producer. Field shape and semantics are versioned via schema_version.
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -736,11 +736,11 @@ func filterAgentConfig(cfg types.FlowMapConfig) types.FlowMapConfig {
 
 // blockScalarIndentRE matches block-scalar headers with an explicit indent
 // indicator (e.g. `|4`, `>+2`). yaml.v3 emits these conservatively for
-// multi-line strings, but PyYAML (and some other readers) interpret the
-// indicator differently from yaml.v3's emission, breaking round-trip with
-// downstream tools (aikdm). Stripping the digits leaves the bare indicator
-// (`|`, `|+`, `|-`, `>`, etc.); auto-indent detection on the reader side
-// then handles the content correctly.
+// multi-line strings, but other YAML readers interpret the indicator
+// differently from yaml.v3's emission, breaking interoperability.
+// Stripping the digits leaves the bare indicator (`|`, `|+`, `|-`, `>`,
+// etc.); auto-indent detection on the reader side handles the content
+// correctly across implementations.
 var blockScalarIndentRE = regexp.MustCompile(`(?m)([|>])([+-]?)\d+(\s*)$`)
 
 // normalizeBlockScalarHeaders strips explicit indent indicators from block

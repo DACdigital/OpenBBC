@@ -685,8 +685,9 @@ func TestConfigurator_DownloadYAML_RoundTrip(t *testing.T) {
 // TestConfigurator_DownloadYAML_NoBlockScalarIndentIndicators verifies the
 // emitted YAML never carries explicit indent indicators (`|4`, `>+2`) on
 // block scalar headers. These are valid YAML 1.2 but interoperability-hostile
-// — PyYAML interprets them differently from yaml.v3's emission, breaking
-// aikdm. The handler strips the digits so downstream readers see bare `|`.
+// — other YAML readers can interpret them differently from yaml.v3's
+// emission. The handler strips the digits so any downstream reader sees
+// a bare `|`.
 func TestConfigurator_DownloadYAML_NoBlockScalarIndentIndicators(t *testing.T) {
 	cfg := sampleConfig()
 	// Multi-line prose with internally-indented content is exactly what
