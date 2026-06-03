@@ -43,33 +43,6 @@ def test_load_flow_map_config_schema_violation(tmp_path):
         load_flow_map_config(bad)
 
 
-def test_load_flow_map_config_tolerates_go_yaml_v3_indent_indicators(tmp_path):
-    """Go's yaml.v3 emits `prose_md: |4` whose interpretation diverges from
-    PyYAML's. The loader must normalize these before parsing."""
-    yaml_path = tmp_path / "go-style.yaml"
-    yaml_path.write_text(
-        "schema_version: 1\n"
-        "name: go-style\n"
-        "source:\n"
-        "  compiler_schema_version: 1\n"
-        "  generated_from_sha: abc\n"
-        "  app_name: demo\n"
-        "capabilities:\n"
-        "  - name: orders\n"
-        "    summary: ''\n"
-        "    prose_md: |4\n"
-        "        # Orders\n"
-        "\n"
-        "        <!-- AGENT id=\"overview\" -->\n"
-        "        Body line\n"
-        "        <!-- /AGENT -->\n"
-    )
-    cfg = load_flow_map_config(yaml_path)
-    assert cfg.capabilities[0].name == "orders"
-    assert "# Orders" in cfg.capabilities[0].prose_md
-    assert "<!-- AGENT" in cfg.capabilities[0].prose_md
-
-
 def test_load_prompt_schema_loads_v1():
     schema = load_prompt_schema(PROMPT_SCHEMA)
     assert schema.version == "v1"

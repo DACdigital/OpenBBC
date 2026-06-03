@@ -3,7 +3,6 @@ to exit code 2 by the CLI."""
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -12,18 +11,6 @@ import yaml
 from pydantic import ValidationError
 
 from aikdm.schemas import Bundle, FlowMapConfig, PromptSchema
-
-# Go's yaml.v3 emits block scalar headers with explicit indent indicators like
-# `|4` whose interpretation differs from PyYAML's, breaking parsing. PyYAML
-# auto-detects content indent perfectly when no indicator is given, so we
-# strip the digits before parsing. Matches `|4`, `|+4`, `|-4`, `>4`, etc. at
-# end of line (block scalar header position).
-_BLOCK_SCALAR_INDENT_RE = re.compile(r"([|>])([+-]?)\d+(\s*)$", re.MULTILINE)
-
-
-def _normalize_block_scalar_headers(text: str) -> str:
-    """Strip explicit indent indicators from block scalar headers."""
-    return _BLOCK_SCALAR_INDENT_RE.sub(r"\1\2\3", text)
 
 
 class InputIOError(Exception):
@@ -42,7 +29,7 @@ def _read_yaml(path: Path) -> Any:
     except OSError as e:
         raise InputIOError(f"cannot read {path}: {e}") from e
     try:
-        return yaml.safe_load(_normalize_block_scalar_headers(text))
+        return yaml.safe_load(text)
     except yaml.YAMLError as e:
         raise InputValidationError(f"malformed YAML in {path}: {e}") from e
 

@@ -683,12 +683,29 @@ func (h *ConfiguratorHandler) DownloadYAML(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	yamlBytes = normalizeBlockScalarHeaders(yamlBytes)
 
 	filename := sanitiseFilename(agent.Name) + ".yaml"
 	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(yamlBytes)
+}
+
+// blockScalarIndentRE matches block-scalar headers with an explicit indent
+// indicator (e.g. `|4`, `>+2`). yaml.v3 emits these conservatively for
+// multi-line strings, but PyYAML (and some other readers) interpret the
+// indicator differently from yaml.v3's emission, breaking round-trip with
+// downstream tools (aikdm). Stripping the digits leaves the bare indicator
+// (`|`, `|+`, `|-`, `>`, etc.); auto-indent detection on the reader side
+// then handles the content correctly.
+var blockScalarIndentRE = regexp.MustCompile(`(?m)([|>])([+-]?)\d+(\s*)$`)
+
+// normalizeBlockScalarHeaders strips explicit indent indicators from block
+// scalar headers (`|N` -> `|`). Safe because the digit-less form is what
+// every YAML parser auto-detects from the content's actual indentation.
+func normalizeBlockScalarHeaders(b []byte) []byte {
+	return blockScalarIndentRE.ReplaceAll(b, []byte("$1$2$3"))
 }
 
 // sanitiseFilename produces a safe basename for the Content-Disposition header.

@@ -681,3 +681,60 @@ func TestConfigurator_DownloadYAML_RoundTrip(t *testing.T) {
 		t.Errorf("Capabilities len mismatch: %d vs %d", len(decoded.Capabilities), len(cfg.Capabilities))
 	}
 }
+
+// TestConfigurator_DownloadYAML_NoBlockScalarIndentIndicators verifies the
+// emitted YAML never carries explicit indent indicators (`|4`, `>+2`) on
+// block scalar headers. These are valid YAML 1.2 but interoperability-hostile
+// — PyYAML interprets them differently from yaml.v3's emission, breaking
+// aikdm. The handler strips the digits so downstream readers see bare `|`.
+func TestConfigurator_DownloadYAML_NoBlockScalarIndentIndicators(t *testing.T) {
+	cfg := sampleConfig()
+	// Multi-line prose with internally-indented content is exactly what
+	// triggers yaml.v3 to emit `|N` as a safety measure.
+	cfg.Capabilities[0].ProseMD = "# Orders\n\n<!-- AGENT id=\"overview\" -->\n" +
+		"    indented body line\n" +
+		"<!-- /AGENT -->\n\n## Concepts\n\n    nested code block\n"
+	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.DownloadYAML(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	body := w.Body.String()
+	// No header line should end with a digit after | or >. Scan every line.
+	for i, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimRight(line, " ")
+		// We only care about block-scalar headers: a line where the value
+		// portion is exactly | or > (optionally with +/- and a digit).
+		if !strings.Contains(trimmed, ": |") && !strings.Contains(trimmed, ": >") {
+			continue
+		}
+		// Find the indicator and check for a trailing digit.
+		for _, marker := range []string{": |", ": >"} {
+			idx := strings.Index(trimmed, marker)
+			if idx < 0 {
+				continue
+			}
+			tail := trimmed[idx+len(marker):]
+			// Skip optional + or - chomping indicator.
+			tail = strings.TrimLeft(tail, "+-")
+			if len(tail) > 0 && tail[0] >= '0' && tail[0] <= '9' {
+				t.Errorf("line %d carries explicit indent indicator: %q", i+1, line)
+			}
+		}
+	}
+
+	// And the round-trip still works.
+	var decoded types.FlowMapConfig
+	if err := yaml.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+	if decoded.Capabilities[0].ProseMD != cfg.Capabilities[0].ProseMD {
+		t.Errorf("ProseMD content not preserved through normalization+roundtrip")
+	}
+}
