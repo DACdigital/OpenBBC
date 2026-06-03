@@ -12,15 +12,11 @@ metadata:
     critic_out: 5
 main_prompt: <role>r</role>
 skills:
-  - id: place_order
-    role: write
-    user_phrases:
-      - x
+  - name: place_order
+    description: Guide the user through choosing items and placing an order.
     prompt: <role>p</role>
-  - id: check_rewards
-    role: read
-    user_phrases:
-      - y
+  - name: check_rewards
+    description: Tell the user their rewards balance.
     prompt: <role>p</role>
 external_actions:
   - skill_id: file_complaint

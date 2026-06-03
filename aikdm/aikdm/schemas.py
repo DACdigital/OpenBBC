@@ -122,11 +122,13 @@ class BundleMetadata(BaseModel):
 
 
 class SkillPrompt(BaseModel):
+    """Anthropic-style skill: name + description (dispatcher-visible) + prompt
+    (loaded when the dispatcher selects this skill)."""
+
     model_config = ConfigDict(extra="forbid")
 
-    id: str
-    role: Literal["read", "write"]
-    user_phrases: list[str] = Field(default_factory=list)
+    name: str
+    description: str
     prompt: str
 
 

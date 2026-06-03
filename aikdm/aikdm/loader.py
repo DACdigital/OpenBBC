@@ -21,6 +21,21 @@ class InputValidationError(Exception):
     """YAML malformed or schema violation."""
 
 
+def _str_representer(dumper: yaml.SafeDumper, data: str) -> yaml.ScalarNode:
+    """Use block scalar style (`|`) for multi-line strings so XML prompts
+    render as readable YAML rather than double-quoted lines with \\n escapes."""
+    if "\n" in data:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+class _BlockStyleDumper(yaml.SafeDumper):
+    pass
+
+
+_BlockStyleDumper.add_representer(str, _str_representer)
+
+
 def _read_yaml(path: Path) -> Any:
     try:
         text = path.read_text()
@@ -52,8 +67,9 @@ def load_prompt_schema(path: Path | str) -> PromptSchema:
 
 def write_bundle(bundle: Bundle, output: Path | str | None) -> None:
     """Serialize bundle to YAML, to `output` path or stdout if None."""
-    payload = yaml.safe_dump(
+    payload = yaml.dump(
         bundle.model_dump(mode="json"),
+        Dumper=_BlockStyleDumper,
         sort_keys=False,
         default_flow_style=False,
         allow_unicode=True,

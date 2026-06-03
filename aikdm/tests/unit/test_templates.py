@@ -35,11 +35,11 @@ def test_main_scaffold_contains_external_actions_for_external_skills():
     assert "support portal" in external
 
 
-def test_skill_scaffold_renders_user_phrases_and_proposed_tool():
+def test_skill_scaffold_renders_proposed_tool_as_mcp_server_name():
     cfg = load_flow_map_config(CONFIG)
     skill = next(s for s in cfg.skills if s.id == "place_order")
     capability = next(c for c in cfg.capabilities if c.name == skill.capability_ref)
     xml = render_skill_prompt_scaffold(skill, capability)
-    assert "<user_phrases>" in xml
-    assert "I want a latte" in xml
     assert 'name="place_order"' in xml  # MCP server name == proposed_tool
+    assert "<role>" in xml
+    assert "<resources>" in xml

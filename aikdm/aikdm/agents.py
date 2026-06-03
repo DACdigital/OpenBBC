@@ -35,13 +35,18 @@ LLM-synthesized sections, keep wizard-copied sections verbatim, never
 remove tags from the scaffolds.
 
 Constraints:
-- One skill prompt per internal (external=false) skill.
+- One skill entry per internal (external=false) skill.
+- Each skill entry has: name (matches the input skill id), description
+  (one-line summary used by the dispatcher to decide when to load this
+  skill — Anthropic skill style), and prompt (the XML body loaded when
+  the dispatcher selects this skill).
 - External (external=true) skills appear ONLY in main_prompt's
   <external_actions> and the bundle's external_actions list — never as
-  a skill prompt.
-- Each skill's <resources> block names a single mcp_server with
-  name=proposed_tool. Never include HTTP method, path, or parameters.
-- All tags wrap content in Anthropic-style XML.
+  a skill entry.
+- Each skill's <resources> block in its prompt names a single mcp_server
+  with name=proposed_tool. Never include HTTP method, path, or parameters.
+- All XML tags inside main_prompt and skill prompt bodies use
+  Anthropic-style XML.
 
 Return structured output matching the Bundle schema.
 """

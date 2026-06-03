@@ -33,10 +33,12 @@ def _fake_bundle(main: str = "<role>r</role>") -> Bundle:
         ),
         main_prompt=main,
         skills=[
-            SkillPrompt(id="place_order", role="write",
-                        user_phrases=["I want a latte"], prompt="<role>p</role>"),
-            SkillPrompt(id="check_rewards", role="read",
-                        user_phrases=["check my rewards"], prompt="<role>p</role>"),
+            SkillPrompt(name="place_order",
+                        description="Guide the user through choosing items and placing an order.",
+                        prompt="<role>p</role>"),
+            SkillPrompt(name="check_rewards",
+                        description="Tell the user their rewards balance.",
+                        prompt="<role>p</role>"),
         ],
     )
 
@@ -146,8 +148,9 @@ def test_orchestrator_drops_skill_prompts_for_external_skills(mocker, settings):
     _patch_adk(mocker)
     # Generator hallucinates a skill prompt for an external skill.
     hallucinated = _fake_bundle()
-    hallucinated.skills.append(SkillPrompt(id="file_complaint", role="write",
-                                           user_phrases=[], prompt="<role>bad</role>"))
+    hallucinated.skills.append(SkillPrompt(name="file_complaint",
+                                           description="should not be here",
+                                           prompt="<role>bad</role>"))
     mocker.patch.object(agents, "call_generator", return_value=_generator_result(hallucinated))
     mocker.patch.object(agents, "call_critic", return_value=_critic_result())
 
@@ -158,5 +161,5 @@ def test_orchestrator_drops_skill_prompts_for_external_skills(mocker, settings):
         ProgressEmitter(io.StringIO()),
     )
 
-    ids = {s.id for s in bundle.skills}
-    assert "file_complaint" not in ids
+    names = {s.name for s in bundle.skills}
+    assert "file_complaint" not in names

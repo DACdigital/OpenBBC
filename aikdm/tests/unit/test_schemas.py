@@ -84,8 +84,8 @@ def test_bundle_round_trips_through_model_validate():
         ),
         main_prompt="<role>x</role>",
         skills=[
-            SkillPrompt(id="place_order", role="write",
-                        user_phrases=["a"], prompt="<role>...</role>")
+            SkillPrompt(name="place_order", description="Place an order",
+                        prompt="<role>...</role>")
         ],
         external_actions=[
             ExternalAction(skill_id="file_complaint",

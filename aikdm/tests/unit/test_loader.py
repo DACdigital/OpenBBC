@@ -89,3 +89,25 @@ def test_write_bundle_to_stdout(capsys):
 
     out = capsys.readouterr().out
     assert "main_prompt:" in out
+
+
+def test_write_bundle_uses_block_style_for_multiline_strings(tmp_path):
+    """Multi-line prompt content should serialise with `|` (block literal),
+    not quoted single-line with \\n escapes — readable YAML."""
+    bundle = Bundle(
+        metadata=BundleMetadata(
+            config_schema_version=1, prompt_schema_version="v1",
+            model_generator="m", model_critic="m",
+            generated_at="t", critic_rounds_run=0, critic_notes=[],
+            tokens_used=TokenUsage(),
+        ),
+        main_prompt="<role>line one</role>\n<scope>line two</scope>",
+    )
+    out = tmp_path / "bundle.yaml"
+    write_bundle(bundle, out)
+
+    text = out.read_text()
+    # Block style: "main_prompt: |" on its own line, content follows indented.
+    assert "main_prompt: |" in text
+    # And NOT escape-encoded inline.
+    assert "\\n" not in text

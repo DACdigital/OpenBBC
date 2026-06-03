@@ -106,10 +106,21 @@ def _finalize_bundle(
     """Apply orchestrator-owned invariants:
     - external_actions must reflect every external skill in input (one entry each)
     - skills[] must not contain any external skill IDs
+    - each skill's description is sourced from the input config verbatim
+      (the configurator is the source of truth; the LLM doesn't get to wordsmith)
     - metadata reflects actual run stats
     """
     external_ids = {s.id for s in external_skills}
-    pruned_skills: list[SkillPrompt] = [s for s in bundle.skills if s.id not in external_ids]
+    descriptions_by_id = {s.id: s.description for s in config.skills}
+    pruned_skills: list[SkillPrompt] = [
+        SkillPrompt(
+            name=s.name,
+            description=descriptions_by_id.get(s.name, s.description),
+            prompt=s.prompt,
+        )
+        for s in bundle.skills
+        if s.name not in external_ids
+    ]
     external_actions = [
         ExternalAction(skill_id=s.id, external_note=s.external_note) for s in external_skills
     ]

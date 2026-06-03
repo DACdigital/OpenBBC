@@ -55,10 +55,12 @@ def stub_llm(mocker, monkeypatch):
         ),
         main_prompt="<role>r</role>",
         skills=[
-            SkillPrompt(id="place_order", role="write",
-                        user_phrases=["x"], prompt="<role>p</role>"),
-            SkillPrompt(id="check_rewards", role="read",
-                        user_phrases=["y"], prompt="<role>p</role>"),
+            SkillPrompt(name="place_order",
+                        description="Guide the user through choosing items and placing an order.",
+                        prompt="<role>p</role>"),
+            SkillPrompt(name="check_rewards",
+                        description="Tell the user their rewards balance.",
+                        prompt="<role>p</role>"),
         ],
     )
     mocker.patch.object(

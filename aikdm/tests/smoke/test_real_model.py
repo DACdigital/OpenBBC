@@ -26,4 +26,5 @@ def test_real_model_generates_valid_bundle():
     assert bundle["metadata"]["prompt_schema_version"] == "v1"
     assert bundle["main_prompt"].strip().startswith("<")
     assert len(bundle["skills"]) >= 1
+    assert all({"name", "description", "prompt"} <= set(s) for s in bundle["skills"])
     assert all("<resources>" in s["prompt"] for s in bundle["skills"])

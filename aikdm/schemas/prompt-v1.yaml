@@ -58,10 +58,6 @@ skill_prompt:
     source: llm_synthesized
     required: true
     guidance: "Concrete outcome the skill must achieve."
-  - name: user_phrases
-    tag: user_phrases
-    source: config_derived
-    required: true
   - name: resources
     tag: resources
     source: llm_synthesized
