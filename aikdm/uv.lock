@@ -13,6 +13,7 @@ dependencies = [
     { name = "litellm" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
 
@@ -20,7 +21,6 @@ dependencies = [
 dev = [
     { name = "pytest" },
     { name = "pytest-snapshot" },
-    { name = "python-dotenv" },
     { name = "ruff" },
 ]
 
@@ -34,7 +34,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
     { name = "pytest-snapshot", marker = "extra == 'dev'", specifier = ">=0.9" },
-    { name = "python-dotenv", marker = "extra == 'dev'", specifier = ">=1.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
 ]

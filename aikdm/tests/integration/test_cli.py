@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -12,6 +13,13 @@ from aikdm.schemas import (
     SkillPrompt,
     TokenUsage,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_from_dotenv(tmp_path, monkeypatch):
+    """The CLI auto-loads .env from cwd-and-above. Chdir to tmp_path so
+    no real .env on the developer's machine pollutes tests."""
+    monkeypatch.chdir(tmp_path)
 
 CONFIG = Path(__file__).parents[1] / "fixtures" / "flow_map_config" / "coffee_shop.yaml"
 

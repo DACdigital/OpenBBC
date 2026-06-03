@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import click
+from dotenv import find_dotenv, load_dotenv
 
 from aikdm import orchestrator
 from aikdm.config import ConfigError, Settings
@@ -48,6 +49,7 @@ def main() -> None:
               required=False, default=None,
               help="Output bundle path (omit for stdout).")
 def generate_agent(config_path: Path, output_path: Path | None) -> None:
+    load_dotenv(find_dotenv(usecwd=True))
     try:
         settings = Settings.load()
     except ConfigError as e:

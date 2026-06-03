@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 from typing import Self
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class ConfigError(Exception):
@@ -33,7 +34,13 @@ def _provider_of(model: str) -> str:
     raise ConfigError(f"cannot infer provider from model name: {model!r}")
 
 
-class Settings(BaseModel):
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="AIKDM_",
+        extra="ignore",
+        protected_namespaces=(),
+    )
+
     model_generator: str = "claude-opus-4-7"
     model_critic: str = "claude-opus-4-7"
     critic_rounds: int = Field(default=2, ge=1)
@@ -42,13 +49,8 @@ class Settings(BaseModel):
     @classmethod
     def load(cls) -> Self:
         try:
-            s = cls(
-                model_generator=os.environ.get("AIKDM_MODEL_GENERATOR", "claude-opus-4-7"),
-                model_critic=os.environ.get("AIKDM_MODEL_CRITIC", "claude-opus-4-7"),
-                critic_rounds=int(os.environ.get("AIKDM_CRITIC_ROUNDS", "2")),
-                log_level=os.environ.get("AIKDM_LOG_LEVEL", "info"),
-            )
-        except (ValidationError, ValueError) as e:
+            s = cls()
+        except ValidationError as e:
             raise ConfigError(str(e)) from e
 
         providers = {_provider_of(s.model_generator), _provider_of(s.model_critic)}
