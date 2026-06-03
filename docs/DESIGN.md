@@ -31,7 +31,7 @@ You want to expose your backend capabilities as an app. The challenge is the **a
                         │                          │                          │
                         ▼                          ▼                          ▼
                ┌─────────────┐            ┌─────────────┐            ┌─────────────┐
-               │ CC Discovery│            │  aicademy   │            │  PostgreSQL │
+               │ CC Discovery│            │   aikdm     │            │  PostgreSQL │
                │   Skill     │            │   (CLI)     │            │  (Storage)  │
                │             │            │             │            │             │
                │ scans repo  │            │ agent gen   │            │ agents      │
@@ -50,7 +50,7 @@ You want to expose your backend capabilities as an app. The challenge is the **a
 | **AI Agent** | Runs inside open-bbcd; processes requests and calls backend tools via MCP |
 | **Backend (MCP wrapped)** | Client's existing backend exposed via MCP protocol |
 | **CC Discovery Skill** | Claude Code skill that scans client repo to extract business logic/domain/processes |
-| **aicademy** | Python CLI for agent generation, training, evaluation (async jobs) |
+| **aikdm** | Python CLI for agent generation (alpha agent prompts today; Geval and training planned). |
 | **PostgreSQL** | Storage for agents, datasets, versions, and evaluation scores |
 
 ## Flow
@@ -69,10 +69,10 @@ You want to expose your backend capabilities as an app. The challenge is the **a
 0. Structured profile from Phase I is input
 1. Domain experts configure via **open-bbcd backoffice**
 2. Define scope of agent + guardrails (what agent cannot do)
-3. **aicademy** generates alpha agent with structured prompt
+3. **aikdm** generates alpha agent with structured prompt (structured prompt = main prompt + per-skill prompts + external actions; see aikdm/README.md)
 4. Alpha agent stored as **version 1** in PostgreSQL
 
-**Owner:** aicademy CLI + open-bbcd
+**Owner:** aikdm CLI + open-bbcd
 
 ### Phase III: Feedback & Dataset Creation
 
@@ -101,11 +101,11 @@ Dataset Structure:
 
 ### Phase IV: Evaluation & Iteration
 
-1. Run **Geval** in aicademy on (agent version, dataset version) pair
+1. Run **Geval** in aikdm on (agent version, dataset version) pair
 2. Store score in PostgreSQL via open-bbcd
 3. Iterate: refine agent → new version → evaluate again
 
-**Owner:** aicademy (Geval) + open-bbcd (storage)
+**Owner:** aikdm (Geval) + open-bbcd (storage)
 
 **Human-in-the-loop:**
 ```
@@ -143,8 +143,8 @@ Epochs: N RL iterations
            │                      │
            ▼                      │
     ┌─────────────┐               │
-    │ aicademy    │───────────────┘
-    │ (Geval)     │    feedback loop
+    │   aikdm     │───────────────┘
+    │   (Geval)   │    feedback loop
     └──────┬──────┘
            │
            ▼
@@ -216,7 +216,7 @@ The wrapped MCP backend remains external/proprietary to users.
 | Component | Technology |
 |-----------|------------|
 | open-bbcd | Golang |
-| aicademy | Python (click, Google ADK) |
+| aikdm | Python (click, Google ADK + LiteLLM, Pydantic) |
 | Storage | PostgreSQL |
 | Protocol (client) | AG-UI |
 | Protocol (backend) | MCP (SSE/Streamable HTTP) |
@@ -227,3 +227,4 @@ The wrapped MCP backend remains external/proprietary to users.
 - Multi-agent system
 - Multiple concurrent deployments
 - Resource/integration registration in CC Discovery
+- Geval / training (planned for a future aikdm spec)

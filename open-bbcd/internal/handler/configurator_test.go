@@ -681,3 +681,132 @@ func TestConfigurator_DownloadYAML_RoundTrip(t *testing.T) {
 		t.Errorf("Capabilities len mismatch: %d vs %d", len(decoded.Capabilities), len(cfg.Capabilities))
 	}
 }
+
+// TestConfigurator_DownloadYAML_NoBlockScalarIndentIndicators verifies the
+// emitted YAML never carries explicit indent indicators (`|4`, `>+2`) on
+// block scalar headers. These are valid YAML 1.2 but interoperability-hostile
+// — other YAML readers can interpret them differently from yaml.v3's
+// emission. The handler strips the digits so any downstream reader sees
+// a bare `|`.
+func TestConfigurator_DownloadYAML_NoBlockScalarIndentIndicators(t *testing.T) {
+	cfg := sampleConfig()
+	// Multi-line prose with internally-indented content is exactly what
+	// triggers yaml.v3 to emit `|N` as a safety measure.
+	cfg.Capabilities[0].ProseMD = "# Orders\n\n<!-- AGENT id=\"overview\" -->\n" +
+		"    indented body line\n" +
+		"<!-- /AGENT -->\n\n## Concepts\n\n    nested code block\n"
+	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.DownloadYAML(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	body := w.Body.String()
+	// No header line should end with a digit after | or >. Scan every line.
+	for i, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimRight(line, " ")
+		// We only care about block-scalar headers: a line where the value
+		// portion is exactly | or > (optionally with +/- and a digit).
+		if !strings.Contains(trimmed, ": |") && !strings.Contains(trimmed, ": >") {
+			continue
+		}
+		// Find the indicator and check for a trailing digit.
+		for _, marker := range []string{": |", ": >"} {
+			idx := strings.Index(trimmed, marker)
+			if idx < 0 {
+				continue
+			}
+			tail := trimmed[idx+len(marker):]
+			// Skip optional + or - chomping indicator.
+			tail = strings.TrimLeft(tail, "+-")
+			if len(tail) > 0 && tail[0] >= '0' && tail[0] <= '9' {
+				t.Errorf("line %d carries explicit indent indicator: %q", i+1, line)
+			}
+		}
+	}
+
+	// And the round-trip still works.
+	var decoded types.FlowMapConfig
+	if err := yaml.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+	if decoded.Capabilities[0].ProseMD != cfg.Capabilities[0].ProseMD {
+		t.Errorf("ProseMD content not preserved through normalization+roundtrip")
+	}
+}
+
+// TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans verifies the
+// ?clean=true query parameter strips flows with included=false and
+// capabilities not referenced by any remaining skill. The full export
+// (default) keeps everything for audit and round-trip.
+func TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans(t *testing.T) {
+	cfg := types.FlowMapConfig{
+		SchemaVersion: 1, Name: "test-agent",
+		Source: types.FlowMapSource{AppName: "sample"},
+		Capabilities: []types.Capability{
+			{Name: "orders", Summary: "used"},
+			{Name: "settings", Summary: "orphan — no skill references it"},
+		},
+		Skills: []types.Skill{{
+			ID: "place-order", Origin: "discovered", Name: "Place order",
+			Role: "write", CapabilityRef: "orders", ProposedTool: "orders.create",
+		}},
+		Flows: []types.Flow{
+			{
+				ID: "place-order-flow", Origin: "discovered", Included: true,
+				Name:     "Place order flow",
+				Workflow: types.Workflow{Mermaid: "flowchart TD\n  a-->b"},
+			},
+			{
+				ID: "abandoned-flow", Origin: "discovered", Included: false,
+				Name:     "Abandoned",
+				Workflow: types.Workflow{Mermaid: "flowchart TD\n  x-->y"},
+			},
+		},
+	}
+	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	// Default (no clean=true): full content preserved.
+	reqFull := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
+	reqFull.SetPathValue("id", "abc")
+	wFull := httptest.NewRecorder()
+	h.DownloadYAML(wFull, reqFull)
+	var full types.FlowMapConfig
+	if err := yaml.Unmarshal(wFull.Body.Bytes(), &full); err != nil {
+		t.Fatalf("full unmarshal: %v", err)
+	}
+	if len(full.Flows) != 2 {
+		t.Errorf("full export should keep both flows, got %d", len(full.Flows))
+	}
+	if len(full.Capabilities) != 2 {
+		t.Errorf("full export should keep both capabilities, got %d", len(full.Capabilities))
+	}
+
+	// ?clean=true: filtered.
+	reqClean := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml?clean=true", nil)
+	reqClean.SetPathValue("id", "abc")
+	wClean := httptest.NewRecorder()
+	h.DownloadYAML(wClean, reqClean)
+	var clean types.FlowMapConfig
+	if err := yaml.Unmarshal(wClean.Body.Bytes(), &clean); err != nil {
+		t.Fatalf("clean unmarshal: %v", err)
+	}
+	if len(clean.Flows) != 1 || clean.Flows[0].ID != "place-order-flow" {
+		t.Errorf("clean export should keep only the included flow, got %+v",
+			[]string{clean.Flows[0].ID})
+	}
+	if len(clean.Capabilities) != 1 || clean.Capabilities[0].Name != "orders" {
+		t.Errorf("clean export should drop the orphan capability, got %d caps",
+			len(clean.Capabilities))
+	}
+	if len(clean.Skills) != len(cfg.Skills) {
+		t.Errorf("clean export should not touch skills, got %d (want %d)",
+			len(clean.Skills), len(cfg.Skills))
+	}
+}

@@ -1,0 +1,41 @@
+<role><!-- LLM: who the agent is, derived from business_domain + name --></role>
+<scope><!-- LLM: refine flow_map_config.scope. Faithful to intent, polished, never verbatim --></scope>
+<personality><!-- LLM: tone fitting the business_domain. 1-3 sentences --></personality>
+<business_domain><!-- LLM: refine flow_map_config.business_domain into grounding context --></business_domain>
+<should_do><!-- LLM: refine flow_map_config.should_do into concrete instructions --></should_do>
+<should_not_do><!-- LLM: refine flow_map_config.should_not_do into concrete prohibitions --></should_not_do>
+<guardrails><!-- LLM: expanded restatement of should_not_do + inferred safety rules --></guardrails>
+<workflows>
+  <usage>Use the workflows below to identify which business process the user is engaged in.
+  When you recognise the user's request maps to a workflow:
+  (1) infer the current state from conversation history,
+  (2) verify preconditions before acting,
+  (3) proactively suggest the next step(s) the workflow prescribes,
+  (4) name postconditions and side-effects when reaching them.
+  Knowing where you are in a workflow is what lets you guide the user forward
+  rather than just react to one message at a time.</usage>
+  <!-- LLM: emit the <usage> block above verbatim, then synthesize each included flow:
+       name, intent, preconditions, ordered steps (referencing skill names),
+       postconditions, side-effects. -->
+{%- for f in included_flows %}
+  <!-- flow available: {{ f.id }} - {{ f.name }} (intent: {{ f.intent }}) -->
+{%- endfor %}
+{%- if not included_flows %}
+  <!-- no included flows in input -->
+{%- endif %}
+</workflows>
+<examples><!-- LLM: 2-3 user interactions showing tone, scope-awareness, and
+                    skill-routing (user says X -> agent picks skill Y, or declines,
+                    or redirects). Distinct from per-skill examples. --></examples>
+<skills_index>
+{%- for s in internal_skills %}
+  - {{ s.id }} — {{ s.description }}
+{%- endfor %}
+</skills_index>
+{%- if external_skills %}
+<external_actions>
+{%- for s in external_skills %}
+  - {{ s.id }}: {{ s.external_note }}
+{%- endfor %}
+</external_actions>
+{%- endif %}

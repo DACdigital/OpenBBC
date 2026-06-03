@@ -1,0 +1,85 @@
+version: v1
+
+main_prompt:
+  - name: role
+    tag: role
+    source: llm_synthesized
+    required: true
+    guidance: "One-sentence statement of who the agent is, derived from business_domain and name."
+  - name: scope
+    tag: scope
+    source: llm_synthesized
+    required: true
+    guidance: "Refine the user's `scope` wizard input. Stay faithful to intent; polish phrasing for clarity. Never copy verbatim."
+  - name: personality
+    tag: personality
+    source: llm_synthesized
+    required: true
+    guidance: "Tone and style appropriate for business_domain. 1-3 sentences."
+  - name: business_domain
+    tag: business_domain
+    source: llm_synthesized
+    required: true
+    guidance: "Refine the user's `business_domain` wizard input into the context the agent needs to make decisions. Add grounding the LLM-at-runtime would benefit from."
+  - name: should_do
+    tag: should_do
+    source: llm_synthesized
+    required: true
+    guidance: "Refine the user's `should_do` wizard input into clear, actionable instructions. Concrete and specific."
+  - name: should_not_do
+    tag: should_not_do
+    source: llm_synthesized
+    required: true
+    guidance: "Refine the user's `should_not_do` wizard input into clear prohibitions. Concrete and specific."
+  - name: guardrails
+    tag: guardrails
+    source: llm_synthesized
+    required: true
+    guidance: "Expanded restatement of should_not_do plus inferred safety rules grounded in the business_domain."
+  - name: workflows
+    tag: workflows
+    source: llm_synthesized
+    required: true
+    guidance: "Two parts. (1) A literal <usage> sub-block at the top instructing the runtime agent to use workflows to identify its position in a process and proactively suggest next steps based on workflow shape + state — copy this block verbatim from the scaffold. (2) From flows with included=true, write a structured description of each business process so the agent can locate itself at runtime (e.g. 'I am at step 2 of place-order'). For each workflow: name, intent, preconditions, ordered steps (referencing skill names where applicable), postconditions, side-effects. Exclude flows with included=false. If no flows are included, emit the <usage> block followed by no workflow children."
+  - name: examples
+    tag: examples
+    source: llm_synthesized
+    required: true
+    guidance: "2-3 short example user interactions showing the agent's tone, scope-awareness, and skill-routing behaviour (user says X -> agent picks skill Y / declines / redirects). Distinct from per-skill examples — these are about routing, not execution."
+  - name: skills_index
+    tag: skills_index
+    source: config_derived
+    required: true
+    guidance: "Bulleted index of internal skills with one-line description."
+  - name: external_actions
+    tag: external_actions
+    source: config_derived
+    required: false
+    guidance: "Bulleted list of external skills the agent must redirect the user to."
+
+skill_prompt:
+  - name: role
+    tag: role
+    source: llm_synthesized
+    required: true
+    guidance: "Statement of what this skill is responsible for."
+  - name: objective
+    tag: objective
+    source: llm_synthesized
+    required: true
+    guidance: "Concrete outcome the skill must achieve."
+  - name: resources
+    tag: resources
+    source: llm_synthesized
+    required: true
+    guidance: "Describe the linked capability as an MCP server. Name = proposed_tool. 1-2 sentence purpose statement. No HTTP detail."
+  - name: guardrails
+    tag: guardrails
+    source: llm_synthesized
+    required: true
+    guidance: "Skill-specific guardrails consistent with main prompt guardrails."
+  - name: examples
+    tag: examples
+    source: llm_synthesized
+    required: true
+    guidance: "2-3 short example exchanges showing correct skill execution."
