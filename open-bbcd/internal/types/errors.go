@@ -19,8 +19,9 @@ var (
 	ErrInvalidSkillRole        = errors.New("skill role must be 'read' or 'write'")
 	ErrCustomSkillNameRequired = errors.New("custom skill name is required")
 
-	ErrInvalidAgentStatus = errors.New("agent is not in a valid status for this transition")
-	ErrBundleAlreadySet   = errors.New("agent: bundle already set")
+	ErrInvalidAgentStatus  = errors.New("agent is not in a valid status for this transition")
+	ErrBundleAlreadySet    = errors.New("agent: bundle already set")
+	ErrAgentNotRunnable    = errors.New("agent: no bundle generated")
 
 	ErrSessionAgentMismatch = errors.New("session: belongs to different agent")
 )
