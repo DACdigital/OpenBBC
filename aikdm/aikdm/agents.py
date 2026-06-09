@@ -68,7 +68,7 @@ layout. You produce the prompt body for THIS ONE skill.
 
 Rules:
 - Fill every LLM-synthesized tag in the scaffold with your own prose.
-- The <resources> block names a single mcp_server with name=proposed_tool
+- The <capabilities> block names a single mcp_server with name=proposed_tool
   from the input. Never include HTTP method, path, or parameters.
 - The <examples> block shows 2-3 execution-level examples for this skill
   (a representative turn inside the skill, not skill routing).
@@ -112,7 +112,7 @@ Your job: identify substantive issues IN THIS SKILL PROMPT that would
 mislead an agent.
 
 Focus on:
-- The <resources> block: mcp_server name must equal target_skill.proposed_tool.
+- The <capabilities> block: mcp_server name must equal target_skill.proposed_tool.
   No HTTP method/path/parameters allowed.
 - <examples> being routing examples rather than execution examples.
 - Skill body contradicting the input scope or should_not_do.
