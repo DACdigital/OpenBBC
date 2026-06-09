@@ -20,4 +20,5 @@ var (
 	ErrCustomSkillNameRequired = errors.New("custom skill name is required")
 
 	ErrInvalidAgentStatus = errors.New("agent is not in a valid status for this transition")
+	ErrBundleAlreadySet   = errors.New("agent: bundle already set")
 )

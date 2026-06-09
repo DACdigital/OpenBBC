@@ -19,7 +19,7 @@ type Agent struct {
 	ID                string          `json:"id"`
 	Name              string          `json:"name"`
 	Description       string          `json:"description,omitempty"`
-	Prompt            string          `json:"prompt"`
+	Bundle            json.RawMessage `json:"bundle,omitempty"`
 	Status            string          `json:"status"`
 	ParentVersionID   *string         `json:"parent_version_id,omitempty"`
 	FlowMapConfig     json.RawMessage `json:"flow_map_config,omitempty"`
@@ -44,7 +44,6 @@ type AgentChain struct {
 type CreateAgentOpts struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	Prompt      string `json:"prompt"`
 }
 
 type CreateAgentFromWizardOpts struct {
@@ -59,13 +58,9 @@ func NewAgent(opts CreateAgentOpts) (*Agent, error) {
 	if opts.Name == "" {
 		return nil, ErrNameRequired
 	}
-	if opts.Prompt == "" {
-		return nil, ErrPromptRequired
-	}
 	return &Agent{
 		Name:        opts.Name,
 		Description: opts.Description,
-		Prompt:      opts.Prompt,
 		Status:      string(AgentStatusDraft),
 	}, nil
 }

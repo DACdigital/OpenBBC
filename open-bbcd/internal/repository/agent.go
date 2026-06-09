@@ -26,6 +26,7 @@ type scanner interface {
 func scanAgent(s scanner) (*types.Agent, error) {
 	agent := &types.Agent{}
 	var description sql.NullString
+	var bundle []byte
 	var parentVersionID sql.NullString
 	var flowMapConfig []byte
 	var flowMapParseError sql.NullString
@@ -34,7 +35,7 @@ func scanAgent(s scanner) (*types.Agent, error) {
 		&agent.ID,
 		&agent.Name,
 		&description,
-		&agent.Prompt,
+		&bundle,
 		&agent.Status,
 		&parentVersionID,
 		&flowMapConfig,
@@ -47,6 +48,7 @@ func scanAgent(s scanner) (*types.Agent, error) {
 		return nil, err
 	}
 	agent.Description = description.String
+	agent.Bundle = bundle
 	if parentVersionID.Valid {
 		agent.ParentVersionID = &parentVersionID.String
 	}
@@ -62,7 +64,7 @@ func scanAgent(s scanner) (*types.Agent, error) {
 
 // agentColumns lists the SELECT/RETURNING columns. Must stay in sync with
 // scanAgent's positional scan destinations.
-const agentColumns = `id, name, description, prompt, status, parent_version_id, flow_map_config, flow_map_parse_error, discovery_file_path, created_at, updated_at`
+const agentColumns = `id, name, description, bundle, status, parent_version_id, flow_map_config, flow_map_parse_error, discovery_file_path, created_at, updated_at`
 
 func (r *AgentRepository) Create(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error) {
 	agent, err := types.NewAgent(opts)
@@ -70,10 +72,10 @@ func (r *AgentRepository) Create(ctx context.Context, opts types.CreateAgentOpts
 		return nil, err
 	}
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO agents (name, description, prompt)
-		VALUES ($1, $2, $3)
+		INSERT INTO agents (name, description)
+		VALUES ($1, $2)
 		RETURNING `+agentColumns,
-		agent.Name, agent.Description, agent.Prompt,
+		agent.Name, agent.Description,
 	)
 	return scanAgent(row)
 }
@@ -193,8 +195,8 @@ func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.Creat
 		return nil, errors.New("repository: no database connection")
 	}
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO agents (id, name, prompt, status, flow_map_config, flow_map_parse_error, discovery_file_path)
-		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, '', 'INITIALIZING', $3, NULLIF($4, ''), NULLIF($5, ''))
+		INSERT INTO agents (id, name, status, flow_map_config, flow_map_parse_error, discovery_file_path)
+		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, 'INITIALIZING', $3, NULLIF($4, ''), NULLIF($5, ''))
 		RETURNING `+agentColumns,
 		opts.ID, opts.Name, []byte(opts.FlowMapConfig), opts.FlowMapParseError, opts.DiscoveryFilePath,
 	)
@@ -235,6 +237,54 @@ func (r *AgentRepository) UpdateFlowMapConfig(ctx context.Context, agentID strin
 	}
 	if n == 0 {
 		return types.ErrNotFound
+	}
+	return nil
+}
+
+// SetBundle writes the agent's bundle JSONB. Without force, refuses to
+// overwrite a non-NULL bundle (write-once enforcement). With force, overrides.
+// Returns ErrNotFound if the agent doesn't exist; ErrBundleAlreadySet if a
+// bundle exists and force is false.
+func (r *AgentRepository) SetBundle(ctx context.Context, agentID string, bundle []byte, force bool) error {
+	if force {
+		res, err := r.db.ExecContext(ctx, `
+			UPDATE agents SET bundle = $2, updated_at = now() WHERE id = $1
+		`, agentID, bundle)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return types.ErrNotFound
+		}
+		return nil
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE agents SET bundle = $2, updated_at = now()
+		WHERE id = $1 AND bundle IS NULL
+	`, agentID, bundle)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// Either not found, or bundle is already set.
+		var exists bool
+		if err := r.db.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM agents WHERE id = $1)`, agentID,
+		).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return types.ErrNotFound
+		}
+		return types.ErrBundleAlreadySet
 	}
 	return nil
 }
