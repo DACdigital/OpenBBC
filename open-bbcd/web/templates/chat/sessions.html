@@ -1,1 +1,34 @@
-{{define "content"}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <a href="/agents/ui?agent={{.AgentName | urlEncode}}" class="back-link">← {{.AgentName}}</a>
+    <h1>Sessions</h1>
+  </div>
+  <form method="post" action="/agents/{{.AgentID}}/chat/sessions" class="inline">
+    <button type="submit" class="btn-primary">+ New Session</button>
+  </form>
+</div>
+
+{{if .Sessions}}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th class="col-date">Created</th>
+      <th class="col-date">Last activity</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Sessions}}
+    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agents/{{$.AgentID}}/chat/{{.ID}}">
+      <td><a href="/agents/{{$.AgentID}}/chat/{{.ID}}">{{if .Title}}{{.Title}}{{else}}Untitled session{{end}}</a></td>
+      <td class="col-date">{{.CreatedAt.Format "Jan 2, 2006 15:04"}}</td>
+      <td class="col-date">{{.UpdatedAt.Format "Jan 2, 2006 15:04"}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty-state">No sessions yet — start a new one.</p>
+{{end}}
+{{end}}
