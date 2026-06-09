@@ -27,6 +27,7 @@ from aikdm.config import Settings
 from aikdm.progress import ProgressEmitter
 from aikdm.schemas import (
     Bundle,
+    BundleCapability,
     BundleMetadata,
     ExternalAction,
     FlowMapConfig,
@@ -288,6 +289,15 @@ def _assemble_bundle(
         [main_outcome.rounds_run] + [o.rounds_run for o in skill_outcomes.values()]
     )
 
+    capabilities = [
+        BundleCapability(
+            name=c.name,
+            description=c.summary or "",
+            proposed_tool=c.name,
+        )
+        for c in config.capabilities
+    ]
+
     metadata = BundleMetadata(
         config_schema_version=config.schema_version,
         prompt_schema_version=prompt_schema.version,
@@ -306,6 +316,7 @@ def _assemble_bundle(
     return Bundle(
         metadata=metadata,
         main_prompt=main_outcome.body,
+        capabilities=capabilities,
         skills=skills,
         external_actions=external_actions,
     )

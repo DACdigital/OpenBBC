@@ -11,7 +11,13 @@ metadata:
     critic_in: 3
     critic_out: 3
 main_prompt: <role>r</role>
-capabilities: []
+capabilities:
+  - name: order_create
+    description: Create a new coffee order.
+    proposed_tool: order_create
+  - name: rewards_lookup
+    description: Look up rewards balance for a customer.
+    proposed_tool: rewards_lookup
 skills:
   - name: place_order
     description: Guide the user through choosing items and placing an order.
