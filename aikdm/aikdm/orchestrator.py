@@ -289,6 +289,10 @@ def _assemble_bundle(
         [main_outcome.rounds_run] + [o.rounds_run for o in skill_outcomes.values()]
     )
 
+    # proposed_tool falls back to c.name because the input Capability has no
+    # proposed_tool field today. tools[] (HTTP endpoint metadata) is intentionally
+    # omitted from the bundle — the future real-MCP wiring ticket reads it from
+    # the input config, not the bundle. See run-agent-design.md §8.2.
     capabilities = [
         BundleCapability(
             name=c.name,
