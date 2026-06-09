@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -8,6 +9,19 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 )
+
+// mustParseEvent constructs a MessageStreamEventUnion from a raw JSON string.
+// The SDK uses unexported raw-JSON fields internally, so the only clean way to
+// build a synthetic event for unit-testing is to unmarshal from JSON — matching
+// what the real SSE decoder does.
+func mustParseEvent(t *testing.T, raw string) sdk.MessageStreamEventUnion {
+	t.Helper()
+	var ev sdk.MessageStreamEventUnion
+	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+		t.Fatalf("mustParseEvent: %v", err)
+	}
+	return ev
+}
 
 func TestLLM_Name(t *testing.T) {
 	l := New(config.AnthropicConfig{})
@@ -143,5 +157,189 @@ func TestBuildMessageNewParams_ZeroTemperatureOmitted(t *testing.T) {
 	params := buildMessageNewParams(req)
 	if params.Temperature.Valid() {
 		t.Fatalf("zero Temperature should be omitted, but it was set to %v", params.Temperature.Value)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chunkTranslator tests
+//
+// SDK stream-event structs use unexported raw-JSON fields internally (all
+// As* accessors call apijson.UnmarshalRoot on the stored raw bytes). The only
+// clean way to construct synthetic events is to json.Unmarshal from a JSON
+// string — which is exactly what mustParseEvent does above. This matches what
+// the real SSE decoder does, so the tests are faithful.
+// ---------------------------------------------------------------------------
+
+func TestTranslate_MessageStart_InputTokens(t *testing.T) {
+	raw := `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-6","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":42,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`
+	tr := &chunkTranslator{}
+	events := tr.translate(mustParseEvent(t, raw))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	ue, ok := events[0].(llm.UsageEvent)
+	if !ok {
+		t.Fatalf("expected UsageEvent, got %T", events[0])
+	}
+	if ue.InputTokens != 42 {
+		t.Fatalf("InputTokens = %d, want 42", ue.InputTokens)
+	}
+}
+
+func TestTranslate_ContentBlockStart_ToolUse_EmitsToolUseStartEvent(t *testing.T) {
+	raw := `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_abc","name":"search","input":{}}}`
+	tr := &chunkTranslator{}
+	events := tr.translate(mustParseEvent(t, raw))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	se, ok := events[0].(llm.ToolUseStartEvent)
+	if !ok {
+		t.Fatalf("expected ToolUseStartEvent, got %T", events[0])
+	}
+	if se.ID != "tu_abc" {
+		t.Fatalf("ID = %q, want tu_abc", se.ID)
+	}
+	if se.Name != "search" {
+		t.Fatalf("Name = %q, want search", se.Name)
+	}
+	// Index→ID should now be tracked.
+	if tr.toolUseIDAtIndex[0] != "tu_abc" {
+		t.Fatalf("toolUseIDAtIndex[0] = %q, want tu_abc", tr.toolUseIDAtIndex[0])
+	}
+}
+
+func TestTranslate_ContentBlockStart_Text_NoEvent(t *testing.T) {
+	raw := `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
+	tr := &chunkTranslator{}
+	events := tr.translate(mustParseEvent(t, raw))
+	if len(events) != 0 {
+		t.Fatalf("expected no events for text content_block_start, got %d", len(events))
+	}
+}
+
+func TestTranslate_ContentBlockDelta_Text(t *testing.T) {
+	raw := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`
+	tr := &chunkTranslator{}
+	events := tr.translate(mustParseEvent(t, raw))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	te, ok := events[0].(llm.TextDeltaEvent)
+	if !ok {
+		t.Fatalf("expected TextDeltaEvent, got %T", events[0])
+	}
+	if te.Delta != "hello" {
+		t.Fatalf("Delta = %q, want hello", te.Delta)
+	}
+}
+
+func TestTranslate_ContentBlockDelta_InputJSON_CarriesToolUseID(t *testing.T) {
+	// First register the tool_use block at index 1.
+	tr := &chunkTranslator{}
+	startRaw := `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu_xyz","name":"lookup","input":{}}}`
+	tr.translate(mustParseEvent(t, startRaw))
+
+	// Now send an input_json_delta at the same index.
+	deltaRaw := `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"q\":"}}`
+	events := tr.translate(mustParseEvent(t, deltaRaw))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	ie, ok := events[0].(llm.ToolUseInputEvent)
+	if !ok {
+		t.Fatalf("expected ToolUseInputEvent, got %T", events[0])
+	}
+	if ie.ID != "tu_xyz" {
+		t.Fatalf("ID = %q, want tu_xyz", ie.ID)
+	}
+	if ie.JSONFragment != `{"q":` {
+		t.Fatalf("JSONFragment = %q, want {\"q\":", ie.JSONFragment)
+	}
+}
+
+func TestTranslate_ContentBlockStop_ToolUse_EmitsToolUseEndEvent(t *testing.T) {
+	tr := &chunkTranslator{}
+	// Register the block at index 2.
+	startRaw := `{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"tu_end","name":"finish","input":{}}}`
+	tr.translate(mustParseEvent(t, startRaw))
+
+	stopRaw := `{"type":"content_block_stop","index":2}`
+	events := tr.translate(mustParseEvent(t, stopRaw))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	ee, ok := events[0].(llm.ToolUseEndEvent)
+	if !ok {
+		t.Fatalf("expected ToolUseEndEvent, got %T", events[0])
+	}
+	if ee.ID != "tu_end" {
+		t.Fatalf("ID = %q, want tu_end", ee.ID)
+	}
+	// Index should be cleaned up.
+	if _, ok := tr.toolUseIDAtIndex[2]; ok {
+		t.Fatalf("toolUseIDAtIndex[2] should be removed after ContentBlockStop")
+	}
+}
+
+func TestTranslate_ContentBlockStop_Text_NoEvent(t *testing.T) {
+	// A text block stop (no entry in toolUseIDAtIndex) should produce no events.
+	tr := &chunkTranslator{}
+	stopRaw := `{"type":"content_block_stop","index":0}`
+	events := tr.translate(mustParseEvent(t, stopRaw))
+	if len(events) != 0 {
+		t.Fatalf("expected no events for text content_block_stop, got %d", len(events))
+	}
+}
+
+func TestTranslate_MessageDelta_StopReasonAndOutputTokens(t *testing.T) {
+	raw := `{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":17}}`
+	tr := &chunkTranslator{}
+	events := tr.translate(mustParseEvent(t, raw))
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events (MessageStopEvent + UsageEvent), got %d", len(events))
+	}
+	se, ok := events[0].(llm.MessageStopEvent)
+	if !ok {
+		t.Fatalf("expected MessageStopEvent first, got %T", events[0])
+	}
+	if se.StopReason != "tool_use" {
+		t.Fatalf("StopReason = %q, want tool_use", se.StopReason)
+	}
+	ue, ok := events[1].(llm.UsageEvent)
+	if !ok {
+		t.Fatalf("expected UsageEvent second, got %T", events[1])
+	}
+	if ue.OutputTokens != 17 {
+		t.Fatalf("OutputTokens = %d, want 17", ue.OutputTokens)
+	}
+}
+
+func TestTranslate_MessageStop_NoEvent(t *testing.T) {
+	raw := `{"type":"message_stop"}`
+	tr := &chunkTranslator{}
+	events := tr.translate(mustParseEvent(t, raw))
+	if len(events) != 0 {
+		t.Fatalf("expected no events for message_stop, got %d", len(events))
+	}
+}
+
+func TestLLM_Generate_NilClient(t *testing.T) {
+	// A zero-APIKey LLM should yield exactly one error and then stop.
+	l := New(config.AnthropicConfig{})
+	var gotErr error
+	var eventCount int
+	for ev, err := range l.Generate(nil, llm.Request{}) {
+		_ = ev
+		if err != nil {
+			gotErr = err
+		}
+		eventCount++
+	}
+	if gotErr == nil {
+		t.Fatalf("expected an error from nil-client LLM, got none")
+	}
+	if eventCount != 1 {
+		t.Fatalf("expected exactly 1 yield (the error), got %d", eventCount)
 	}
 }

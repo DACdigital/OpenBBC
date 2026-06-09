@@ -40,8 +40,9 @@ func New(cfg config.AnthropicConfig) *LLM {
 // Name implements llm.LLM.
 func (l *LLM) Name() string { return "anthropic" }
 
-// Generate streams events for one turn. Stubs for convertMessage / convertTool /
-// translateChunk are filled in by subsequent tasks (B11, B12).
+// Generate streams events for one turn. Opens an SSE stream via
+// Messages.NewStreaming and normalises each chunk to the internal Event
+// taxonomy using chunkTranslator. Cancellation is propagated via ctx.
 func (l *LLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event, error] {
 	return func(yield func(llm.Event, error) bool) {
 		if l.client == nil {
@@ -49,12 +50,101 @@ func (l *LLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event
 			return
 		}
 		params := buildMessageNewParams(req)
-		_ = params
-		// Streaming loop intentionally not implemented yet — B12 fills it in.
-		// For now, emit a single MessageStopEvent so the iterator terminates
-		// cleanly if anyone tries to use this stub.
-		yield(llm.MessageStopEvent{StopReason: "stub"}, nil)
+		stream := l.client.Messages.NewStreaming(ctx, params)
+		t := &chunkTranslator{}
+		for stream.Next() {
+			chunk := stream.Current()
+			for _, ev := range t.translate(chunk) {
+				if !yield(ev, nil) {
+					return
+				}
+			}
+		}
+		if err := stream.Err(); err != nil {
+			yield(nil, err)
+		}
 	}
+}
+
+// chunkTranslator maps SDK stream events to internal llm.Events. It holds
+// per-stream state: a mapping from content-block index to tool-use ID so that
+// InputJSONDelta events (which carry only an index) can be attributed to the
+// correct tool-use call.
+type chunkTranslator struct {
+	toolUseIDAtIndex map[int64]string
+}
+
+// translate maps one SDK MessageStreamEventUnion to zero or more internal Events.
+// Returns nil for control events that carry no semantic content.
+func (t *chunkTranslator) translate(chunk sdk.MessageStreamEventUnion) []llm.Event {
+	if t.toolUseIDAtIndex == nil {
+		t.toolUseIDAtIndex = map[int64]string{}
+	}
+	switch v := chunk.AsAny().(type) {
+	case sdk.MessageStartEvent:
+		// Input token count arrives in the opening preamble.
+		if v.Message.Usage.InputTokens > 0 {
+			return []llm.Event{
+				llm.UsageEvent{InputTokens: int(v.Message.Usage.InputTokens)},
+			}
+		}
+		return nil
+
+	case sdk.ContentBlockStartEvent:
+		// If the block is a tool_use, record the mapping index→ID and emit
+		// ToolUseStartEvent. Text blocks don't need tracking.
+		switch b := v.ContentBlock.AsAny().(type) {
+		case sdk.ToolUseBlock:
+			t.toolUseIDAtIndex[v.Index] = b.ID
+			return []llm.Event{
+				llm.ToolUseStartEvent{ID: b.ID, Name: b.Name},
+			}
+		}
+		return nil
+
+	case sdk.ContentBlockDeltaEvent:
+		switch d := v.Delta.AsAny().(type) {
+		case sdk.TextDelta:
+			return []llm.Event{llm.TextDeltaEvent{Delta: d.Text}}
+		case sdk.InputJSONDelta:
+			// Attribute this fragment to the tool-use block that opened at
+			// the same index in ContentBlockStartEvent.
+			id := t.toolUseIDAtIndex[v.Index]
+			return []llm.Event{llm.ToolUseInputEvent{
+				ID:           id,
+				JSONFragment: d.PartialJSON,
+			}}
+		}
+		return nil
+
+	case sdk.ContentBlockStopEvent:
+		// If this block was a tool_use, emit ToolUseEndEvent and clean up.
+		if id, ok := t.toolUseIDAtIndex[v.Index]; ok {
+			delete(t.toolUseIDAtIndex, v.Index)
+			return []llm.Event{llm.ToolUseEndEvent{ID: id}}
+		}
+		return nil
+
+	case sdk.MessageDeltaEvent:
+		// StopReason and output token count travel together in MessageDeltaEvent.
+		var events []llm.Event
+		if v.Delta.StopReason != "" {
+			events = append(events, llm.MessageStopEvent{
+				StopReason: string(v.Delta.StopReason),
+			})
+		}
+		if v.Usage.OutputTokens > 0 {
+			events = append(events, llm.UsageEvent{
+				OutputTokens: int(v.Usage.OutputTokens),
+			})
+		}
+		return events
+
+	case sdk.MessageStopEvent:
+		// No-op: stop reason has already been emitted via MessageDeltaEvent.
+		return nil
+	}
+	return nil
 }
 
 // buildMessageNewParams maps llm.Request → SDK MessageNewParams.
