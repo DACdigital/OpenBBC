@@ -154,9 +154,14 @@ func buildMessageNewParams(req llm.Request) sdk.MessageNewParams {
 		Model:     sdk.Model(req.Model),
 		MaxTokens: int64(req.MaxTokens),
 	}
-	// System as a single text block; cache-control marker comes in B13.
+	// System as a single text block with ephemeral cache-control marker (B13).
 	if req.System != "" {
-		params.System = []sdk.TextBlockParam{{Text: req.System}}
+		params.System = []sdk.TextBlockParam{
+			{
+				Text:         req.System,
+				CacheControl: sdk.NewCacheControlEphemeralParam(),
+			},
+		}
 	}
 	// Temperature only if non-zero (zero means "use SDK default").
 	// sdk v1.49.0 uses param.Opt[float64] for optional scalar fields;
@@ -169,6 +174,13 @@ func buildMessageNewParams(req llm.Request) sdk.MessageNewParams {
 	}
 	for _, t := range req.Tools {
 		params.Tools = append(params.Tools, convertTool(t))
+	}
+	// Mark the last tool with ephemeral cache-control. Earlier tools are covered
+	// by the breakpoint on the last one (per Anthropic caching docs).
+	if n := len(params.Tools); n > 0 {
+		if params.Tools[n-1].OfTool != nil {
+			params.Tools[n-1].OfTool.CacheControl = sdk.NewCacheControlEphemeralParam()
+		}
 	}
 	return params
 }

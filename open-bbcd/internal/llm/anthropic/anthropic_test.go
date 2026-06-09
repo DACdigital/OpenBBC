@@ -343,3 +343,93 @@ func TestLLM_Generate_NilClient(t *testing.T) {
 		t.Fatalf("expected exactly 1 yield (the error), got %d", eventCount)
 	}
 }
+
+func TestBuildMessageNewParams_PromptCachingMarkers(t *testing.T) {
+	req := llm.Request{
+		Model:     "claude-sonnet-4-6",
+		MaxTokens: 100,
+		System:    "you are X",
+		Tools: []llm.ToolDef{
+			{Name: "a", Description: "first", InputSchema: []byte(`{"type":"object"}`)},
+			{Name: "b", Description: "last", InputSchema: []byte(`{"type":"object"}`)},
+		},
+	}
+	params := buildMessageNewParams(req)
+
+	// System block must have an ephemeral cache-control marker.
+	if len(params.System) != 1 {
+		t.Fatalf("expected 1 system block, got %d", len(params.System))
+	}
+	if params.System[0].CacheControl.Type != "ephemeral" {
+		t.Fatalf("system block cache_control.type = %q, want ephemeral", params.System[0].CacheControl.Type)
+	}
+
+	// Both tools converted.
+	if len(params.Tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(params.Tools))
+	}
+
+	// First tool should NOT have a cache-control marker.
+	if params.Tools[0].OfTool != nil && params.Tools[0].OfTool.CacheControl.Type == "ephemeral" {
+		t.Fatalf("first tool should not have cache_control marker")
+	}
+
+	// Last tool should have an ephemeral cache-control marker.
+	if params.Tools[1].OfTool == nil {
+		t.Fatalf("last tool OfTool is nil")
+	}
+	if params.Tools[1].OfTool.CacheControl.Type != "ephemeral" {
+		t.Fatalf("last tool cache_control.type = %q, want ephemeral", params.Tools[1].OfTool.CacheControl.Type)
+	}
+}
+
+func TestBuildMessageNewParams_PromptCachingMarkers_EmptyToolList(t *testing.T) {
+	req := llm.Request{
+		Model:     "claude-sonnet-4-6",
+		MaxTokens: 100,
+		System:    "you are X",
+		// No tools.
+	}
+	params := buildMessageNewParams(req)
+
+	// System should still be cached even with no tools.
+	if len(params.System) != 1 {
+		t.Fatalf("expected 1 system block, got %d", len(params.System))
+	}
+	if params.System[0].CacheControl.Type != "ephemeral" {
+		t.Fatalf("system block cache_control.type = %q, want ephemeral", params.System[0].CacheControl.Type)
+	}
+
+	// No tools, no crash.
+	if len(params.Tools) != 0 {
+		t.Fatalf("expected 0 tools, got %d", len(params.Tools))
+	}
+}
+
+func TestBuildMessageNewParams_PromptCachingMarkers_EmptySystem(t *testing.T) {
+	req := llm.Request{
+		Model:     "claude-sonnet-4-6",
+		MaxTokens: 100,
+		// No system.
+		Tools: []llm.ToolDef{
+			{Name: "a", Description: "only", InputSchema: []byte(`{"type":"object"}`)},
+		},
+	}
+	params := buildMessageNewParams(req)
+
+	// No system when empty.
+	if len(params.System) != 0 {
+		t.Fatalf("expected 0 system blocks when System is empty, got %d", len(params.System))
+	}
+
+	// Tool should still be cached.
+	if len(params.Tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(params.Tools))
+	}
+	if params.Tools[0].OfTool == nil {
+		t.Fatalf("tool OfTool is nil")
+	}
+	if params.Tools[0].OfTool.CacheControl.Type != "ephemeral" {
+		t.Fatalf("tool cache_control.type = %q, want ephemeral", params.Tools[0].OfTool.CacheControl.Type)
+	}
+}
