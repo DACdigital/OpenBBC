@@ -226,3 +226,27 @@ async def test_orchestrator_propagates_skill_generation_failure(mocker, settings
             settings,
             ProgressEmitter(io.StringIO()),
         )
+
+
+async def test_orchestrator_passes_capabilities_through_to_bundle(mocker, settings):
+    """Capabilities from FlowMapConfig are passed through to Bundle as BundleCapability items."""
+    _patch_adk(mocker)
+    _patch_main_clean(mocker)
+    _patch_skill_clean(mocker)
+
+    config = load_flow_map_config(CONFIG_PATH)
+    schema = load_prompt_schema(SCHEMA_PATH)
+    assert len(config.capabilities) > 0, "fixture must have capabilities to test pass-through"
+
+    emitter = ProgressEmitter(io.StringIO())
+    bundle = await orchestrator.run_generation(
+        config=config, prompt_schema=schema, settings=settings, progress=emitter,
+    )
+
+    assert len(bundle.capabilities) == len(config.capabilities)
+    for i, c in enumerate(config.capabilities):
+        assert bundle.capabilities[i].name == c.name
+        # FlowMapConfig.Capability uses `summary`; bundle uses `description`.
+        assert bundle.capabilities[i].description == (c.summary or "")
+        # Capability doesn't have proposed_tool; fall back to name.
+        assert bundle.capabilities[i].proposed_tool == c.name

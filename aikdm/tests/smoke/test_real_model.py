@@ -23,8 +23,8 @@ def test_real_model_generates_valid_bundle():
     assert result.exit_code == 0, result.stderr
 
     bundle = yaml.safe_load(result.stdout)
-    assert bundle["metadata"]["prompt_schema_version"] == "v1"
+    assert bundle["metadata"]["prompt_schema_version"] == "v2"
     assert bundle["main_prompt"].strip().startswith("<")
     assert len(bundle["skills"]) >= 1
     assert all({"name", "description", "prompt"} <= set(s) for s in bundle["skills"])
-    assert all("<resources>" in s["prompt"] for s in bundle["skills"])
+    assert all("<capabilities>" in s["prompt"] for s in bundle["skills"])

@@ -61,4 +61,4 @@ def test_skill_scaffold_renders_proposed_tool_as_mcp_server_name():
     xml = render_skill_prompt_scaffold(skill, capability)
     assert 'name="place_order"' in xml  # MCP server name == proposed_tool
     assert "<role>" in xml
-    assert "<resources>" in xml
+    assert "<capabilities>" in xml

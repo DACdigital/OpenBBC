@@ -140,11 +140,22 @@ class ExternalAction(BaseModel):
     external_note: str
 
 
+class BundleCapability(BaseModel):
+    """Capability passed through from FlowMapConfig.capabilities at bundle generation time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str
+    proposed_tool: str
+
+
 class Bundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metadata: BundleMetadata
     main_prompt: str
+    capabilities: list[BundleCapability] = Field(default_factory=list)
     skills: list[SkillPrompt] = Field(default_factory=list)
     external_actions: list[ExternalAction] = Field(default_factory=list)
 

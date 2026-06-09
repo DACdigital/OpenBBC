@@ -22,7 +22,7 @@ ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
     --output /path/to/bundle.yaml
 ```
 
-Output is YAML with `metadata`, `main_prompt`, `skills[]`, and `external_actions[]`. Omit `--output` to stream to stdout. Progress events go to stderr as NDJSON.
+Output is YAML with `metadata`, `main_prompt`, `capabilities[]`, `skills[]`, and `external_actions[]`. Omit `--output` to stream to stdout. Progress events go to stderr as NDJSON.
 
 ## Environment variables
 
