@@ -5,11 +5,13 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"iter"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -55,8 +57,7 @@ func (l *LLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event
 	}
 }
 
-// buildMessageNewParams maps llm.Request → SDK MessageNewParams (basic fields
-// only). Per-block message conversion and tool conversion arrive in B11.
+// buildMessageNewParams maps llm.Request → SDK MessageNewParams.
 func buildMessageNewParams(req llm.Request) sdk.MessageNewParams {
 	params := sdk.MessageNewParams{
 		// Model is a type alias for string in sdk v1.49.0.
@@ -68,17 +69,76 @@ func buildMessageNewParams(req llm.Request) sdk.MessageNewParams {
 		params.System = []sdk.TextBlockParam{{Text: req.System}}
 	}
 	// Temperature only if non-zero (zero means "use SDK default").
-	// sdk v1.49.0 uses param.Opt[float64] for optional scalar fields.
-	// B11 handles temperature passthrough; skipped here per B10 scope.
+	// sdk v1.49.0 uses param.Opt[float64] for optional scalar fields;
+	// param.NewOpt sets the internal status to "included" (not just Value).
+	if req.Temperature != 0 {
+		params.Temperature = param.NewOpt(req.Temperature)
+	}
+	for _, m := range req.Messages {
+		params.Messages = append(params.Messages, convertMessage(m))
+	}
+	for _, t := range req.Tools {
+		params.Tools = append(params.Tools, convertTool(t))
+	}
 	return params
 }
 
-// convertMessage is a stub filled in by B11.
+// convertMessage maps an llm.Message to the SDK's MessageParam.
+// Anthropic convention: RoleTool messages become user-role messages containing
+// tool_result content blocks.
 func convertMessage(m llm.Message) sdk.MessageParam {
-	return sdk.MessageParam{}
+	var role sdk.MessageParamRole
+	switch m.Role {
+	case llm.RoleAssistant:
+		role = sdk.MessageParamRoleAssistant
+	default:
+		// RoleUser and RoleTool both map to the Anthropic "user" role.
+		role = sdk.MessageParamRoleUser
+	}
+
+	blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.Content))
+	for _, b := range m.Content {
+		switch x := b.(type) {
+		case llm.TextBlock:
+			blocks = append(blocks, sdk.NewTextBlock(x.Text))
+		case llm.ToolUseBlock:
+			// Input is json.RawMessage; unmarshal to any so the SDK serialises
+			// it without double-encoding.
+			var input any
+			if len(x.Input) > 0 {
+				_ = json.Unmarshal(x.Input, &input)
+			}
+			blocks = append(blocks, sdk.NewToolUseBlock(x.ID, input, x.Name))
+		case llm.ToolResultBlock:
+			// Result is json.RawMessage; NewToolResultBlock expects a string
+			// for the content parameter. Convert to string to pass through as-is.
+			blocks = append(blocks, sdk.NewToolResultBlock(x.ToolUseID, string(x.Result), x.IsError))
+		}
+	}
+
+	return sdk.MessageParam{
+		Role:    role,
+		Content: blocks,
+	}
 }
 
-// convertTool is a stub filled in by B11.
+// convertTool maps an llm.ToolDef to the SDK's ToolUnionParam.
 func convertTool(t llm.ToolDef) sdk.ToolUnionParam {
-	return sdk.ToolUnionParam{}
+	schema := parseInputSchema(t.InputSchema)
+	p := sdk.ToolUnionParamOfTool(schema, t.Name)
+	// Description is optional in the SDK (param.Opt[string]); set it when present.
+	if t.Description != "" && p.OfTool != nil {
+		p.OfTool.Description = sdk.String(t.Description)
+	}
+	return p
+}
+
+// parseInputSchema deserialises a raw JSON Schema into ToolInputSchemaParam.
+// param.Override is used so the raw JSON is serialised verbatim — no field
+// mapping is needed and extra schema keywords are preserved.
+func parseInputSchema(raw json.RawMessage) sdk.ToolInputSchemaParam {
+	if len(raw) == 0 {
+		return sdk.ToolInputSchemaParam{}
+	}
+	return param.Override[sdk.ToolInputSchemaParam](raw)
 }
