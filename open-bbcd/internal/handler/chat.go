@@ -187,3 +187,54 @@ type TurnInputBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
 }
+
+// Turn runs one chat turn end-to-end. Decodes the JSON request body,
+// builds the input blocks, opens a Sink from the transport factory,
+// hands off to the orchestrator. Errors after the first SSE byte have
+// already been streamed by the orchestrator as ErrorEvent — they are
+// only logged here.
+func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	sessionID := r.PathValue("session_id")
+
+	var req TurnRequest
+	if err := DecodeJSON(r, &req); err != nil {
+		Error(w, err)
+		return
+	}
+
+	// Build typed input blocks. v1 supports only text inputs; other
+	// block types are silently ignored (no error).
+	input := make([]llm.Block, 0, len(req.Input))
+	for _, b := range req.Input {
+		if b.Type == "text" && b.Text != "" {
+			input = append(input, llm.TextBlock{Text: b.Text})
+		}
+	}
+
+	// Set SSE-friendly response headers BEFORE constructing the sink:
+	// the sink may flush as soon as it's used, and headers can't change
+	// after the first byte.
+	w.Header().Set("Content-Type", h.transport.ContentType())
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no") // nginx hint
+
+	sink, err := h.transport.NewSink(w)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	// Status code emitted explicitly (200 OK) so the response body starts
+	// streaming. Defer-closing the sink is owned here, NOT by the orchestrator.
+	w.WriteHeader(http.StatusOK)
+
+	if err := h.orch.Turn(r.Context(), agentID, sessionID, input, sink); err != nil {
+		h.logger.Error("chat turn failed",
+			slog.String("agent_id", agentID),
+			slog.String("session_id", sessionID),
+			slog.Any("err", err),
+		)
+		// Orchestrator already emitted ErrorEvent. Nothing more to do here.
+	}
+}
