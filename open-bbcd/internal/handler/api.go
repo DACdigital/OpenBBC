@@ -2,15 +2,22 @@ package handler
 
 import (
 	"database/sql"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/anthropic"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/agui"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/jsonl"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/DACdigital/OpenBBC/open-bbcd/web"
 	"gopkg.in/yaml.v3"
@@ -22,7 +29,7 @@ const (
 	IdleTimeout  = 60 * time.Second
 )
 
-func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConfig, logger *slog.Logger) http.Handler {
+func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.Logger) http.Handler {
 	fatal := func(msg string, err error) {
 		logger.Error(msg, slog.Any("error", err))
 		os.Exit(1)
@@ -45,7 +52,7 @@ func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConf
 	if err != nil {
 		fatal("init UI handler", err)
 	}
-	maxUploadBytes := int64(discoveryCfg.MaxUploadMB) << 20
+	maxUploadBytes := int64(cfg.Discovery.MaxUploadMB) << 20
 	wizardHandler := NewWizardHandler(agentRepo, &schema, store, maxUploadBytes, logger)
 
 	configuratorHandler, err := NewConfiguratorHandler(agentRepo, web.Assets)
@@ -55,6 +62,30 @@ func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConf
 
 	agentHandler := NewAgentHandler(agentRepo)
 	resourceHandler := NewResourceHandler(resourceRepo)
+
+	chatRepo := repository.NewChatRepository(db)
+	llmClient := anthropic.New(cfg.Anthropic)
+	toolHandler := tools.NewMockHandler()
+
+	var transportFactory transport.Factory
+	switch cfg.Chat.Transport {
+	case "agui":
+		transportFactory = agui.NewFactory()
+	case "jsonl":
+		transportFactory = jsonl.NewFactory()
+	default:
+		fatal("unknown chat transport", fmt.Errorf("%q", cfg.Chat.Transport))
+	}
+
+	orchestrator := chat.NewOrchestrator(agentRepo, chatRepo, llmClient, toolHandler, logger)
+	orchestrator.Model = cfg.Anthropic.DefaultModel
+	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
+	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
+
+	chatHandler, err := NewChatHandler(agentRepo, chatRepo, orchestrator, transportFactory, web.Assets, logger)
+	if err != nil {
+		fatal("init chat handler", err)
+	}
 
 	mux := http.NewServeMux()
 
@@ -99,6 +130,11 @@ func NewAPI(db *sql.DB, store storage.Storage, discoveryCfg config.DiscoveryConf
 	mux.HandleFunc("POST /resources", resourceHandler.Create)
 	mux.HandleFunc("GET /resources/{id}", resourceHandler.Get)
 	mux.HandleFunc("GET /agents/{agent_id}/resources", resourceHandler.ListByAgent)
+
+	mux.HandleFunc("POST /agents/{id}/chat/sessions",          chatHandler.NewSession)
+	mux.HandleFunc("GET /agents/{id}/chat",                    chatHandler.SessionList)
+	mux.HandleFunc("GET /agents/{id}/chat/{session_id}",       chatHandler.ChatView)
+	mux.HandleFunc("POST /agents/{id}/chat/{session_id}/turn", chatHandler.Turn)
 
 	return RequestLogger(logger, mux)
 }
