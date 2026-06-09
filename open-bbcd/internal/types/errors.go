@@ -21,4 +21,6 @@ var (
 
 	ErrInvalidAgentStatus = errors.New("agent is not in a valid status for this transition")
 	ErrBundleAlreadySet   = errors.New("agent: bundle already set")
+
+	ErrSessionAgentMismatch = errors.New("session: belongs to different agent")
 )
