@@ -24,4 +24,7 @@ var (
 	ErrAgentNotRunnable    = errors.New("agent: no bundle generated")
 
 	ErrSessionAgentMismatch = errors.New("session: belongs to different agent")
+
+	ErrLLMUnavailable    = errors.New("llm: upstream unavailable")
+	ErrToolHandlerFailed = errors.New("tools: handler failed")
 )
