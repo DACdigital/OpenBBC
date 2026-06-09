@@ -80,7 +80,7 @@ def test_generate_agent_writes_bundle_to_stdout(stub_llm):
     assert result.exit_code == 0, result.stderr
     bundle = yaml.safe_load(result.stdout)
     assert bundle["main_prompt"] == "<role>r</role>"
-    assert bundle["metadata"]["prompt_schema_version"] == "v1"
+    assert bundle["metadata"]["prompt_schema_version"] == "v2"
 
 
 def test_generate_agent_writes_bundle_to_output_path(stub_llm, tmp_path):

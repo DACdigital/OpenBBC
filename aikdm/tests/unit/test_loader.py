@@ -45,7 +45,7 @@ def test_load_flow_map_config_schema_violation(tmp_path):
 
 def test_load_prompt_schema_loads_v1():
     schema = load_prompt_schema(PROMPT_SCHEMA)
-    assert schema.version == "v1"
+    assert schema.version == "v2"
 
 
 def test_write_bundle_to_path(tmp_path):

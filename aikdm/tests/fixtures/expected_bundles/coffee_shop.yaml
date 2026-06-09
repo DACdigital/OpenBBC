@@ -1,6 +1,6 @@
 metadata:
   config_schema_version: 1
-  prompt_schema_version: v1
+  prompt_schema_version: v2
   model_generator: claude-haiku-4-5
   model_critic: claude-haiku-4-5
   critic_rounds_run: 1
@@ -11,6 +11,7 @@ metadata:
     critic_in: 3
     critic_out: 3
 main_prompt: <role>r</role>
+capabilities: []
 skills:
   - name: place_order
     description: Guide the user through choosing items and placing an order.
