@@ -12,9 +12,9 @@ func TestMockHandler_Tools_FromBundle(t *testing.T) {
             {"name":"place_order","description":"d","prompt":"P"},
             {"name":"check_rewards","description":"d2","prompt":"P2"}
         ],
-        "capabilities":[
-            {"name":"inventory","description":"Read stock.","proposed_tool":"query_inventory"},
-            {"name":"orders","description":"Submit orders.","proposed_tool":"submit_order"}
+        "tools":[
+            {"name":"query_inventory","description":"List stock.","method":"GET","path":"/api/inventory","capability":"inventory"},
+            {"name":"submit_order","description":"Place an order.","method":"POST","path":"/api/orders","capability":"orders"}
         ]
     }`)
 	h := NewMockHandler()
@@ -23,7 +23,7 @@ func TestMockHandler_Tools_FromBundle(t *testing.T) {
 		t.Fatalf("Tools: %v", err)
 	}
 	if len(defs) != 3 {
-		t.Fatalf("expected 3 tool defs (1 Skill + 2 capabilities), got %d", len(defs))
+		t.Fatalf("expected 3 tool defs (1 Skill + 2 atomic tools), got %d", len(defs))
 	}
 	if defs[0].Name != "Skill" {
 		t.Fatalf("first tool should be Skill, got %q", defs[0].Name)
@@ -42,19 +42,19 @@ func TestMockHandler_Tools_FromBundle(t *testing.T) {
 	if len(schema.Properties.Name.Enum) != 2 {
 		t.Fatalf("expected 2 enum values, got %d", len(schema.Properties.Name.Enum))
 	}
-	// Capability tool names from proposed_tool field.
+	// Tool names come straight from bundle.tools[].name (no proposed_tool layer).
 	if defs[1].Name != "query_inventory" || defs[2].Name != "submit_order" {
-		t.Fatalf("unexpected capability tool names: %q, %q", defs[1].Name, defs[2].Name)
+		t.Fatalf("unexpected tool names: %q, %q", defs[1].Name, defs[2].Name)
 	}
 }
 
-func TestMockHandler_Tools_SkipsCapabilityWithoutProposedTool(t *testing.T) {
-	bundle := []byte(`{"skills":[],"capabilities":[{"name":"x","description":"d","proposed_tool":""}]}`)
+func TestMockHandler_Tools_SkipsToolWithEmptyName(t *testing.T) {
+	bundle := []byte(`{"skills":[],"tools":[{"name":"","description":"d","method":"GET","path":"/x"}]}`)
 	defs, err := NewMockHandler().Tools(bundle)
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
-	// Only the Skill meta-tool — the capability with empty proposed_tool is skipped.
+	// Only the Skill meta-tool — the tool with empty name is skipped.
 	if len(defs) != 1 {
 		t.Fatalf("expected 1 tool (Skill only), got %d", len(defs))
 	}
@@ -103,8 +103,8 @@ func TestMockHandler_Call_Skill_UnknownReturnsIsError(t *testing.T) {
 	}
 }
 
-func TestMockHandler_Call_CapabilityEcho(t *testing.T) {
-	bundle := []byte(`{"capabilities":[{"name":"orders","description":"d","proposed_tool":"submit_order"}]}`)
+func TestMockHandler_Call_ToolEcho(t *testing.T) {
+	bundle := []byte(`{"tools":[{"name":"submit_order","description":"d","method":"POST","path":"/api/orders","capability":"orders"}]}`)
 	res, _ := NewMockHandler().Call(context.Background(), bundle, Call{
 		ID:    "tu_1",
 		Name:  "submit_order",
@@ -120,7 +120,7 @@ func TestMockHandler_Call_CapabilityEcho(t *testing.T) {
 	if out["_mocked"] != true {
 		t.Fatalf("expected _mocked: true")
 	}
-	if out["capability"] != "submit_order" {
-		t.Fatalf("expected capability: submit_order, got %v", out["capability"])
+	if out["tool"] != "submit_order" {
+		t.Fatalf("expected tool: submit_order, got %v", out["tool"])
 	}
 }

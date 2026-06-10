@@ -140,14 +140,27 @@ class ExternalAction(BaseModel):
     external_note: str
 
 
-class BundleCapability(BaseModel):
-    """Capability passed through from FlowMapConfig.capabilities at bundle generation time."""
+class BundleTool(BaseModel):
+    """Atomic tool the agent can call. One entry per backend endpoint —
+    flattened from FlowMapConfig.capabilities[].tools[]. Carries the
+    information open-bbcd needs to wrap the endpoint as an MCP tool
+    (name, method, path, auth) plus runtime context (description,
+    capability back-reference for grouping, source for provenance).
+
+    Request/response schemas are not yet emitted by the discovery skill;
+    when they appear they'll land in `input_schema` / `output_schema`.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str
     description: str
-    proposed_tool: str
+    method: str
+    path: str
+    auth: str = ""
+    capability: str = ""  # back-ref to source capability (for future MCP grouping)
+    confidence: str = ""  # discovery confidence: "high" | "medium" | "low"
+    source: str = ""  # provenance, e.g. "src/api/orders.ts:24"
 
 
 class Bundle(BaseModel):
@@ -155,7 +168,7 @@ class Bundle(BaseModel):
 
     metadata: BundleMetadata
     main_prompt: str
-    capabilities: list[BundleCapability] = Field(default_factory=list)
+    tools: list[BundleTool] = Field(default_factory=list)
     skills: list[SkillPrompt] = Field(default_factory=list)
     external_actions: list[ExternalAction] = Field(default_factory=list)
 

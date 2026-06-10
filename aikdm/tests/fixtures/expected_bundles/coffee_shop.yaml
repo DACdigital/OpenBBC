@@ -1,6 +1,6 @@
 metadata:
   config_schema_version: 1
-  prompt_schema_version: v2
+  prompt_schema_version: v3
   model_generator: claude-haiku-4-5
   model_critic: claude-haiku-4-5
   critic_rounds_run: 1
@@ -11,13 +11,23 @@ metadata:
     critic_in: 3
     critic_out: 3
 main_prompt: <role>r</role>
-capabilities:
-  - name: order_create
-    description: Create a new coffee order.
-    proposed_tool: order_create
-  - name: rewards_lookup
-    description: Look up rewards balance for a customer.
-    proposed_tool: rewards_lookup
+tools:
+  - name: createOrder
+    description: ''
+    method: POST
+    path: /api/orders
+    auth: ''
+    capability: order_create
+    confidence: ''
+    source: ''
+  - name: getRewards
+    description: ''
+    method: GET
+    path: /api/rewards/{customer_id}
+    auth: ''
+    capability: rewards_lookup
+    confidence: ''
+    source: ''
 skills:
   - name: place_order
     description: Guide the user through choosing items and placing an order.

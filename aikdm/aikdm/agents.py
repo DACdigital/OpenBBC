@@ -54,6 +54,10 @@ Rules:
   description) — keep it in sync with the input.
 - The <external_actions> section names every external skill from input
   (skill id + external_note). Empty if there are none.
+- Never use the words "capability" or "resource" in any prose section.
+  The runtime agent only knows about tools; treat tools as the only
+  abstraction. The input contains capabilities (config-time grouping),
+  but the agent's prompt must talk in terms of tools.
 - All XML tags use Anthropic-style.
 
 Return structured output: {"main_prompt": "<role>...</role>...<external_actions/>"}
@@ -68,8 +72,11 @@ layout. You produce the prompt body for THIS ONE skill.
 
 Rules:
 - Fill every LLM-synthesized tag in the scaffold with your own prose.
-- The <capabilities> block names a single mcp_server with name=proposed_tool
-  from the input. Never include HTTP method, path, or parameters.
+- The <tools> block names a single <tool> with name=target_skill.proposed_tool.
+  Describe its purpose and when to invoke it. Never include HTTP method,
+  path, or parameters in the prompt body — those are metadata, not prose.
+- Never use the words "capability" or "resource" in the prompt body. The
+  runtime agent only knows about tools; treat the tool as the abstraction.
 - The <examples> block shows 2-3 execution-level examples for this skill
   (a representative turn inside the skill, not skill routing).
 - Tone and guardrails must be consistent with the wider agent context
@@ -95,6 +102,9 @@ Focus on:
 - <skills_index> entries not matching the input's internal skills (missing
   any, listing extra, name mismatches).
 - <external_actions> not matching the input's external skills.
+- Use of the words "capability" or "resource" in any prose section.
+  These are config-time terms — the runtime agent's main prompt must
+  only reference tools.
 - Examples that imply forbidden behavior (contradicting should_not_do).
 - Internal contradictions between sections (e.g. should_do allowing a
   thing the guardrails forbid).
@@ -112,8 +122,11 @@ Your job: identify substantive issues IN THIS SKILL PROMPT that would
 mislead an agent.
 
 Focus on:
-- The <capabilities> block: mcp_server name must equal target_skill.proposed_tool.
-  No HTTP method/path/parameters allowed.
+- The <tools> block: <tool> name must equal target_skill.proposed_tool.
+  No HTTP method/path/parameters allowed in the prose body.
+- Prose uses the words "capability" or "resource" instead of "tool".
+  The runtime agent only knows about tools — these terms must not appear
+  in skill or main-prompt body text.
 - <examples> being routing examples rather than execution examples.
 - Skill body contradicting the input scope or should_not_do.
 - Missing or empty required sections.

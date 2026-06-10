@@ -30,11 +30,14 @@ type bundleShape struct {
 		Description string `json:"description"`
 		Prompt      string `json:"prompt"`
 	} `json:"skills"`
-	Capabilities []struct {
-		Name         string `json:"name"`
-		Description  string `json:"description"`
-		ProposedTool string `json:"proposed_tool"`
-	} `json:"capabilities"`
+	Tools []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Method      string `json:"method"`
+		Path        string `json:"path"`
+		Auth        string `json:"auth"`
+		Capability  string `json:"capability"`
+	} `json:"tools"`
 }
 
 func parseBundle(bundle json.RawMessage) (bundleShape, error) {
@@ -54,7 +57,7 @@ func (h *MockHandler) Tools(bundle json.RawMessage) ([]llm.ToolDef, error) {
 		return nil, err
 	}
 
-	out := make([]llm.ToolDef, 0, 1+len(b.Capabilities))
+	out := make([]llm.ToolDef, 0, 1+len(b.Tools))
 
 	// The Skill meta-tool's input schema enumerates the skill names so the
 	// LLM gets autocomplete-style guidance and can't hallucinate skill names.
@@ -88,15 +91,15 @@ func (h *MockHandler) Tools(bundle json.RawMessage) ([]llm.ToolDef, error) {
 		"additionalProperties": true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("tools: marshal capability schema: %w", err)
+		return nil, fmt.Errorf("tools: marshal tool schema: %w", err)
 	}
-	for _, c := range b.Capabilities {
-		if c.ProposedTool == "" {
+	for _, t := range b.Tools {
+		if t.Name == "" {
 			continue
 		}
 		out = append(out, llm.ToolDef{
-			Name:        c.ProposedTool,
-			Description: c.Description,
+			Name:        t.Name,
+			Description: t.Description,
 			InputSchema: permissiveSchema,
 		})
 	}
@@ -127,13 +130,14 @@ func (h *MockHandler) Call(ctx context.Context, bundle json.RawMessage, call Cal
 		return Result{ToolUseID: call.ID, Output: out, IsError: true}, nil
 	}
 
-	// Capability tool — mocked echo. Input echoed back as raw JSON so the
-	// LLM sees what it sent (useful for debugging during BO testing).
+	// Capability-backed tool — mocked echo. Input echoed back as raw JSON
+	// so the LLM (and the BO observer) sees what it sent — useful for
+	// debugging during testing.
 	out, _ := json.Marshal(map[string]any{
-		"_mocked":    true,
-		"capability": call.Name,
-		"input":      json.RawMessage(call.Input),
-		"note":       "MCP wiring lands in a follow-up; this is a stub.",
+		"_mocked": true,
+		"tool":    call.Name,
+		"input":   json.RawMessage(call.Input),
+		"note":    "MCP wiring lands in a follow-up; this is a stub.",
 	})
 	return Result{ToolUseID: call.ID, Output: out, IsError: false}, nil
 }

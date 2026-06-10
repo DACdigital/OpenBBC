@@ -43,9 +43,9 @@ def test_load_flow_map_config_schema_violation(tmp_path):
         load_flow_map_config(bad)
 
 
-def test_load_prompt_schema_loads_v2():
+def test_load_prompt_schema_loads_v3():
     schema = load_prompt_schema(PROMPT_SCHEMA)
-    assert schema.version == "v2"
+    assert schema.version == "v3"
 
 
 def test_write_bundle_to_path(tmp_path):
@@ -91,9 +91,10 @@ def test_write_bundle_to_stdout(capsys):
     assert "main_prompt:" in out
 
 
-def test_write_bundle_splits_adjacent_xml_tags_into_block_scalar(tmp_path):
-    """LLM sometimes emits skill prompts as one long `<a/><b/><c/>` line.
-    The dumper splits adjacent tags onto separate lines so YAML uses `|`."""
+def test_write_bundle_uses_block_scalar_for_xml_tagged_strings(tmp_path):
+    """Any string that looks like XML (contains `<`) is rendered as a block
+    scalar (`|`) — not a quoted single-line with `\\n` escapes. The string
+    content itself is preserved verbatim; no mutation/splitting happens."""
     from aikdm.schemas import SkillPrompt
     bundle = Bundle(
         metadata=BundleMetadata(
@@ -106,19 +107,21 @@ def test_write_bundle_splits_adjacent_xml_tags_into_block_scalar(tmp_path):
         skills=[
             SkillPrompt(
                 name="x", description="d",
-                prompt="<role>R</role><objective>O</objective><resources/>",
+                prompt="<role>R</role><objective>O</objective><tools/>",
             ),
         ],
     )
     out = tmp_path / "bundle.yaml"
     write_bundle(bundle, out)
     text = out.read_text()
+    # Both prompts must use block-scalar style.
     assert "main_prompt: |" in text
-    # Each top-level tag should sit on its own line in the rendered block.
-    assert "<role>R</role>\n  <scope>S</scope>" in text
-    # And the skill's prompt is block-formatted too.
     assert "prompt: |" in text
-    assert "<role>R</role>\n    <objective>O</objective>" in text
+    # No `\n` escape sequences in the body — that's what users complained about.
+    assert "\\n" not in text
+    # The original string content is preserved verbatim inside the block.
+    assert "<role>R</role><scope>S</scope>" in text
+    assert "<role>R</role><objective>O</objective><tools/>" in text
 
 
 def test_write_bundle_uses_block_style_for_multiline_strings(tmp_path):

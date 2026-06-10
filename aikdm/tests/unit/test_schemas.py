@@ -54,14 +54,17 @@ def test_prompt_schema_loads_from_yaml():
     data = yaml.safe_load(PROMPT_SCHEMA_PATH.read_text())
     schema = PromptSchema.model_validate(data)
 
-    assert schema.version == "v2"
+    assert schema.version == "v3"
     main_section_names = [s.name for s in schema.main_prompt]
     assert "role" in main_section_names
     assert "guardrails" in main_section_names
     assert "external_actions" in main_section_names
-    assert "capabilities" in main_section_names
+    assert "tools" in main_section_names
     skill_section_names = [s.name for s in schema.skill_prompt]
-    assert "capabilities" in skill_section_names
+    assert "tools" in skill_section_names
+    # v3: capability/resource terminology dropped from the prompt schema.
+    assert "capabilities" not in skill_section_names
+    assert "resources" not in skill_section_names
 
 
 def test_prompt_section_classifies_source():

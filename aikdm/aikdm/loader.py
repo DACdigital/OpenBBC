@@ -22,18 +22,16 @@ class InputValidationError(Exception):
 
 
 def _str_representer(dumper: yaml.SafeDumper, data: str) -> yaml.ScalarNode:
-    """Format XML-flavoured strings for YAML block scalar style.
+    """Force literal-block (`|`) style for any string that contains a
+    newline or looks like XML. Single-token values stay plain.
 
-    Inserts a newline between adjacent XML tags (`><` → `>\\n<`) so the
-    resulting string has newlines, triggering block scalar (`|`) output
-    rather than single-line quoted strings with `\\n` escapes. The LLM
-    sometimes emits skill prompts as single-line XML; this normalises
-    them to multi-line YAML without relying on the LLM's cooperation.
+    Why: PyYAML's default would emit single-line XML blobs as quoted
+    strings with `\\n` escapes, which are unreadable for prompts. The
+    rule is intentionally dumb — no string mutation, just classification.
     """
-    formatted = data.replace("><", ">\n<")
-    if "\n" in formatted:
-        return dumper.represent_scalar("tag:yaml.org,2002:str", formatted, style="|")
-    return dumper.represent_scalar("tag:yaml.org,2002:str", formatted)
+    if "\n" in data or "<" in data:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
 
 
 class _BlockStyleDumper(yaml.SafeDumper):
