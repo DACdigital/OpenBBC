@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -141,8 +144,90 @@ type chatViewPageData struct {
 	AgentID   string
 	AgentName string
 	SessionID string
-	Messages  []*types.ChatMessage
+	Messages  []messageView
 	HasBundle bool
+}
+
+// messageView is a UI-ready projection of a persisted ChatMessage. The raw
+// content (JSONB array of Anthropic-shape blocks) is unpacked into typed
+// blockView entries so the template can render text inline, tool calls and
+// tool results as collapsible <details>, matching the live-stream UI.
+type messageView struct {
+	Role   string
+	Blocks []blockView
+}
+
+type blockView struct {
+	Kind         string // "text" | "tool_call" | "tool_result"
+	Text         string
+	ToolName     string
+	ToolArgs     string
+	ToolResult   string
+	ToolIsError  bool
+	ToolIsMocked bool
+}
+
+func buildMessageViews(msgs []*types.ChatMessage) []messageView {
+	out := make([]messageView, 0, len(msgs))
+	for _, m := range msgs {
+		var raw []json.RawMessage
+		if err := json.Unmarshal(m.Content, &raw); err != nil {
+			continue
+		}
+		mv := messageView{Role: string(m.Role)}
+		for _, r := range raw {
+			var head struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(r, &head); err != nil {
+				continue
+			}
+			switch head.Type {
+			case "text":
+				var b struct {
+					Text string `json:"text"`
+				}
+				_ = json.Unmarshal(r, &b)
+				mv.Blocks = append(mv.Blocks, blockView{Kind: "text", Text: b.Text})
+			case "tool_use":
+				var b struct {
+					Name  string          `json:"name"`
+					Input json.RawMessage `json:"input"`
+				}
+				_ = json.Unmarshal(r, &b)
+				mv.Blocks = append(mv.Blocks, blockView{
+					Kind:     "tool_call",
+					ToolName: b.Name,
+					ToolArgs: prettyJSON(b.Input),
+				})
+			case "tool_result":
+				var b struct {
+					Content json.RawMessage `json:"content"`
+					IsError bool            `json:"is_error"`
+				}
+				_ = json.Unmarshal(r, &b)
+				mv.Blocks = append(mv.Blocks, blockView{
+					Kind:         "tool_result",
+					ToolResult:   prettyJSON(b.Content),
+					ToolIsError:  b.IsError,
+					ToolIsMocked: strings.Contains(string(b.Content), `"_mocked":true`),
+				})
+			}
+		}
+		out = append(out, mv)
+	}
+	return out
+}
+
+func prettyJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, raw, "", "  "); err != nil {
+		return string(raw)
+	}
+	return buf.String()
 }
 
 // ChatView renders the chat UI for one session. If session_id doesn't
@@ -173,7 +258,7 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		AgentID:   agentID,
 		AgentName: agent.Name,
 		SessionID: sessionID,
-		Messages:  msgs,
+		Messages:  buildMessageViews(msgs),
 		HasBundle: len(agent.Bundle) > 0,
 	}
 	renderTemplate(w, h.viewTmpl, "layout", data)

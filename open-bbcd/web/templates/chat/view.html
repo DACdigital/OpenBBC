@@ -11,7 +11,21 @@
     <div class="chat-bubble {{.Role}}">
       <div class="role-label">[{{.Role}}]</div>
       <div class="content">
-        <pre class="raw-content">{{printf "%s" .Content}}</pre>
+        {{range .Blocks}}
+          {{if eq .Kind "text"}}
+            <span class="text-block">{{.Text}}</span>
+          {{else if eq .Kind "tool_call"}}
+            <details class="tool-call">
+              <summary>▸ {{.ToolName}}(…)</summary>
+              <pre class="args">{{.ToolArgs}}</pre>
+            </details>
+          {{else if eq .Kind "tool_result"}}
+            <details class="tool-result{{if .ToolIsError}} is-error{{end}}">
+              <summary{{if .ToolIsMocked}} class="mocked"{{end}}>▸ result{{if .ToolIsMocked}} (mocked){{end}}</summary>
+              <pre>{{.ToolResult}}</pre>
+            </details>
+          {{end}}
+        {{end}}
       </div>
     </div>
   {{else}}

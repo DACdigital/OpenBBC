@@ -1,15 +1,17 @@
 // chat.js — vanilla JS chat client.
 // Subscribes to AG-UI SSE stream from POST /agents/{id}/chat/{session_id}/turn.
 //
-// AG-UI events on the wire:
-//   event: TYPE
-//   data: <JSON>
+// AG-UI Go SDK wire format (NOT W3C `event: TYPE` headers):
+//   id: <event_id>
+//   data: {"type":"<TYPE>", ...}
 //   \n
 //
 // fetch + ReadableStream (not EventSource) because AG-UI is POST → SSE
 // and EventSource is GET-only.
 
 (function () {
+  console.info('[chat.js] loaded — AG-UI SSE client v2');
+
   const log = document.getElementById('chat-log');
   if (!log) return;
 
@@ -19,7 +21,10 @@
   const sessionID = log.dataset.sessionId;
   if (!agentID || !sessionID) return;
 
-  let currentAssistantBubble = null;
+  // currentAssistantTurn holds per-turn DOM refs. textNode is a dedicated
+  // child of `.content` so streaming deltas never wipe sibling <details>
+  // elements (which textContent += would do).
+  let currentAssistantTurn = null;
   const toolCallElements = new Map();
 
   sendBtn.addEventListener('click', send);
@@ -47,9 +52,6 @@
         body: JSON.stringify({ input: [{ type: 'text', text }] }),
       });
       if (!resp.ok) {
-        // Read the response body — the server puts the actual error message
-        // there. Without this, the user only sees "HTTP 500" with no hint of
-        // what went wrong (missing env var, DB issue, etc.).
         const body = await resp.text().catch(() => '');
         showError(`HTTP ${resp.status}${body ? ': ' + body.trim() : ''}`);
         return;
@@ -67,7 +69,9 @@
           processSSELine(line);
         }
       }
+      if (buf) processSSELine(buf); // flush trailing partial
     } catch (err) {
+      console.error('[chat.js] fetch error', err);
       showError(err.message || String(err));
     } finally {
       finishAssistantBubble();
@@ -77,41 +81,36 @@
     }
   }
 
-  // AG-UI's Go SDK emits frames like:
-  //   id: <event_id>
-  //   data: {"type":"RUN_STARTED","timestamp":...,"threadId":"...","runId":"..."}
-  //
-  // It does NOT use `event: TYPE` headers — the event type lives inside the
-  // JSON payload's `type` field. So we collect all `data:` lines for the
-  // current frame, parse JSON on the blank-line separator, and dispatch on
-  // the `type` field of the parsed object.
   let pendingData = '';
   function processSSELine(line) {
     if (line.startsWith('data:')) {
       pendingData += line.slice(5).trim();
-    } else if (line === '' && pendingData) {
+      return;
+    }
+    if (line === '' && pendingData) {
       let obj = null;
-      try { obj = JSON.parse(pendingData); } catch (_e) {}
+      try {
+        obj = JSON.parse(pendingData);
+      } catch (e) {
+        console.error('[chat.js] JSON.parse failed for', pendingData, e);
+      }
+      pendingData = '';
       if (obj && obj.type) {
         handleEvent(obj.type, obj);
       }
-      pendingData = '';
     }
   }
 
   function handleEvent(type, data) {
     switch (type) {
       case 'RUN_STARTED':
-        // session_start; nothing to render — bubble was created on send()
-        break;
       case 'TEXT_MESSAGE_START':
-        // assistant bubble was already started locally on send()
+      case 'TEXT_MESSAGE_END':
+      case 'RUN_FINISHED':
+        // No render side-effect; cursor cleanup happens in finishAssistantBubble.
         break;
       case 'TEXT_MESSAGE_CONTENT':
         appendTextDelta(data.delta || '');
-        break;
-      case 'TEXT_MESSAGE_END':
-        // visual cursor removed when fetch completes (finally block)
         break;
       case 'TOOL_CALL_START':
         startToolCall(data.toolCallId, data.toolCallName);
@@ -125,12 +124,11 @@
       case 'TOOL_CALL_RESULT':
         appendToolResult(data.toolCallId, data.content);
         break;
-      case 'RUN_FINISHED':
-        // turn-end; cursor removed in fetch finally
-        break;
       case 'RUN_ERROR':
         showError(data.message || 'unknown error');
         break;
+      default:
+        console.debug('[chat.js] unhandled event', type, data);
     }
   }
 
@@ -157,6 +155,10 @@
     role.textContent = '[assistant]';
     const content = document.createElement('div');
     content.className = 'content';
+    // Dedicated text node — deltas append here without touching sibling
+    // tool-detail elements that we'll add inside `.content` later.
+    const textNode = document.createTextNode('');
+    content.appendChild(textNode);
     const cursor = document.createElement('span');
     cursor.className = 'cursor';
     cursor.textContent = '▌';
@@ -164,27 +166,34 @@
     b.appendChild(content);
     b.appendChild(cursor);
     log.appendChild(b);
-    currentAssistantBubble = b;
+    currentAssistantTurn = { bubble: b, content, textNode };
     b.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }
 
   function appendTextDelta(delta) {
-    if (!currentAssistantBubble) startAssistantBubble();
-    const content = currentAssistantBubble.querySelector('.content');
-    content.textContent += delta;
-    currentAssistantBubble.scrollIntoView({ block: 'end' });
+    if (!currentAssistantTurn) startAssistantBubble();
+    // If a tool detail was just rendered, deltas should start a fresh text run
+    // after it — otherwise the text would visually merge into the tool block.
+    const last = currentAssistantTurn.content.lastChild;
+    if (last && last.nodeType !== Node.TEXT_NODE) {
+      const t = document.createTextNode('');
+      currentAssistantTurn.content.appendChild(t);
+      currentAssistantTurn.textNode = t;
+    }
+    currentAssistantTurn.textNode.data += delta;
+    currentAssistantTurn.bubble.scrollIntoView({ block: 'end' });
   }
 
   function finishAssistantBubble() {
-    if (!currentAssistantBubble) return;
-    currentAssistantBubble.classList.remove('streaming');
-    const cursor = currentAssistantBubble.querySelector('.cursor');
+    if (!currentAssistantTurn) return;
+    currentAssistantTurn.bubble.classList.remove('streaming');
+    const cursor = currentAssistantTurn.bubble.querySelector('.cursor');
     if (cursor) cursor.remove();
-    currentAssistantBubble = null;
+    currentAssistantTurn = null;
   }
 
   function startToolCall(id, name) {
-    if (!currentAssistantBubble) startAssistantBubble();
+    if (!currentAssistantTurn) startAssistantBubble();
     const details = document.createElement('details');
     details.className = 'tool-call';
     const summary = document.createElement('summary');
@@ -193,7 +202,7 @@
     args.className = 'args';
     details.appendChild(summary);
     details.appendChild(args);
-    currentAssistantBubble.querySelector('.content').appendChild(details);
+    currentAssistantTurn.content.appendChild(details);
     toolCallElements.set(id, { summary, args, name });
   }
 
@@ -212,7 +221,7 @@
   }
 
   function appendToolResult(id, content) {
-    if (!currentAssistantBubble) return;
+    if (!currentAssistantTurn) return;
     const details = document.createElement('details');
     details.className = 'tool-result';
     const summary = document.createElement('summary');
@@ -228,7 +237,7 @@
     }
     details.appendChild(summary);
     details.appendChild(pre);
-    currentAssistantBubble.querySelector('.content').appendChild(details);
+    currentAssistantTurn.content.appendChild(details);
   }
 
   function showError(msg) {
