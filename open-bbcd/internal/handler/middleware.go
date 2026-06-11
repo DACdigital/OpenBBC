@@ -17,6 +17,17 @@ func (r *responseRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
+// Flush delegates to the wrapped ResponseWriter so SSE handlers can flush
+// each event to the client. Without this, the embedded interface field
+// hides Flush() from type-assertion (w.(http.Flusher)) — the AG-UI sink
+// constructor checks for Flusher and would otherwise fail with
+// "ResponseWriter does not implement http.Flusher".
+func (r *responseRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // RequestLogger is HTTP middleware that logs every request after it completes.
 func RequestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
