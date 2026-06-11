@@ -199,6 +199,11 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 
 	var req TurnRequest
 	if err := DecodeJSON(r, &req); err != nil {
+		h.logger.Error("chat turn: decode JSON request body failed",
+			slog.String("agent_id", agentID),
+			slog.String("session_id", sessionID),
+			slog.Any("err", err),
+		)
 		Error(w, err)
 		return
 	}
@@ -221,6 +226,11 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 
 	sink, err := h.transport.NewSink(w)
 	if err != nil {
+		h.logger.Error("chat turn: transport sink construction failed",
+			slog.String("agent_id", agentID),
+			slog.String("session_id", sessionID),
+			slog.Any("err", err),
+		)
 		Error(w, err)
 		return
 	}

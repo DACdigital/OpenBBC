@@ -73,26 +73,39 @@ func (o *Orchestrator) Turn(
 	userInput []llm.Block,
 	sink transport.Sink,
 ) error {
+	// failTurn logs the error with context and emits a RUN_ERROR event via
+	// the sink so the chat UI sees the message in-band. Returns err so
+	// callers can `return failTurn(...)`.
+	failTurn := func(code, stage string, err error) error {
+		o.logger.Error("chat turn failed",
+			slog.String("agent_id", agentID),
+			slog.String("session_id", sessionID),
+			slog.String("stage", stage),
+			slog.String("code", code),
+			slog.Any("err", err),
+		)
+		_ = sink.Send(ctx, transport.ErrorEvent{Code: code, Message: err.Error()})
+		return err
+	}
+
 	// 1. Load agent + verify bundle exists.
 	agent, err := o.agents.GetByID(ctx, agentID)
 	if err != nil {
-		return err
+		return failTurn("agent_load", "load_agent", err)
 	}
 	if len(agent.Bundle) == 0 {
-		_ = sink.Send(ctx, transport.ErrorEvent{Code: "agent_not_runnable", Message: "agent has no bundle"})
-		return types.ErrAgentNotRunnable
+		return failTurn("agent_not_runnable", "verify_bundle", types.ErrAgentNotRunnable)
 	}
 
 	// 2. Ensure session row exists (lazy-create).
 	if err := o.chats.EnsureSession(ctx, sessionID, agentID); err != nil {
-		_ = sink.Send(ctx, transport.ErrorEvent{Code: "session_error", Message: err.Error()})
-		return err
+		return failTurn("session_error", "ensure_session", err)
 	}
 
 	// 3. Load history.
 	history, err := o.chats.LoadMessages(ctx, sessionID)
 	if err != nil {
-		return err
+		return failTurn("history_load", "load_messages", err)
 	}
 
 	// 4. Build LLM request.
@@ -100,12 +113,12 @@ func (o *Orchestrator) Turn(
 		MainPrompt string `json:"main_prompt"`
 	}
 	if err := json.Unmarshal(agent.Bundle, &bundleHead); err != nil {
-		return err
+		return failTurn("bundle_parse", "parse_bundle", err)
 	}
 
 	toolDefs, err := o.tools.Tools(agent.Bundle)
 	if err != nil {
-		return err
+		return failTurn("tools_init", "build_tool_defs", err)
 	}
 
 	msgs := historyToLLM(history)
@@ -116,11 +129,11 @@ func (o *Orchestrator) Turn(
 	userMsgID := uuid.NewString()
 	userContent, err := blocksToJSON(userInput)
 	if err != nil {
-		return err
+		return failTurn("encode_user_msg", "serialize_user_blocks", err)
 	}
 	userSeq, err := o.chats.NextSeq(ctx, sessionID)
 	if err != nil {
-		return err
+		return failTurn("seq_assign", "next_seq_user", err)
 	}
 	if err := o.chats.AppendMessages(ctx, []types.ChatMessage{{
 		ID:        userMsgID,
@@ -129,7 +142,7 @@ func (o *Orchestrator) Turn(
 		Content:   userContent,
 		Seq:       userSeq,
 	}}); err != nil {
-		return err
+		return failTurn("persist_user_msg", "append_user_msg", err)
 	}
 
 	// 6. Send session-start event.
@@ -163,8 +176,7 @@ func (o *Orchestrator) Turn(
 
 		for ev, err := range o.llm.Generate(ctx, req) {
 			if err != nil {
-				_ = sink.Send(ctx, transport.ErrorEvent{Code: "llm_error", Message: err.Error()})
-				return err
+				return failTurn("llm_error", "llm_generate", err)
 			}
 			switch e := ev.(type) {
 			case llm.TextDeltaEvent:
@@ -223,11 +235,11 @@ func (o *Orchestrator) Turn(
 		// Persist assistant message for this round.
 		assistantContent, err := blocksToJSON(assistantBlocks)
 		if err != nil {
-			return err
+			return failTurn("encode_assistant_msg", "serialize_assistant_blocks", err)
 		}
 		assistantSeq, err := o.chats.NextSeq(ctx, sessionID)
 		if err != nil {
-			return err
+			return failTurn("seq_assign", "next_seq_assistant", err)
 		}
 		if err := o.chats.AppendMessages(ctx, []types.ChatMessage{{
 			ID:        assistantMsgID,
@@ -236,7 +248,7 @@ func (o *Orchestrator) Turn(
 			Content:   assistantContent,
 			Seq:       assistantSeq,
 		}}); err != nil {
-			return err
+			return failTurn("persist_assistant_msg", "append_assistant_msg", err)
 		}
 
 		stopReason = stopReasonThisRound
@@ -279,11 +291,11 @@ func (o *Orchestrator) Turn(
 		toolMsgID := uuid.NewString()
 		toolContent, err := blocksToJSON(toolBlocks)
 		if err != nil {
-			return err
+			return failTurn("encode_tool_msg", "serialize_tool_blocks", err)
 		}
 		toolSeq, err := o.chats.NextSeq(ctx, sessionID)
 		if err != nil {
-			return err
+			return failTurn("seq_assign", "next_seq_tool", err)
 		}
 		if err := o.chats.AppendMessages(ctx, []types.ChatMessage{{
 			ID:        toolMsgID,
@@ -292,7 +304,7 @@ func (o *Orchestrator) Turn(
 			Content:   toolContent,
 			Seq:       toolSeq,
 		}}); err != nil {
-			return err
+			return failTurn("persist_tool_msg", "append_tool_msg", err)
 		}
 
 		// Extend the LLM request with both messages and loop.

@@ -47,7 +47,11 @@
         body: JSON.stringify({ input: [{ type: 'text', text }] }),
       });
       if (!resp.ok) {
-        showError(`HTTP ${resp.status}`);
+        // Read the response body — the server puts the actual error message
+        // there. Without this, the user only sees "HTTP 500" with no hint of
+        // what went wrong (missing env var, DB issue, etc.).
+        const body = await resp.text().catch(() => '');
+        showError(`HTTP ${resp.status}${body ? ': ' + body.trim() : ''}`);
         return;
       }
       const reader = resp.body.getReader();
