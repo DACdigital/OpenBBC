@@ -1,10 +1,10 @@
 <role><!-- LLM: what this skill is responsible for --></role>
 <objective><!-- LLM: concrete outcome the skill must achieve --></objective>
-<capabilities>
-  <mcp_server name="{{ skill.proposed_tool }}">
-    <description><!-- LLM: 1-2 sentence purpose from capability summary, no HTTP detail --></description>
-    <usage><!-- LLM: when to call this server --></usage>
-  </mcp_server>
-</capabilities>
+<tools>
+  <tool name="{{ skill.proposed_tool }}">
+    <description><!-- LLM: 1-2 sentence purpose. Never use the words "capability" or "resource"; treat the tool as the only abstraction. --></description>
+    <usage><!-- LLM: when to invoke this tool --></usage>
+  </tool>
+</tools>
 <guardrails><!-- LLM: skill-specific guardrails consistent with main prompt --></guardrails>
 <examples><!-- LLM: 2-3 short example exchanges --></examples>

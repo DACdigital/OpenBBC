@@ -1,4 +1,4 @@
-version: v2
+version: v3
 
 main_prompt:
   - name: role
@@ -56,11 +56,11 @@ main_prompt:
     source: config_derived
     required: false
     guidance: "Bulleted list of external skills the agent must redirect the user to."
-  - name: capabilities
-    tag: capabilities
+  - name: tools
+    tag: tools
     source: config_derived
     required: true
-    guidance: "Structured list copied through from flow_map_config.capabilities. Each entry: name, description, proposed_tool. No LLM synthesis."
+    guidance: "Structured list of atomic tools the agent can call, flattened from flow_map_config.capabilities[].tools[]. Each entry: name, description, method, path, auth, capability (back-ref), confidence, source. No LLM synthesis."
 
 skill_prompt:
   - name: role
@@ -73,11 +73,11 @@ skill_prompt:
     source: llm_synthesized
     required: true
     guidance: "Concrete outcome the skill must achieve."
-  - name: capabilities
-    tag: capabilities
+  - name: tools
+    tag: tools
     source: llm_synthesized
     required: true
-    guidance: "Describe the linked capability as an MCP server. Name = proposed_tool. 1-2 sentence purpose statement. No HTTP detail."
+    guidance: "Name the tools this skill calls. Describe each tool's purpose in 1-2 sentences and when to invoke it. Never use the word 'capability' or 'resource'; tools are the only abstraction the runtime agent sees."
   - name: guardrails
     tag: guardrails
     source: llm_synthesized

@@ -55,7 +55,7 @@ func run() error {
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      handler.NewAPI(db, store, cfg.Discovery, logger),
+		Handler:      handler.NewAPI(db, store, cfg, logger),
 		ReadTimeout:  handler.ReadTimeout,
 		WriteTimeout: handler.WriteTimeout,
 		IdleTimeout:  handler.IdleTimeout,

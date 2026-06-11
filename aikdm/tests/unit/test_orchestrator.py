@@ -228,25 +228,41 @@ async def test_orchestrator_propagates_skill_generation_failure(mocker, settings
         )
 
 
-async def test_orchestrator_passes_capabilities_through_to_bundle(mocker, settings):
-    """Capabilities from FlowMapConfig are passed through to Bundle as BundleCapability items."""
+async def test_orchestrator_flattens_capabilities_tools_to_bundle_tools(mocker, settings):
+    """v3: bundle exposes flat tools[]; each tool inherits HTTP detail from
+    its capability's tools[] entry, with a `capability` back-reference."""
     _patch_adk(mocker)
     _patch_main_clean(mocker)
     _patch_skill_clean(mocker)
 
     config = load_flow_map_config(CONFIG_PATH)
     schema = load_prompt_schema(SCHEMA_PATH)
-    assert len(config.capabilities) > 0, "fixture must have capabilities to test pass-through"
+    expected_tool_count = sum(len(c.tools) for c in config.capabilities)
+    assert expected_tool_count > 0, "fixture must have at least one tool to flatten"
 
     emitter = ProgressEmitter(io.StringIO())
     bundle = await orchestrator.run_generation(
         config=config, prompt_schema=schema, settings=settings, progress=emitter,
     )
 
-    assert len(bundle.capabilities) == len(config.capabilities)
-    for i, c in enumerate(config.capabilities):
-        assert bundle.capabilities[i].name == c.name
-        # FlowMapConfig.Capability uses `summary`; bundle uses `description`.
-        assert bundle.capabilities[i].description == (c.summary or "")
-        # Capability doesn't have proposed_tool; fall back to name.
-        assert bundle.capabilities[i].proposed_tool == c.name
+    assert len(bundle.tools) == expected_tool_count
+    # Build the expected (name, capability) pairs from the input and verify
+    # they all appear in the bundle output.
+    expected = {
+        (str(t.get("tool") or t.get("name") or ""), c.name)
+        for c in config.capabilities
+        for t in c.tools
+    }
+    actual = {(t.name, t.capability) for t in bundle.tools}
+    assert expected == actual
+    # Spot-check HTTP detail passthrough on one tool.
+    for c in config.capabilities:
+        for t in c.tools:
+            name = str(t.get("tool") or t.get("name") or "")
+            method = str(t.get("method") or "")
+            if not method:
+                continue
+            bt = next(b for b in bundle.tools if b.name == name and b.capability == c.name)
+            assert bt.method == method
+            assert bt.path == str(t.get("path") or "")
+            return

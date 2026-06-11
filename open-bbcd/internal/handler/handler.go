@@ -35,8 +35,12 @@ func Error(w http.ResponseWriter, err error) {
 	case errors.Is(err, types.ErrNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, types.ErrSkillReferenced),
-		errors.Is(err, types.ErrInvalidAgentStatus):
+		errors.Is(err, types.ErrInvalidAgentStatus),
+		errors.Is(err, types.ErrBundleAlreadySet),
+		errors.Is(err, types.ErrAgentNotRunnable):
 		status = http.StatusConflict
+	case errors.Is(err, types.ErrSessionAgentMismatch):
+		status = http.StatusForbidden
 	case errors.Is(err, types.ErrNameRequired),
 		errors.Is(err, types.ErrPromptRequired),
 		errors.Is(err, types.ErrAgentRequired),
@@ -48,6 +52,9 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrInvalidSkillRole),
 		errors.Is(err, types.ErrCustomSkillNameRequired):
 		status = http.StatusBadRequest
+	case errors.Is(err, types.ErrLLMUnavailable),
+		errors.Is(err, types.ErrToolHandlerFailed):
+		status = http.StatusBadGateway
 	}
 
 	JSON(w, status, ErrorResponse{Error: err.Error()})

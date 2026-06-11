@@ -1,0 +1,458 @@
+schema_version: 1
+name: minierp
+scope: agend should focus on processing orders
+should_do: just guide about anything about orders processing
+should_not_do: stuff around user settings
+business_domain: this is just a small erp system
+source:
+  compiler_schema_version: 1
+  generated_from_sha: 7dc1ce260b64adf7396afe16631685c8d41786fc
+  app_name: test-project-frontend
+  stack:
+    framework: react
+    language: ts
+    router: react-router-dom
+    version: 18.3.1
+capabilities:
+- name: orders
+  summary: Read the acting user's past orders and place a new one
+  tools:
+  - auth: bearer
+    confidence: high
+    does: List the acting user's past orders
+    method: GET
+    path: /api/orders
+    proposed: true
+    source: src/api/orders.ts:24
+    tool: orders.list
+  - auth: bearer
+    confidence: high
+    does: Place a new order from a list of cart items
+    method: POST
+    path: /api/orders
+    proposed: true
+    source: src/api/orders.ts:32
+    tool: orders.create
+  prose_md: "# Orders\n\n<!-- AGENT id=\"overview\" -->\nThe `orders` capability covers\
+    \ reading the acting user's past orders\nand creating new ones. Orders are user-scoped:\
+    \ the bearer token\ndetermines whose orders are listed and who owns a newly created\n\
+    order. Each order carries an `id`, `userId`, `items` (a list of\n`{ productId,\
+    \ quantity }`), `total`, `status`, and `createdAt`. The\nbackend computes `total`,\
+    \ `status`, and `createdAt` — the frontend\nnever sends them.\n<!-- /AGENT -->\n\
+    \n## Concepts the agent must know\n\n- An order is owned by exactly one user (`userId`),\
+    \ inferred\n  server-side from the bearer token.\n- An order's `items[]` is a\
+    \ list of `{ productId, quantity }`\n  references into the `products` capability.\n\
+    - The frontend submits only the `items[]` array on create; everything\n  else\
+    \ (`total`, `status`, `createdAt`, `id`, `userId`) is filled by\n  the backend.\n\
+    - The frontend does not expose order cancellation, update, or\n  refund — only\
+    \ list and create.\n\n## When to reach for which tool\n\n- \"show my past orders\"\
+    \ → `orders.list`\n- \"what did I order last week\" → `orders.list`\n- \"place\
+    \ this order\" → `orders.create`\n- \"buy the things in my cart\" → `orders.create`\n\
+    \n---\n\n## orders.list  {#orders-list}\n\n**Proposed tool name:** `orders.list`\
+    \ (proposed — no MCP server yet)\n**HTTP:** `GET /api/orders`\n**Auth:** bearer\n\
+    **Confidence:** high\n**Source:** `src/api/orders.ts:24`\n\n**Path params:** none\n\
+    **Query params:** none\n**Body shape:** none (GET)\n**Response shape:** `Array<{\
+    \ id: string, userId: string, items: Array<{ productId: string, quantity: number\
+    \ }>, total: number, status: string, createdAt: string }>`\n\n**When to call it:**\n\
+    - \"show my past orders\"\n- \"what's my order history\"\n- \"did my last order\
+    \ go through\"\n\n**Used by flows:** [checkout](../flows/checkout.md)\n\n---\n\
+    \n## orders.create  {#orders-create}\n\n**Proposed tool name:** `orders.create`\
+    \ (proposed — no MCP server yet)\n**HTTP:** `POST /api/orders`\n**Auth:** bearer\n\
+    **Confidence:** high\n**Source:** `src/api/orders.ts:32`\n\n**Path params:** none\n\
+    **Query params:** none\n**Body shape:** `{ items: Array<{ productId: string, quantity:\
+    \ number }> }`\n**Response shape:** `{ id: string, userId: string, items: Array<{\
+    \ productId: string, quantity: number }>, total: number, status: string, createdAt:\
+    \ string }`\n\n**When to call it:**\n- \"place the order\"\n- \"check out my cart\"\
+    \n- \"buy these items\"\n\n**Used by flows:** [checkout](../flows/checkout.md)\n\
+    \n---\n\n## Things this capability cannot do\n\n- Cannot cancel, update, or refund\
+    \ an order — there is no tool\n  surface for those verbs in v0.\n- Cannot read\
+    \ or write another user's orders; the server enforces\n  user scoping via the\
+    \ bearer token.\n- Cannot list orders with filters (status, date range, etc.)\
+    \ — the\n  agent must filter client-side after `orders.list`.\n\n<!-- HUMAN id=\"\
+    notes\" -->\n<!-- /HUMAN -->\n"
+- name: products
+  summary: Read the product catalog the storefront displays
+  tools:
+  - auth: bearer
+    confidence: high
+    does: List every product in the catalog
+    method: GET
+    path: /api/products
+    proposed: true
+    source: src/api/products.ts:14
+    tool: products.list
+  prose_md: "# Products\n\n<!-- AGENT id=\"overview\" -->\nThe `products` capability\
+    \ is the read-only catalog surface. Every product\ncarries an `id`, `name`, `price`,\
+    \ `category`, and `stock` count. The\nstorefront treats the list as the source\
+    \ of truth for what can be added\nto a cart — there is no client-side filtering\
+    \ of category or stock. The\ncatalog is small enough that the only access pattern\
+    \ in v0 is \"fetch\nthem all\" — there is no pagination, search, or filter parameter.\n\
+    <!-- /AGENT -->\n\n## Concepts the agent must know\n\n- A product is identified\
+    \ by its string `id`. Cart entries reference\n  products by that id.\n- `stock`\
+    \ is an integer count of remaining units. The frontend does\n  not gate add-to-cart\
+    \ on stock; the order placement endpoint is the\n  authoritative stock check.\n\
+    - All requests are authenticated with a bearer token; missing or\n  expired tokens\
+    \ produce 401 even on a read.\n\n## When to reach for which tool\n\n- \"show me\
+    \ what's for sale\" → `products.list`\n- \"what's in the catalog\" → `products.list`\n\
+    - \"list the products\" → `products.list`\n\n---\n\n## products.list  {#products-list}\n\
+    \n**Proposed tool name:** `products.list` (proposed — no MCP server yet)\n**HTTP:**\
+    \ `GET /api/products`\n**Auth:** bearer\n**Confidence:** high\n**Source:** `src/api/products.ts:14`\n\
+    \n**Path params:** none\n**Query params:** none\n**Body shape:** none (GET)\n\
+    **Response shape:** `Array<{ id: string, name: string, price: number, category:\
+    \ string, stock: number }>`\n\n**When to call it:**\n- \"show me what's for sale\"\
+    \n- \"list the products\"\n- \"what categories do you have\"\n\n**Used by flows:**\
+    \ [browse-products](../flows/browse-products.md), [checkout](../flows/checkout.md)\n\
+    \n---\n\n## Things this capability cannot do\n\n- Cannot fetch a single product\
+    \ by id from this surface (the helper\n  exists in source but is not wired to\
+    \ any UI).\n- Cannot search or filter by category, price, or stock — the agent\n\
+    \  must filter the response client-side if needed.\n- Cannot create, update, or\
+    \ delete products. The catalog is read-only\n  from the frontend's perspective.\n\
+    \n<!-- HUMAN id=\"notes\" -->\n<!-- /HUMAN -->\n"
+- name: users
+  summary: Read and modify the acting user's own profile record
+  tools:
+  - auth: bearer
+    confidence: high
+    does: Read the acting user's profile
+    method: GET
+    path: /api/users/me
+    proposed: true
+    source: src/api/users.ts:17
+    tool: users.getMe
+  - auth: bearer
+    confidence: high
+    does: Update the acting user's name and/or email
+    method: PATCH
+    path: /api/users/me
+    proposed: true
+    source: src/api/users.ts:25
+    tool: users.updateMe
+  prose_md: "# Users\n\n<!-- AGENT id=\"overview\" -->\nThe `users` capability covers\
+    \ the acting user's own profile record.\nThe path uses the literal alias `me`\
+    \ rather than an id — the backend\nresolves \"self\" from the bearer token. There\
+    \ is no surface for\nreading or writing another user's record from the frontend.\
+    \ The\nrecord is small: `id`, `name`, `email`. Only `name` and `email` are\nwritable,\
+    \ both optional on PATCH.\n<!-- /AGENT -->\n\n## Concepts the agent must know\n\
+    \n- The path segment `me` is a literal alias for \"the acting user\".\n  The agent\
+    \ does not need to supply a user id.\n- Authentication is required for both read\
+    \ and write; a missing or\n  expired bearer token produces 401.\n- PATCH is partial:\
+    \ send only the fields the user wants to change.\n  Sending an empty body returns\
+    \ the current record unchanged.\n\n## When to reach for which tool\n\n- \"who\
+    \ am I\" → `users.getMe`\n- \"show my profile\" → `users.getMe`\n- \"change my\
+    \ name\" → `users.updateMe`\n- \"fix my email\" → `users.updateMe`\n\n---\n\n\
+    ## users.getMe  {#users-get-me}\n\n**Proposed tool name:** `users.getMe` (proposed\
+    \ — no MCP server yet)\n**HTTP:** `GET /api/users/me`\n**Auth:** bearer\n**Confidence:**\
+    \ high\n**Source:** `src/api/users.ts:17`\n\n**Path params:** none\n**Query params:**\
+    \ none\n**Body shape:** none (GET)\n**Response shape:** `{ id: string, name: string,\
+    \ email: string }`\n\n**When to call it:**\n- \"who am I signed in as\"\n- \"\
+    show my profile\"\n- \"what's my email on file\"\n\n**Used by flows:** [update-profile](../flows/update-profile.md)\n\
+    \n---\n\n## users.updateMe  {#users-update-me}\n\n**Proposed tool name:** `users.updateMe`\
+    \ (proposed — no MCP server yet)\n**HTTP:** `PATCH /api/users/me`\n**Auth:** bearer\n\
+    **Confidence:** high\n**Source:** `src/api/users.ts:25`\n\n**Path params:** none\n\
+    **Query params:** none\n**Body shape:** `{ name?: string, email?: string }`\n\
+    **Response shape:** `{ id: string, name: string, email: string }`\n\n**When to\
+    \ call it:**\n- \"change my name to X\"\n- \"update my email to Y\"\n- \"fix my\
+    \ profile\"\n\n**Used by flows:** [update-profile](../flows/update-profile.md)\n\
+    \n---\n\n## Things this capability cannot do\n\n- Cannot read or write another\
+    \ user's record — there is no `id`\n  surface, only `me`.\n- Cannot change a password\
+    \ or rotate credentials.\n- Cannot delete the account from this surface.\n\n<!--\
+    \ HUMAN id=\"notes\" -->\n<!-- /HUMAN -->\n"
+skills:
+- id: list-catalog
+  origin: discovered
+  name: List catalog
+  description: Use when the user wants to see what products are available to buy
+  user_phrases:
+  - show me what's for sale
+  - list the products
+  - what do you have
+  - browse the catalog
+  role: read
+  capability_ref: products
+  external: false
+  proposed_tool: products.list
+  prose_md: "# List catalog\n\n<!-- AGENT id=\"overview\" -->\nFetch the full product\
+    \ catalog so the agent can surface what the user\ncan buy. This is a flat read\
+    \ — no pagination, no filter, no search —\nand the agent applies any client-side\
+    \ narrowing (by category, by\nprice, by name) over the returned list.\n<!-- /AGENT\
+    \ -->\n\n## When to use\n\nThe user wants to know what products exist, or the\
+    \ agent needs to\nresolve a product name or id before placing an order. Also called\n\
+    during checkout so cart line items can be enriched with display\nnames and prices.\n\
+    \nTrigger phrases:\n- \"show me what's for sale\"\n- \"list the products\"\n-\
+    \ \"what do you have\"\n- \"browse the catalog\"\n\n## Preconditions\n\n1. User\
+    \ is signed in (a bearer token is present in client-side storage).\n2. No prior\
+    \ state is required — this can be the first call of a session.\n\n## Flows that\
+    \ surface this skill\n\n- [browse-products](../flows/browse-products.md) — entry\
+    \ from the\n  `/products` route on initial load.\n- [checkout](../flows/checkout.md)\
+    \ — entry from the `/cart` route on\n  mount, so cart line items can be enriched\
+    \ with product detail.\n\n## Failure modes\n\n| Result | Meaning | What to do\
+    \ |\n|---|---|---|\n| 401 | Bearer token missing or expired | Ask the user to\
+    \ sign in again |\n| 5xx | Backend transient failure | Retry once with backoff,\
+    \ then surface |\n| Empty list | Catalog has no products | Tell the user the store\
+    \ is currently empty |\n\n## Examples\n\n**1.** User says: *\"what do you sell?\"\
+    *\n\nExpected tool call shape (proposed — exact arguments depend on the\nfinal\
+    \ MCP server):\n\n```\nproducts.list()\n```\n\n**2.** User says: *\"show me anything\
+    \ under $20\"*\n\nExpected tool call shape (the agent filters the response\nclient-side;\
+    \ no query parameter is supported):\n\n```\nproducts.list()\n// then filter results\
+    \ where price < 20\n```\n\n<!-- HUMAN id=\"notes\" -->\n<!-- /HUMAN -->\n"
+- id: list-past-orders
+  origin: discovered
+  name: List past orders
+  description: Use when the user wants to see orders they have placed in the past
+  user_phrases:
+  - show my past orders
+  - what did I order
+  - my order history
+  - did my last order go through
+  role: read
+  capability_ref: orders
+  external: false
+  proposed_tool: orders.list
+  prose_md: "# List past orders\n\n<!-- AGENT id=\"overview\" -->\nFetch every order\
+    \ the acting user has placed previously. The\nresponse is user-scoped server-side\
+    \ via the bearer token — the\nagent never supplies a user id. This is a read-only\
+    \ retrieval; any\nfiltering by status, date, or amount happens client-side.\n\
+    <!-- /AGENT -->\n\n## When to use\n\nThe user is asking about the state of an\
+    \ earlier purchase, wants a\nhistory of past activity, or is checking that a recently\
+    \ placed\norder was actually accepted. Also called on cart-page mount so the\n\
+    \"past orders\" panel can be rendered alongside the current cart.\n\nTrigger phrases:\n\
+    - \"show my past orders\"\n- \"what did I order last week\"\n- \"my order history\"\
+    \n- \"did my last order go through\"\n\n## Preconditions\n\n1. User is signed\
+    \ in (a bearer token is present in client-side storage).\n2. The acting user is\
+    \ reading their own history; the server enforces\n   the scope.\n\n## Flows that\
+    \ surface this skill\n\n- [checkout](../flows/checkout.md) — surfaced on cart\
+    \ mount so the\n  user sees past orders alongside the current cart.\n\n## Failure\
+    \ modes\n\n| Result | Meaning | What to do |\n|---|---|---|\n| 401 | Bearer token\
+    \ missing or expired | Ask the user to sign in again |\n| 5xx | Backend transient\
+    \ failure | Retry once with backoff, then surface |\n| Empty list | User has never\
+    \ placed an order | Tell the user no order history exists yet |\n\n## Examples\n\
+    \n**1.** User says: *\"did my last order go through?\"*\n\nExpected tool call\
+    \ shape (proposed — exact arguments depend on the\nfinal MCP server):\n\n```\n\
+    orders.list()\n// then pick the most recent by createdAt and report status\n```\n\
+    \n**2.** User says: *\"what have I ordered recently?\"*\n\nExpected tool call\
+    \ shape:\n\n```\norders.list()\n// then summarise the N most recent entries\n\
+    ```\n\n<!-- HUMAN id=\"notes\" -->\n<!-- /HUMAN -->\n"
+- id: place-order
+  origin: discovered
+  name: Place order
+  description: Use when the user wants to purchase the items in their cart
+  user_phrases:
+  - place the order
+  - check out
+  - buy these
+  - complete my purchase
+  role: write
+  capability_ref: orders
+  external: false
+  proposed_tool: orders.create
+  prose_md: "# Place order\n\n<!-- AGENT id=\"overview\" -->\nSubmit the user's cart\
+    \ to the backend as a new order. The frontend\nsends only `items[]` (product id\
+    \ + quantity pairs); the backend\ncomputes `total`, `status`, `createdAt`, and\
+    \ assigns the order an\nid. The cart is local to the browser (`localStorage`)\
+    \ until this\nskill completes — the agent must treat the local cart as the\nsource\
+    \ of truth for the request body.\n<!-- /AGENT -->\n\n## When to use\n\nThe user\
+    \ has signalled they want to complete the purchase of the\nitems currently in\
+    \ their cart. Before invoking, confirm the cart is\nnon-empty and that the items\
+    \ reflect what the user intends to buy.\n\nTrigger phrases:\n- \"place the order\"\
+    \n- \"check out\"\n- \"buy these\"\n- \"complete my purchase\"\n\n## Preconditions\n\
+    \n1. User is signed in (a bearer token is present in client-side storage).\n2.\
+    \ The cart contains at least one item.\n3. Every cart line's `productId` corresponds\
+    \ to a product the\n   `list-catalog` skill can resolve.\n\n## Flows that surface\
+    \ this skill\n\n- [checkout](../flows/checkout.md) — triggered by the user pressing\n\
+    \  \"Place order\" on the cart page.\n\n## Failure modes\n\n| Result | Meaning\
+    \ | What to do |\n|---|---|---|\n| 401 | Bearer token missing or expired | Ask\
+    \ the user to sign in again |\n| 409 | Stock or pricing conflict on the server\
+    \ | Re-run `list-catalog` and tell the user what changed |\n| 422 | Cart payload\
+    \ rejected (empty items, bad ids) | Echo the error and ask the user how to fix\
+    \ |\n| 5xx | Backend transient failure | Retry once with backoff, then surface\
+    \ |\n\n## Examples\n\n**1.** User says: *\"go ahead and place the order\"*\n\n\
+    Expected tool call shape (proposed — exact arguments depend on the\nfinal MCP\
+    \ server):\n\n```\norders.create({ items: [{ productId: \"p_1\", quantity: 2 }]\
+    \ })\n```\n\n**2.** User says: *\"buy two of the blue mug and one of the red one\"\
+    *\n\nExpected tool call shape (after resolving names to ids via the\n`list-catalog`\
+    \ skill):\n\n```\norders.create({\n  items: [\n    { productId: \"p_blue_mug\"\
+    , quantity: 2 },\n    { productId: \"p_red_mug\",  quantity: 1 }\n  ]\n})\n```\n\
+    \n<!-- HUMAN id=\"notes\" -->\n<!-- /HUMAN -->\n"
+- id: read-user-profile
+  origin: discovered
+  name: Read user profile
+  description: Use when the user wants to know what name or email is on their account
+  user_phrases:
+  - who am I signed in as
+  - show my profile
+  - what's my email on file
+  - what name do you have for me
+  role: read
+  capability_ref: users
+  external: false
+  proposed_tool: users.getMe
+  prose_md: "# Read user profile\n\n<!-- AGENT id=\"overview\" -->\nRead the acting\
+    \ user's own profile record. The path uses the\nliteral alias `me`, so the agent\
+    \ never has to supply a user id —\nthe bearer token resolves identity server-side.\
+    \ Also called as the\nmount-time read on the profile page so the edit form can\
+    \ pre-fill.\n<!-- /AGENT -->\n\n## When to use\n\nThe user is asking what data\
+    \ the account currently holds, or the\nagent needs to pre-fill an edit form before\
+    \ offering a change.\nAlways pair with the write skill when the user has stated\
+    \ an\nintent to change a field.\n\nTrigger phrases:\n- \"who am I signed in as\"\
+    \n- \"show my profile\"\n- \"what's my email on file\"\n- \"what name do you have\
+    \ for me\"\n\n## Preconditions\n\n1. User is signed in (a bearer token is present\
+    \ in client-side storage).\n\n## Flows that surface this skill\n\n- [update-profile](../flows/update-profile.md)\
+    \ — surfaced on\n  profile-page mount to pre-fill the edit form.\n\n## Failure\
+    \ modes\n\n| Result | Meaning | What to do |\n|---|---|---|\n| 401 | Bearer token\
+    \ missing or expired | Ask the user to sign in again |\n| 5xx | Backend transient\
+    \ failure | Retry once with backoff, then surface |\n\n## Examples\n\n**1.** User\
+    \ says: *\"what email do you have for me?\"*\n\nExpected tool call shape (proposed\
+    \ — exact arguments depend on the\nfinal MCP server):\n\n```\nusers.getMe()\n\
+    ```\n\n**2.** User says: *\"who am I signed in as?\"*\n\nExpected tool call shape:\n\
+    \n```\nusers.getMe()\n// then return the `name` and `email` fields\n```\n\n<!--\
+    \ HUMAN id=\"notes\" -->\n<!-- /HUMAN -->\n"
+- id: write-user-profile
+  origin: discovered
+  name: Write user profile
+  description: Use when the user wants to change their account name or email
+  user_phrases:
+  - change my name
+  - update my email
+  - fix my profile
+  - my email is wrong
+  role: write
+  capability_ref: users
+  external: false
+  proposed_tool: users.updateMe
+  prose_md: "# Write user profile\n\n<!-- AGENT id=\"overview\" -->\nPersist the acting\
+    \ user's edited profile fields (`name`, `email`)\nto the backend. Partial update:\
+    \ the agent sends only the fields the\nuser actually changed. There is no create\
+    \ or delete surface here —\nthis is the single write verb on the user record in\
+    \ v0.\n<!-- /AGENT -->\n\n## When to use\n\nThe user has stated a change to one\
+    \ or both of their account\nfields and wants that change persisted. Pair with\
+    \ the read skill\nfirst if the agent does not already know the current value.\n\
+    \nTrigger phrases:\n- \"change my name to X\"\n- \"update my email to Y\"\n- \"\
+    fix my profile\"\n- \"my email is wrong\"\n\n## Preconditions\n\n1. User is signed\
+    \ in (a bearer token is present in client-side storage).\n2. The user has supplied\
+    \ at least one new field value to write.\n3. The acting user is updating their\
+    \ own record (the `me` alias\n   makes any cross-user write structurally impossible).\n\
+    \n## Flows that surface this skill\n\n- [update-profile](../flows/update-profile.md)\
+    \ — triggered by the\n  profile-page form submit.\n\n## Failure modes\n\n| Result\
+    \ | Meaning | What to do |\n|---|---|---|\n| 401 | Bearer token missing or expired\
+    \ | Ask the user to sign in again |\n| 422 | Validation failed (e.g., malformed\
+    \ email) | Echo the error and ask for a fix |\n| 5xx | Backend transient failure\
+    \ | Retry once with backoff, then surface |\n\n## Examples\n\n**1.** User says:\
+    \ *\"change my name to Sam\"*\n\nExpected tool call shape (proposed — exact arguments\
+    \ depend on the\nfinal MCP server):\n\n```\nusers.updateMe({ name: \"Sam\" })\n\
+    ```\n\n**2.** User says: *\"my email is wrong, it's actually sam@example.com\"\
+    *\n\nExpected tool call shape:\n\n```\nusers.updateMe({ email: \"sam@example.com\"\
+    \ })\n```\n\n<!-- HUMAN id=\"notes\" -->\n<!-- /HUMAN -->\n"
+flows:
+- id: browse-products
+  origin: discovered
+  included: true
+  name: Browse products
+  description: Use when the user wants to see the catalog and optionally add items
+    to their cart
+  intent: Surface the product catalog and let the user stage items locally for a future
+    purchase
+  user_phrases:
+  - show me what's for sale
+  - what do you have
+  - I want to look at the catalog
+  - add this to my cart
+  preconditions:
+  - User is signed in (a bearer token is present in client-side storage)
+  postconditions:
+  - User has seen the product list with name, price, category, and stock
+  - Optionally, the local cart has one or more product entries staged in localStorage
+  side_effects:
+  - localStorage.cart
+  confidence: high
+  workflow:
+    mermaid: "flowchart TD\n  start([start])\n  s_list_catalog[list-catalog]\n  e([end])\n\
+      \  s_place_order[place-order]\n  start --> s_place_order\n  s_list_catalog -->\
+      \ e\n  s_place_order --> s_list_catalog\n"
+  prose_md: "# Browse products\n\n<!-- AGENT id=\"prose\" -->\nThe user lands on the\
+    \ products page (either via the home redirect or the\n`/products` link). The agent's\
+    \ job is to surface the catalog, help the\nuser pick what they want, and stage\
+    \ chosen items into the browser-local\ncart. The cart write is intentionally local\
+    \ — placing the order is a\nseparate flow off a separate page.\n<!-- /AGENT -->\n\
+    \n## Entry point\n\n`src/pages/Products.tsx` — reached when the user navigates\
+    \ to `/products`\nor `/` (both mount the same component via the react-router-dom\
+    \ routes\ndeclared in `src/App.tsx`).\n\n## How the agent handles this\n\n1. On\
+    \ mount, perform [list catalog](../skills/list-catalog.md) and\n   surface the\
+    \ resulting product list to the user.\n2. If the user names a product or a property\
+    \ (\"the cheapest one\", \"the\n   blue mug\"), filter the response client-side\
+    \ and confirm the match\n   before adding.\n3. When the user asks to add an item\
+    \ to their cart, append (or\n   increment) the local cart entry — this is a browser-local\n\
+    \   write, not a backend call.\n4. Tell the user it has been added and offer to\
+    \ continue browsing or\n   navigate to the cart.\n\n## Decision points\n\n- **The\
+    \ user names a product the catalog does not contain** → tell\n  them it is not\
+    \ available and offer a similar item from the response.\n- **The user wants to\
+    \ remove or change quantity** → that surface is\n  not currently exposed in the\
+    \ UI; tell them they can manage it on\n  the cart page (no skill maps here).\n\
+    - **The catalog is empty** → tell the user the store has no products\n  and stop.\n\
+    \n## Sequence\n\n```mermaid\nsequenceDiagram\n  actor User\n  participant Agent\n\
+    \  participant T as MCP tools\n\n  User->>Agent: \"show me what's for sale\"\n\
+    \  Agent->>T: list catalog\n  T-->>Agent: product list\n  Agent->>User: summarises\
+    \ catalog\n  User->>Agent: \"add the blue mug\"\n  Agent->>User: confirms it has\
+    \ been staged locally\n```\n\n## Failure modes\n\n| What happens | What it means\
+    \ | What to do |\n|---|---|---|\n| Tool returns 401 | Bearer token missing or\
+    \ expired | Ask the user to sign in again |\n| Tool returns 5xx | Backend transient\
+    \ failure | Retry once with backoff, then surface |\n| Tool returns an empty list\
+    \ | Catalog has no products | Tell the user the store is currently empty |\n\n\
+    ## Skills used\n\n- [list catalog](../skills/list-catalog.md) — read\n\n<!-- HUMAN\
+    \ id=\"extra\" -->\n<!-- /HUMAN -->\n\n## Unresolved\n\nNone.\n"
+- id: update-profile
+  origin: discovered
+  included: true
+  name: Update profile
+  description: Use when the user wants to change their account name or email
+  intent: Pre-fill the profile form with the user's current values, then persist any
+    edits
+  user_phrases:
+  - change my name
+  - update my email
+  - fix my profile
+  - my email is wrong
+  preconditions:
+  - User is signed in (a bearer token is present in client-side storage)
+  - The user has supplied at least one new field value (the form requires both fields
+    non-empty)
+  postconditions:
+  - The user's profile reflects the submitted values
+  - Subsequent reads of the user record return the new values
+  confidence: high
+  workflow:
+    mermaid: "flowchart TD\n  start([start])\n  s_read_user_profile[read-user-profile]\n\
+      \  g{user edits and submits?}\n  s_write_user_profile[write-user-profile]\n\
+      \  e([end])\n  start --> s_read_user_profile\n  s_read_user_profile --> g\n\
+      \  g -- yes --> s_write_user_profile\n  g -- no --> e\n  s_write_user_profile\
+      \ --> e\n"
+  prose_md: "# Update profile\n\n<!-- AGENT id=\"prose\" -->\nThe user opens their\
+    \ profile page. On mount, the agent reads the\ncurrent record so the form can\
+    \ be pre-filled. The user may edit one\nor both of name and email, then submit\
+    \ to persist the change. The\nread is mount-time and unconditional; the write\
+    \ only fires on form\nsubmit and is partial — only the user's intent gets sent.\n\
+    <!-- /AGENT -->\n\n## Entry point\n\n`src/pages/Profile.tsx` — reached when the\
+    \ user navigates to\n`/profile` (mounted by the react-router-dom route in `src/App.tsx`).\n\
+    \n## How the agent handles this\n\n1. On mount, perform [read user profile](../skills/read-user-profile.md)\n\
+    \   so the agent knows the current `name` and `email`.\n2. Confirm which field(s)\
+    \ the user wants to change and the new\n   value(s). If the user did not provide\
+    \ one, ask before writing.\n3. Perform [write user profile](../skills/write-user-profile.md)\
+    \ with\n   only the fields the user changed.\n4. On success, summarise the change\
+    \ back to the user.\n5. On failure, surface the error and offer to retry once.\n\
+    \n## Decision points\n\n- **User did not provide a new value** → ask for it before\
+    \ the write skill.\n- **User asked to change a field this surface does not accept**\n\
+    \  (e.g. password) → tell the user that field cannot be changed here.\n- **Two\
+    \ retries failed** → stop retrying and ask the user whether to\n  surface a support\
+    \ request.\n\n## Sequence\n\n```mermaid\nsequenceDiagram\n  actor User\n  participant\
+    \ Agent\n  participant T as MCP tools\n\n  User->>Agent: \"open my profile\"\n\
+    \  Agent->>T: read user profile\n  T-->>Agent: current name and email\n  Agent->>User:\
+    \ shows current values\n  User->>Agent: \"change my name to Sam\"\n  Agent->>T:\
+    \ write user profile\n  T-->>Agent: updated record\n  Agent->>User: confirms outcome\n\
+    ```\n\n## Failure modes\n\n| What happens | What it means | What to do |\n|---|---|---|\n\
+    | read-user-profile returns 401 | Bearer token missing or expired | Ask the user\
+    \ to sign in again |\n| write-user-profile returns 401 | Same as above | Ask the\
+    \ user to sign in again |\n| write-user-profile returns 422 | Validation failed\
+    \ (e.g., bad email) | Echo the error and ask for a fix |\n| Any tool returns 5xx\
+    \ | Backend transient failure | Retry once with backoff, then surface |\n\n##\
+    \ Skills used\n\n- [read user profile](../skills/read-user-profile.md) — read\n\
+    - [write user profile](../skills/write-user-profile.md) — write\n\n<!-- HUMAN\
+    \ id=\"extra\" -->\n<!-- /HUMAN -->\n\n## Unresolved\n\nNone.\n"

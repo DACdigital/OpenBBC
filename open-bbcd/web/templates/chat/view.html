@@ -1,0 +1,47 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <a href="/agents/{{.AgentID}}/chat" class="back-link">← Sessions</a>
+    <h1>{{.AgentName}}</h1>
+  </div>
+</div>
+
+<div id="chat-log" class="chat-log" data-agent-id="{{.AgentID}}" data-session-id="{{.SessionID}}">
+  {{range .Messages}}
+    <div class="chat-bubble {{.Role}}">
+      <div class="bubble-header">
+        <div class="avatar avatar-{{.Role}}">{{slice .Role 0 1}}</div>
+        <div class="role-name">{{.Role}}</div>
+      </div>
+      <div class="content">
+        {{range .Blocks}}
+          {{if eq .Kind "text"}}
+            <div class="md" data-raw="{{.Text}}">{{.Text}}</div>
+          {{else if eq .Kind "tool_call"}}
+            <details class="tool-call">
+              <summary>▸ {{.ToolName}}(…)</summary>
+              <pre class="args">{{.ToolArgs}}</pre>
+            </details>
+          {{else if eq .Kind "tool_result"}}
+            <details class="tool-result{{if .ToolIsError}} is-error{{end}}">
+              <summary{{if .ToolIsMocked}} class="mocked"{{end}}>▸ result{{if .ToolIsMocked}} (mocked){{end}}</summary>
+              <pre>{{.ToolResult}}</pre>
+            </details>
+          {{end}}
+        {{end}}
+      </div>
+    </div>
+  {{else}}
+    <p class="empty-state">No messages yet — type below to start.</p>
+  {{end}}
+</div>
+
+<form id="chat-form" class="chat-input" onsubmit="return false;">
+  <textarea id="chat-input" placeholder="Type a message…  (Enter to send, Shift+Enter for newline)" rows="2"{{if not .HasBundle}} disabled{{end}}></textarea>
+  <button type="submit" id="chat-send" class="btn-primary"{{if not .HasBundle}} disabled title="Agent has no bundle"{{end}}>Send</button>
+</form>
+
+<link rel="stylesheet" href="/static/chat.css">
+<script src="/static/marked.min.js"></script>
+<script src="/static/chat.js" defer></script>
+{{end}}

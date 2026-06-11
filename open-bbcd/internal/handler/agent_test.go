@@ -33,14 +33,13 @@ func TestAgentHandler_Create_Success(t *testing.T) {
 	h := NewAgentHandler(&mockAgentRepo{
 		createFn: func(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error) {
 			return &types.Agent{
-				ID:     "test-id",
-				Name:   opts.Name,
-				Prompt: opts.Prompt,
+				ID:   "test-id",
+				Name: opts.Name,
 			}, nil
 		},
 	})
 
-	body := `{"name":"test","prompt":"test prompt"}`
+	body := `{"name":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/agents", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -65,7 +64,7 @@ func TestAgentHandler_Create_ValidationError(t *testing.T) {
 		},
 	})
 
-	body := `{"name":"","prompt":""}`
+	body := `{"name":""}`
 	req := httptest.NewRequest(http.MethodPost, "/agents", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

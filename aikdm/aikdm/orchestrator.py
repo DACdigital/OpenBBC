@@ -27,7 +27,7 @@ from aikdm.config import Settings
 from aikdm.progress import ProgressEmitter
 from aikdm.schemas import (
     Bundle,
-    BundleCapability,
+    BundleTool,
     BundleMetadata,
     ExternalAction,
     FlowMapConfig,
@@ -289,18 +289,25 @@ def _assemble_bundle(
         [main_outcome.rounds_run] + [o.rounds_run for o in skill_outcomes.values()]
     )
 
-    # proposed_tool falls back to c.name because the input Capability has no
-    # proposed_tool field today. tools[] (HTTP endpoint metadata) is intentionally
-    # omitted from the bundle — the future real-MCP wiring ticket reads it from
-    # the input config, not the bundle. See run-agent-design.md §8.2.
-    capabilities = [
-        BundleCapability(
-            name=c.name,
-            description=c.summary or "",
-            proposed_tool=c.name,
-        )
-        for c in config.capabilities
-    ]
+    # Flatten capabilities[].tools[] → bundle.tools[]. The agent's runtime
+    # abstraction is "tool"; capability is a config-side grouping only.
+    # Each tool entry carries enough to wrap as an MCP tool (name, method,
+    # path, auth) plus runtime context.
+    tools: list[BundleTool] = []
+    for c in config.capabilities:
+        for t in c.tools:
+            tools.append(
+                BundleTool(
+                    name=str(t.get("tool") or t.get("name") or ""),
+                    description=str(t.get("does") or t.get("description") or ""),
+                    method=str(t.get("method") or ""),
+                    path=str(t.get("path") or ""),
+                    auth=str(t.get("auth") or ""),
+                    capability=c.name,
+                    confidence=str(t.get("confidence") or ""),
+                    source=str(t.get("source") or ""),
+                )
+            )
 
     metadata = BundleMetadata(
         config_schema_version=config.schema_version,
@@ -320,7 +327,7 @@ def _assemble_bundle(
     return Bundle(
         metadata=metadata,
         main_prompt=main_outcome.body,
-        capabilities=capabilities,
+        tools=tools,
         skills=skills,
         external_actions=external_actions,
     )

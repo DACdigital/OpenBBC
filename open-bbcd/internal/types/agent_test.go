@@ -6,8 +6,7 @@ import (
 
 func TestNewAgent_Valid(t *testing.T) {
 	opts := CreateAgentOpts{
-		Name:   "Test Agent",
-		Prompt: "You are a helpful assistant.",
+		Name: "Test Agent",
 	}
 
 	agent, err := NewAgent(opts)
@@ -23,17 +22,9 @@ func TestNewAgent_Valid(t *testing.T) {
 }
 
 func TestNewAgent_MissingName(t *testing.T) {
-	opts := CreateAgentOpts{Prompt: "test"}
+	opts := CreateAgentOpts{}
 	_, err := NewAgent(opts)
 	if err != ErrNameRequired {
 		t.Errorf("error = %v, want %v", err, ErrNameRequired)
-	}
-}
-
-func TestNewAgent_MissingPrompt(t *testing.T) {
-	opts := CreateAgentOpts{Name: "test"}
-	_, err := NewAgent(opts)
-	if err != ErrPromptRequired {
-		t.Errorf("error = %v, want %v", err, ErrPromptRequired)
 	}
 }

@@ -140,7 +140,8 @@ Constraints:
 Single YAML bundle:
 - `metadata` — schema versions, models used, critic rounds, token usage, critic notes
 - `main_prompt` — assembled XML system prompt (role, scope, personality, guardrails, etc.)
-- `skills[]` — per-skill prompts with `<resources>` blocks naming each skill as an MCP server
+- `capabilities[]` — structured pass-through of `flow_map_config.capabilities` (name, description, proposed_tool)
+- `skills[]` — per-skill prompts with `<capabilities>` blocks naming each skill as an MCP server
 - `external_actions[]` — non-internal skills the agent must redirect users to
 
 Section structure is declared in `aikdm/schemas/prompt-v1.yaml` (versioned).
@@ -153,48 +154,51 @@ Section structure is declared in `aikdm/schemas/prompt-v1.yaml` (versioned).
 **Purpose:** Persistent storage for all platform data
 
 **Stores:**
-- Agents (with versions)
+- Agents (with versions, including bundle JSONB)
+- Chat sessions + messages (per-version test conversations)
 - Datasets (with versions)
-- Resources (with prompts)
+- Capabilities (with prompts) — legacy `resources` table; rename pending real MCP wiring
 - Evaluation scores
 
 ---
 
-## Resources
+## Capabilities
 
-Resources are backend capabilities (endpoints, tools) that the agent uses to fulfill user requests.
+Capabilities are backend interfaces (endpoints, tools) that the agent uses to fulfill user requests. The term is canonical across the repo: the discovery skill emits `.flow-map/capabilities/`, `FlowMapConfig.Capabilities` carries them through the wizard/configurator, and the aikdm bundle's `capabilities[]` block is the runtime-readable list.
+
+> **Note on terminology:** an older `resources` table + `/resources` REST surface still exists in open-bbcd. It's CRUD-with-no-producer today and will be renamed to `capabilities` when real MCP wiring lands.
 
 ### Discovery & Mapping
 
-Resources are **gathered per intent/process** during the CC Discovery phase:
+Capabilities are **gathered per intent/process** during the CC Discovery phase:
 
 ```
 ┌──────────────┐
-│   Intent A   │──► Resource 1, Resource 2
+│   Intent A   │──► Capability 1, Capability 2
 ├──────────────┤
-│   Intent B   │──► Resource 2, Resource 3
+│   Intent B   │──► Capability 2, Capability 3
 ├──────────────┤
-│   Intent C   │──► Resource 1, Resource 4
+│   Intent C   │──► Capability 1, Capability 4
 └──────────────┘
 ```
 
 ### MCP Toolkit
 
-open-bbcd includes its **own MCP toolkit** for resource connectivity:
+open-bbcd includes its **own MCP toolkit** for capability connectivity:
 
-- Each resource has its own **prompt/description** (similar to MCP tool descriptions)
-- Prompts are used during training to teach agent how to use each resource
-- Enables fine-grained control over agent's understanding of resources
+- Each capability has its own **prompt/description** (similar to MCP tool descriptions)
+- Prompts are used during training to teach agent how to use each capability
+- Enables fine-grained control over agent's understanding of capabilities
 
 ```
 ┌─────────────────────────────────────────────────┐
 │                   open-bbcd                     │
 │  ┌───────────────────────────────────────────┐  │
 │  │              MCP Toolkit                  │  │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐     │  │
-│  │  │Resource │ │Resource │ │Resource │     │  │
-│  │  │+ prompt │ │+ prompt │ │+ prompt │     │  │
-│  │  └────┬────┘ └────┬────┘ └────┬────┘     │  │
+│  │  ┌──────────┐┌──────────┐┌──────────┐    │  │
+│  │  │Capability││Capability││Capability│    │  │
+│  │  │+ prompt  ││+ prompt  ││+ prompt  │    │  │
+│  │  └────┬─────┘└────┬─────┘└────┬─────┘    │  │
 │  └───────┼───────────┼───────────┼──────────┘  │
 └──────────┼───────────┼───────────┼─────────────┘
            │           │           │
@@ -205,7 +209,7 @@ open-bbcd includes its **own MCP toolkit** for resource connectivity:
       └─────────┘ └─────────┘ └─────────┘
 ```
 
-### Resource Sources
+### Capability Sources
 
 | Source | Description |
 |--------|-------------|
@@ -219,14 +223,14 @@ User session is **passed/proxied** through the entire chain:
 ```
 ┌──────────┐        ┌──────────┐        ┌──────────┐
 │  Client  │ ─────► │ open-bbcd│ ─────► │ Backend  │
-│          │ AG-UI  │  (agent) │  MCP   │ Resource │
+│          │ AG-UI  │  (agent) │  MCP   │Capability│
 │ session  │        │          │        │          │
 │   token  │ ─────► │  proxy   │ ─────► │ auth     │
 └──────────┘        └──────────┘        └──────────┘
 ```
 
 - Agent acts within user's permission scope
-- Backend resources receive authenticated requests
+- Backend capabilities receive authenticated requests
 - No privilege escalation - agent can only do what user can do
 
 ---

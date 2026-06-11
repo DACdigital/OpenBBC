@@ -1,0 +1,13 @@
+[project]
+name = "openbbc-scripts"
+version = "0.0.0"
+description = "Dev scripts for OpenBBC (seed_bundle.py and future helpers)."
+requires-python = ">=3.12"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "pyyaml>=6.0",
+]
+
+# Not packaged — this exists only to define a venv for the scripts/ dir.
+# seed_bundle.py also carries PEP 723 inline metadata so `uv run
+# scripts/seed_bundle.py …` works without an active venv.
