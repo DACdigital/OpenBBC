@@ -1,9 +1,24 @@
 {{define "content"}}
 <div class="config-page {{if .ReadOnly}}config-readonly{{end}}">
   <div class="config-header">
-    <a href="/agents/ui" class="config-back">← Back to Agents</a>
+    <a href="/agents/ui?agent={{.AgentRootID}}" class="config-back">← Back to versions</a>
     <h1>{{.AgentName}}</h1>
     {{if .AgentStatus}}<span class="badge badge-{{.AgentStatus | statusClass}}">{{.AgentStatus}}</span>{{end}}
+    {{if .ReadOnly}}
+    <span class="config-spacer"></span>
+    <div class="config-actions">
+      <a href="/agents/{{.AgentID}}/config.yaml" class="btn-secondary">Download YAML</a>
+      {{if .HasBundle}}
+        <form method="post" action="/agents/{{.AgentID}}/chat/sessions" style="display:inline">
+          <button type="submit" class="btn-primary">Run</button>
+        </form>
+      {{else}}
+        <button type="button" class="btn-primary" disabled
+          style="opacity:0.4;cursor:not-allowed"
+          title="No bundle generated for this version yet">Run</button>
+      {{end}}
+    </div>
+    {{end}}
   </div>
 
   <nav class="config-tabs">
@@ -13,12 +28,13 @@
        class="config-tab {{if eq .Tab "skills"}}active{{end}}">Skills</a>
     <a href="/agents/{{.AgentID}}/configure/capabilities"
        class="config-tab {{if eq .Tab "capabilities"}}active{{end}}">Capabilities</a>
-    <span class="config-spacer"></span>
     {{if .ReadOnly}}
-      <a href="/agents/{{.AgentID}}/config.yaml" class="config-tab">Download YAML</a>
+    <a href="/agents/{{.AgentID}}/configure/inputs"
+       class="config-tab {{if eq .Tab "inputs"}}active{{end}}">Inputs</a>
     {{else}}
-      <a href="/agents/{{.AgentID}}/configure/finalize"
-         class="config-tab {{if eq .Tab "finalize"}}active{{end}}">Finalize →</a>
+    <span class="config-spacer"></span>
+    <a href="/agents/{{.AgentID}}/configure/finalize"
+       class="config-tab {{if eq .Tab "finalize"}}active{{end}}">Finalize →</a>
     {{end}}
   </nav>
 

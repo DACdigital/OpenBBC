@@ -55,7 +55,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	maxUploadBytes := int64(cfg.Discovery.MaxUploadMB) << 20
 	wizardHandler := NewWizardHandler(agentRepo, &schema, store, maxUploadBytes, logger)
 
-	configuratorHandler, err := NewConfiguratorHandler(agentRepo, web.Assets)
+	configuratorHandler, err := NewConfiguratorHandler(agentRepo, &schema, web.Assets)
 	if err != nil {
 		fatal("init configurator handler", err)
 	}
@@ -113,6 +113,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agents/{id}/configure/skills/{skillId}", configuratorHandler.Skills)
 	mux.HandleFunc("GET /agents/{id}/configure/capabilities", configuratorHandler.Capabilities)
 	mux.HandleFunc("GET /agents/{id}/configure/capabilities/{capName}", configuratorHandler.Capabilities)
+	mux.HandleFunc("GET /agents/{id}/configure/inputs", configuratorHandler.Inputs)
 	mux.HandleFunc("POST /agents/{id}/configure/flows/{flowId}/included", configuratorHandler.FlowIncluded)
 	mux.HandleFunc("GET /agents/{id}/configure/skills/new", configuratorHandler.SkillNew)
 	mux.HandleFunc("POST /agents/{id}/configure/skills", configuratorHandler.SkillCreate)
@@ -131,10 +132,11 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /resources/{id}", resourceHandler.Get)
 	mux.HandleFunc("GET /agents/{agent_id}/resources", resourceHandler.ListByAgent)
 
-	mux.HandleFunc("POST /agents/{id}/chat/sessions",          chatHandler.NewSession)
-	mux.HandleFunc("GET /agents/{id}/chat",                    chatHandler.SessionList)
-	mux.HandleFunc("GET /agents/{id}/chat/{session_id}",       chatHandler.ChatView)
-	mux.HandleFunc("POST /agents/{id}/chat/{session_id}/turn", chatHandler.Turn)
+	mux.HandleFunc("POST /agents/{id}/chat/sessions",           chatHandler.NewSession)
+	mux.HandleFunc("GET /agents/{id}/chat",                     chatHandler.SessionList)
+	mux.HandleFunc("GET /agents/{id}/chat/{session_id}",        chatHandler.ChatView)
+	mux.HandleFunc("PATCH /agents/{id}/chat/{session_id}/title", chatHandler.UpdateSessionTitle)
+	mux.HandleFunc("POST /agents/{id}/chat/{session_id}/turn",  chatHandler.Turn)
 
 	return RequestLogger(logger, mux)
 }

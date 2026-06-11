@@ -2,7 +2,7 @@
 <link rel="stylesheet" href="/static/chat.css">
 <div class="page-header">
   <div>
-    <a href="/agents/ui?agent={{.AgentName | urlEncode}}" class="back-link">← {{.AgentName}}</a>
+    <a href="/agents/ui?agent={{.AgentRootID}}" class="back-link">← {{.AgentName}}</a>
     <h1>Sessions</h1>
   </div>
   <form method="post" action="/agents/{{.AgentID}}/chat/sessions" class="inline">
@@ -22,7 +22,13 @@
   <tbody>
     {{range .Sessions}}
     <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agents/{{$.AgentID}}/chat/{{.ID}}">
-      <td><a href="/agents/{{$.AgentID}}/chat/{{.ID}}">{{if .Title}}{{.Title}}{{else}}Untitled session{{end}}</a></td>
+      <td>
+        {{if .Title}}
+          <a class="session-link" href="/agents/{{$.AgentID}}/chat/{{.ID}}">{{.Title}}</a>
+        {{else}}
+          <a class="session-link untitled" href="/agents/{{$.AgentID}}/chat/{{.ID}}">Untitled session</a>
+        {{end}}
+      </td>
       <td class="col-date">{{.CreatedAt.Format "Jan 2, 2006 15:04"}}</td>
       <td class="col-date">{{.UpdatedAt.Format "Jan 2, 2006 15:04"}}</td>
     </tr>

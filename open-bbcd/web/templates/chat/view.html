@@ -1,8 +1,29 @@
 {{define "content"}}
 <div class="page-header">
-  <div>
-    <a href="/agents/{{.AgentID}}/chat" class="back-link">← Sessions</a>
-    <h1>{{.AgentName}}</h1>
+  <div class="session-title" data-untitled-text="Untitled session">
+    <div class="session-title-display">
+      <h1 class="session-title-text {{if not .SessionTitle}}is-empty{{end}}">
+        {{if .SessionTitle}}{{.SessionTitle}}{{else}}Untitled session{{end}}
+      </h1>
+      <button type="button" class="session-title-edit btn-secondary" title="Edit title" aria-label="Edit title">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.756l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z"/>
+        </svg>
+        <span>Edit</span>
+      </button>
+    </div>
+    <form class="session-title-form" hidden>
+      <input class="session-title-input" type="text" maxlength="200" value="{{.SessionTitle}}" placeholder="Session title" />
+      <button type="submit" class="btn-primary">Save</button>
+      <button type="button" class="btn-secondary session-title-cancel">Cancel</button>
+    </form>
+    <div class="session-subtitle">{{.AgentName}}</div>
+  </div>
+  <div class="chat-actions">
+    <a href="/agents/{{.AgentID}}/chat" class="btn-secondary">Sessions</a>
+    <form method="post" action="/agents/{{.AgentID}}/chat/sessions" style="display:inline">
+      <button type="submit" class="btn-primary">+ New Session</button>
+    </form>
   </div>
 </div>
 

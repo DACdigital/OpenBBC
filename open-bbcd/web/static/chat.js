@@ -366,4 +366,64 @@
       el.innerHTML = renderMarkdown(raw);
     });
   }
+
+  // Inline session-title editor: pencil swaps display→form; Save PATCHes
+  // /title; Cancel reverts. Empty input clears the title to "Untitled".
+  initSessionTitleEditor();
+  function initSessionTitleEditor() {
+    const wrap = document.querySelector('.session-title');
+    if (!wrap) return;
+    const display = wrap.querySelector('.session-title-display');
+    const text = wrap.querySelector('.session-title-text');
+    const editBtn = wrap.querySelector('.session-title-edit');
+    const form = wrap.querySelector('.session-title-form');
+    const input = wrap.querySelector('.session-title-input');
+    const cancelBtn = wrap.querySelector('.session-title-cancel');
+    const untitledText = wrap.dataset.untitledText || 'Untitled session';
+
+    function toEdit() {
+      input.value = text.classList.contains('is-empty') ? '' : text.textContent.trim();
+      display.hidden = true;
+      form.hidden = false;
+      input.focus();
+      input.select();
+    }
+    function toDisplay() {
+      display.hidden = false;
+      form.hidden = true;
+    }
+
+    editBtn.addEventListener('click', toEdit);
+    cancelBtn.addEventListener('click', toDisplay);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); toDisplay(); }
+    });
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const newTitle = input.value.trim();
+      try {
+        const res = await fetch(`/agents/${agentID}/chat/${sessionID}/title`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const body = await res.json();
+        const saved = (body && typeof body.title === 'string') ? body.title : newTitle;
+        if (saved) {
+          text.textContent = saved;
+          text.classList.remove('is-empty');
+        } else {
+          text.textContent = untitledText;
+          text.classList.add('is-empty');
+        }
+        toDisplay();
+      } catch (err) {
+        console.error('[chat.js] title update failed', err);
+        alert('Could not update title: ' + err.message);
+      }
+    });
+  }
 })();

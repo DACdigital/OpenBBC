@@ -31,8 +31,10 @@ func statusClass(status string) string {
 	switch status {
 	case "DEPLOYED":
 		return "deployed"
-	case "TESTED":
-		return "tested"
+	case "READY":
+		return "ready"
+	case "TRAINING":
+		return "training"
 	case "INITIALIZING":
 		return "initializing"
 	default:
@@ -107,8 +109,10 @@ type agentsPageData struct {
 	Chains []types.AgentChain
 }
 
-// AgentsPage serves either the agents list or a single agent's version history,
-// depending on whether the ?agent= query param is present.
+// AgentsPage serves either the agents list or a single agent chain's version
+// history, depending on whether the ?agent= query param is present. The query
+// param value is the chain root agent ID — the stable identifier for a chain
+// across version additions.
 func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 	chains, err := h.agentRepo.ListGrouped(r.Context())
 	if err != nil {
@@ -116,9 +120,9 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if name := r.URL.Query().Get("agent"); name != "" {
+	if rootID := r.URL.Query().Get("agent"); rootID != "" {
 		for _, chain := range chains {
-			if chain.Name == name {
+			if chain.RootID == rootID {
 				renderTemplate(w, h.agentVersionsTmpl, "layout", agentVersionsPageData{
 					Active:   "agents",
 					Name:     chain.Name,

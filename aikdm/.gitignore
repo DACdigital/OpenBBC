@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.uv-cache/
+
+# Local test bundles / configs — not artifacts to track.
+bundle.yaml
+*-bundle.yaml
+minierp.yaml

@@ -8,10 +8,14 @@ import (
 
 type AgentStatus string
 
+// Lifecycle: INITIALIZING (wizard) -> DRAFT (finalized config) ->
+// TRAINING (aikdm generating/iterating) -> READY (bundle finalized for this
+// version) -> DEPLOYED.
 const (
 	AgentStatusInitializing AgentStatus = "INITIALIZING"
 	AgentStatusDraft        AgentStatus = "DRAFT"
-	AgentStatusTested       AgentStatus = "TESTED"
+	AgentStatusTraining     AgentStatus = "TRAINING"
+	AgentStatusReady        AgentStatus = "READY"
 	AgentStatusDeployed     AgentStatus = "DEPLOYED"
 )
 
@@ -36,7 +40,10 @@ type AgentVersion struct {
 }
 
 // AgentChain groups versions of the same named agent. Versions are ordered newest first.
+// RootID is the chain's stable identifier: the ID of the oldest version (the only
+// row in the chain with parent_version_id = NULL). Use it for routing.
 type AgentChain struct {
+	RootID   string
 	Name     string
 	Versions []AgentVersion
 }

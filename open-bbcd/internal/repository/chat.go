@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -34,6 +35,66 @@ func (r *ChatRepository) EnsureSession(ctx context.Context, sessionID, agentID s
 		return err
 	}
 	if existingAgentID != agentID {
+		return types.ErrSessionAgentMismatch
+	}
+	return nil
+}
+
+// GetSession loads a single session and verifies it belongs to agentID.
+// Returns ErrNotFound if the session doesn't exist and ErrSessionAgentMismatch
+// if it exists but is owned by a different agent.
+func (r *ChatRepository) GetSession(ctx context.Context, sessionID, agentID string) (*types.ChatSession, error) {
+	s := &types.ChatSession{}
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id::text, agent_id::text, COALESCE(title, ''), created_at, updated_at
+		FROM chat_sessions
+		WHERE id = $1::uuid
+	`, sessionID).Scan(&s.ID, &s.AgentID, &s.Title, &s.CreatedAt, &s.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, types.ErrNotFound
+		}
+		return nil, err
+	}
+	if s.AgentID != agentID {
+		return nil, types.ErrSessionAgentMismatch
+	}
+	return s, nil
+}
+
+// UpdateSessionTitle sets the title of a session. Verifies the session belongs
+// to agentID before updating. An empty title clears the column (NULL in DB).
+func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, agentID, title string) error {
+	var nullable sql.NullString
+	if title != "" {
+		nullable = sql.NullString{String: title, Valid: true}
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE chat_sessions
+		SET title = $3, updated_at = now()
+		WHERE id = $1::uuid AND agent_id = $2::uuid
+	`, sessionID, agentID, nullable)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// Either the session doesn't exist or it belongs to another agent.
+		// Distinguish for the caller.
+		var existingAgent string
+		err := r.db.QueryRowContext(ctx,
+			`SELECT agent_id::text FROM chat_sessions WHERE id = $1::uuid`,
+			sessionID,
+		).Scan(&existingAgent)
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
 		return types.ErrSessionAgentMismatch
 	}
 	return nil

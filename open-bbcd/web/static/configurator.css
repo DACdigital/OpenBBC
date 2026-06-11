@@ -61,6 +61,10 @@
 
 .config-spacer { flex: 1; }
 
+.config-actions { display: flex; gap: 8px; align-items: center; }
+.config-actions .btn-primary,
+.config-actions .btn-secondary { padding: 6px 14px; font-size: 13px; }
+
 .btn-disabled {
   padding: 8px 14px;
   background: #21262d;
@@ -94,6 +98,25 @@
   font-size: 13px;
   color: #8b949e;
 }
+
+/* Inputs tab — read-only display of wizard answers. */
+.inputs-tab { max-width: 820px; padding: 8px 4px 24px; }
+.inputs-hint { color: #8b949e; font-size: 13px; margin-bottom: 18px; }
+.inputs-list { display: flex; flex-direction: column; gap: 16px; }
+.inputs-row { display: flex; flex-direction: column; gap: 4px; }
+.inputs-label { font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.inputs-value {
+  font-size: 14px;
+  color: #e6edf3;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 10px 12px;
+  word-wrap: break-word;
+}
+.inputs-value.is-textarea { white-space: pre-wrap; line-height: 1.5; }
+.inputs-value.is-file code { color: #79c0ff; background: transparent; padding: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.inputs-empty { color: #6e7681; font-style: italic; }
 
 /* Read-only preview tweaks. */
 .config-readonly .config-list-row-toggle { cursor: not-allowed; opacity: .5; }

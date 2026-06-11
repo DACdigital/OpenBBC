@@ -22,16 +22,18 @@ import (
 type ConfigStore interface {
 	GetFlowMapConfig(ctx context.Context, agentID string) (cfg []byte, parseErr string, err error)
 	GetByID(ctx context.Context, id string) (*types.Agent, error)
+	ChainRootID(ctx context.Context, agentID string) (string, error)
 	UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error
 	UpdateStatus(ctx context.Context, agentID, expectedFrom, to string) error
 }
 
 type ConfiguratorHandler struct {
-	repo                                                  ConfigStore
-	flowsTmpl, skillsTmpl, capabilitiesTmpl, finalizeTmpl *template.Template
+	repo                                                              ConfigStore
+	schema                                                            *types.WizardSchema
+	flowsTmpl, skillsTmpl, capabilitiesTmpl, finalizeTmpl, inputsTmpl *template.Template
 }
 
-func NewConfiguratorHandler(repo ConfigStore, webFS fs.FS) (*ConfiguratorHandler, error) {
+func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS fs.FS) (*ConfiguratorHandler, error) {
 	funcs := template.FuncMap{
 		"renderMarkdown": renderMarkdown,
 		"statusClass":    statusClass,
@@ -84,12 +86,18 @@ func NewConfiguratorHandler(repo ConfigStore, webFS fs.FS) (*ConfiguratorHandler
 	if err != nil {
 		return nil, err
 	}
+	inputsTmpl, err := parse("inputs")
+	if err != nil {
+		return nil, err
+	}
 	return &ConfiguratorHandler{
 		repo:             repo,
+		schema:           schema,
 		flowsTmpl:        flowsTmpl,
 		skillsTmpl:       skillsTmpl,
 		capabilitiesTmpl: capabilitiesTmpl,
 		finalizeTmpl:     finalizeTmpl,
+		inputsTmpl:       inputsTmpl,
 	}, nil
 }
 
@@ -118,22 +126,40 @@ func renderMarkdown(agentID, md string) template.HTML {
 }
 
 type configPageData struct {
-	Active        string
-	AgentID       string
-	AgentName     string
-	AgentStatus   string
-	ReadOnly      bool   // true for non-INITIALIZING agents (DRAFT, TESTED, DEPLOYED)
-	Tab           string // "flows" | "skills" | "capabilities"
-	Config        types.FlowMapConfig
-	ParseError    string
-	SelectedFlow  *types.Flow
-	SelectedSkill *types.Skill
-	SelectedCap   *types.Capability
+	Active            string
+	AgentID           string
+	AgentRootID       string
+	AgentName         string
+	AgentStatus       string
+	ReadOnly          bool   // true for non-INITIALIZING agents (DRAFT, TRAINING, READY, DEPLOYED)
+	HasBundle         bool   // true when this version has a generated bundle (Run is enabled)
+	Tab               string // "flows" | "skills" | "capabilities" | "inputs"
+	Config            types.FlowMapConfig
+	ParseError        string
+	DiscoveryFilePath string
+	WizardFields      []wizardFieldView // populated for the Inputs tab
+	SelectedFlow      *types.Flow
+	SelectedSkill     *types.Skill
+	SelectedCap       *types.Capability
+}
+
+// wizardFieldView is the read-only projection of a wizard answer for the
+// Inputs tab. Value is the user-typed string for text/textarea fields, or
+// the stored object key for file fields.
+type wizardFieldView struct {
+	Key   string
+	Label string
+	Type  string
+	Value string
 }
 
 func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 	agentID := r.PathValue("id")
 	agent, err := h.repo.GetByID(r.Context(), agentID)
+	if err != nil {
+		return configPageData{}, err
+	}
+	rootID, err := h.repo.ChainRootID(r.Context(), agentID)
 	if err != nil {
 		return configPageData{}, err
 	}
@@ -148,14 +174,63 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 		}
 	}
 	return configPageData{
-		Active:      "agents",
-		AgentID:     agentID,
-		AgentName:   agent.Name,
-		AgentStatus: agent.Status,
-		ReadOnly:    agent.Status != "INITIALIZING",
-		Config:      cfg,
-		ParseError:  parseErr,
+		Active:            "agents",
+		AgentID:           agentID,
+		AgentRootID:       rootID,
+		AgentName:         agent.Name,
+		AgentStatus:       agent.Status,
+		ReadOnly:          agent.Status != "INITIALIZING",
+		HasBundle:         len(agent.Bundle) > 0,
+		Config:            cfg,
+		ParseError:        parseErr,
+		DiscoveryFilePath: agent.DiscoveryFilePath,
 	}, nil
+}
+
+// Inputs renders the read-only wizard-inputs tab. Only meaningful for
+// non-INITIALIZING agents; INITIALIZING users are still inside the wizard
+// flow itself. The values come from the same FlowMapConfig the configurator
+// edits (the wizard writes its answers there).
+func (h *ConfiguratorHandler) Inputs(w http.ResponseWriter, r *http.Request) {
+	data, err := h.load(r)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	data.Tab = "inputs"
+	data.WizardFields = h.buildWizardFieldViews(data.Config, data.DiscoveryFilePath)
+	renderTemplate(w, h.inputsTmpl, "layout", data)
+}
+
+// buildWizardFieldViews maps each schema field to its current value pulled
+// from the FlowMapConfig (for text/textarea) or the agent row (for file).
+// Field order follows the schema's `order` so the layout matches the wizard.
+func (h *ConfiguratorHandler) buildWizardFieldViews(cfg types.FlowMapConfig, discoveryFilePath string) []wizardFieldView {
+	if h.schema == nil {
+		return nil
+	}
+	wizardValues := map[string]string{
+		"name":            cfg.Name,
+		"scope":           cfg.Scope,
+		"should_do":       cfg.ShouldDo,
+		"should_not_do":   cfg.ShouldNotDo,
+		"business_domain": cfg.BusinessDomain,
+		"discovery_file":  discoveryFilePath,
+	}
+	out := make([]wizardFieldView, 0, len(h.schema.Wizard))
+	for _, of := range h.schema.OrderedFields() {
+		out = append(out, wizardFieldView{
+			Key:   of.Key,
+			Label: of.Field.Label,
+			Type:  of.Field.Type,
+			Value: wizardValues[of.Key],
+		})
+	}
+	return out
 }
 
 // Index redirects /agents/{id}/configure to the default Flows tab content.
