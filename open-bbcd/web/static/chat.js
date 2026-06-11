@@ -77,31 +77,41 @@
     }
   }
 
-  let pendingEvent = null;
+  // AG-UI's Go SDK emits frames like:
+  //   id: <event_id>
+  //   data: {"type":"RUN_STARTED","timestamp":...,"threadId":"...","runId":"..."}
+  //
+  // It does NOT use `event: TYPE` headers — the event type lives inside the
+  // JSON payload's `type` field. So we collect all `data:` lines for the
+  // current frame, parse JSON on the blank-line separator, and dispatch on
+  // the `type` field of the parsed object.
   let pendingData = '';
   function processSSELine(line) {
-    if (line.startsWith('event:')) {
-      pendingEvent = line.slice(6).trim();
-    } else if (line.startsWith('data:')) {
+    if (line.startsWith('data:')) {
       pendingData += line.slice(5).trim();
-    } else if (line === '' && pendingEvent) {
-      handleEvent(pendingEvent, pendingData);
-      pendingEvent = null;
+    } else if (line === '' && pendingData) {
+      let obj = null;
+      try { obj = JSON.parse(pendingData); } catch (_e) {}
+      if (obj && obj.type) {
+        handleEvent(obj.type, obj);
+      }
       pendingData = '';
     }
   }
 
-  function handleEvent(type, dataStr) {
-    let data = {};
-    try { data = JSON.parse(dataStr); } catch (_e) {}
-
+  function handleEvent(type, data) {
     switch (type) {
+      case 'RUN_STARTED':
+        // session_start; nothing to render — bubble was created on send()
+        break;
       case 'TEXT_MESSAGE_START':
+        // assistant bubble was already started locally on send()
         break;
       case 'TEXT_MESSAGE_CONTENT':
         appendTextDelta(data.delta || '');
         break;
       case 'TEXT_MESSAGE_END':
+        // visual cursor removed when fetch completes (finally block)
         break;
       case 'TOOL_CALL_START':
         startToolCall(data.toolCallId, data.toolCallName);
@@ -116,6 +126,7 @@
         appendToolResult(data.toolCallId, data.content);
         break;
       case 'RUN_FINISHED':
+        // turn-end; cursor removed in fetch finally
         break;
       case 'RUN_ERROR':
         showError(data.message || 'unknown error');
