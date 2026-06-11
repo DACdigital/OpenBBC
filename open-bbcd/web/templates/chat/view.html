@@ -9,7 +9,10 @@
 <div id="chat-log" class="chat-log" data-agent-id="{{.AgentID}}" data-session-id="{{.SessionID}}">
   {{range .Messages}}
     <div class="chat-bubble {{.Role}}">
-      <div class="role-label">[{{.Role}}]</div>
+      <div class="bubble-header">
+        <div class="avatar avatar-{{.Role}}">{{slice .Role 0 1}}</div>
+        <div class="role-name">{{.Role}}</div>
+      </div>
       <div class="content">
         {{range .Blocks}}
           {{if eq .Kind "text"}}
@@ -34,7 +37,7 @@
 </div>
 
 <form id="chat-form" class="chat-input" onsubmit="return false;">
-  <textarea id="chat-input" placeholder="Type a message…  (Cmd/Ctrl+Enter to send)" rows="2"{{if not .HasBundle}} disabled{{end}}></textarea>
+  <textarea id="chat-input" placeholder="Type a message…  (Enter to send, Shift+Enter for newline)" rows="2"{{if not .HasBundle}} disabled{{end}}></textarea>
   <button type="submit" id="chat-send" class="btn-primary"{{if not .HasBundle}} disabled title="Agent has no bundle"{{end}}>Send</button>
 </form>
 

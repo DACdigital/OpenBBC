@@ -9,21 +9,20 @@
 // fetch + ReadableStream (not EventSource) because AG-UI is POST → SSE
 // and EventSource is GET-only.
 //
-// Rendering policy:
-//   - Streaming deltas accumulate as plain text in a <div class="md md-stream">.
-//   - On bubble finish (RUN_FINISHED / fetch end), each md-stream div is parsed
-//     through marked.parse() and replaced with rendered HTML.
-//   - History (server-rendered) is parsed on DOMContentLoaded.
-// Live markdown parsing per delta would thrash the DOM and look broken when a
-// delta breaks mid-token (e.g. mid `**bold`).
+// Visual streaming model:
+//   Anthropic ships text in 5-15 char chunks, not single tokens. Painting
+//   raw chunks looks bursty. We instead buffer inbound deltas and drain
+//   them at a target rate of ~one full buffer per 500ms — fast enough to
+//   keep up with the network, smooth enough that the user perceives
+//   continuous typing. When the stream ends we mark the bubble done; the
+//   drain loop finalises (markdown render) once the buffer is empty.
 
 (function () {
-  console.info('[chat.js] loaded — AG-UI SSE client v3 (markdown + throttled scroll)');
+  console.info('[chat.js] loaded — AG-UI SSE client v4 (typewriter + avatars)');
 
   const log = document.getElementById('chat-log');
   if (!log) return;
 
-  // Render all server-rendered history markdown blocks on load.
   renderAllMarkdown(log);
 
   const input = document.getElementById('chat-input');
@@ -33,18 +32,21 @@
   if (!agentID || !sessionID) return;
 
   let currentAssistantTurn = null;
+  let displayBuf = '';
+  let typingActive = false;
+  let streamEnded = false;
+  let onDrained = null;
   const toolCallElements = new Map();
 
   sendBtn.addEventListener('click', send);
+  // Enter sends; Shift+Enter inserts a newline (standard chat textarea behavior).
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       send();
     }
   });
 
-  // Throttled scroller — coalesces multiple scroll requests per frame so a
-  // rapid burst of text deltas does not pin the main thread on layout.
   let scrollPending = false;
   function scheduleScroll() {
     if (scrollPending) return;
@@ -94,11 +96,26 @@
       console.error('[chat.js] fetch error', err);
       showError(err.message || String(err));
     } finally {
-      finishAssistantBubble();
+      streamEnded = true;
+      // Wait for the typewriter to drain its buffer before finalising the
+      // bubble (markdown render + re-enable input). Otherwise we'd cut off
+      // mid-sentence visually.
+      await waitForDrain();
+      finalizeAssistantBubble();
       sendBtn.disabled = false;
       input.disabled = false;
       input.focus();
     }
+  }
+
+  function waitForDrain() {
+    return new Promise((resolve) => {
+      if (!typingActive && displayBuf.length === 0) {
+        resolve();
+        return;
+      }
+      onDrained = resolve;
+    });
   }
 
   let pendingData = '';
@@ -151,47 +168,102 @@
     }
   }
 
+  function appendTextDelta(delta) {
+    if (!currentAssistantTurn) startAssistantBubble();
+    displayBuf += delta;
+    if (!typingActive) startTyping();
+  }
+
+  // Typewriter loop: drain displayBuf at ~one full buffer per 500ms.
+  // Chars per frame = ceil(bufLen / 30) so a 30-char backlog drains 1/frame,
+  // a 300-char backlog drains 10/frame — both empty in roughly the same
+  // wall time, keeping the feel consistent regardless of arrival burstiness.
+  function startTyping() {
+    typingActive = true;
+    const tick = () => {
+      if (!currentAssistantTurn) {
+        typingActive = false;
+        signalDrained();
+        return;
+      }
+      if (displayBuf.length === 0) {
+        typingActive = false;
+        signalDrained();
+        return;
+      }
+      const chunkSize = Math.max(1, Math.ceil(displayBuf.length / 30));
+      const chunk = displayBuf.slice(0, chunkSize);
+      displayBuf = displayBuf.slice(chunkSize);
+
+      // If the most recent child of .content is a tool detail (not our stream
+      // segment), start a fresh segment so text appears after the tool block.
+      const last = currentAssistantTurn.content.lastChild;
+      if (last !== currentAssistantTurn.stream) {
+        const seg = newStreamSegment();
+        currentAssistantTurn.content.appendChild(seg);
+        currentAssistantTurn.stream = seg;
+      }
+      currentAssistantTurn.stream.firstChild.data += chunk;
+      scheduleScroll();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  function signalDrained() {
+    if (onDrained) {
+      const fn = onDrained;
+      onDrained = null;
+      fn();
+    }
+  }
+
   function appendUserBubble(text) {
     const b = document.createElement('div');
     b.className = 'chat-bubble user';
-    const role = document.createElement('div');
-    role.className = 'role-label';
-    role.textContent = '[user]';
+    b.appendChild(buildHeader('user'));
     const content = document.createElement('div');
     content.className = 'content';
     const md = document.createElement('div');
     md.className = 'md';
     md.innerHTML = renderMarkdown(text);
     content.appendChild(md);
-    b.appendChild(role);
     b.appendChild(content);
     log.appendChild(b);
     scheduleScroll();
   }
 
   function startAssistantBubble() {
+    streamEnded = false;
     const b = document.createElement('div');
     b.className = 'chat-bubble assistant streaming';
-    const role = document.createElement('div');
-    role.className = 'role-label';
-    role.textContent = '[assistant]';
+    b.appendChild(buildHeader('assistant'));
     const content = document.createElement('div');
     content.className = 'content';
     const stream = newStreamSegment();
     content.appendChild(stream);
-    const cursor = document.createElement('span');
-    cursor.className = 'cursor';
-    cursor.textContent = '▌';
-    b.appendChild(role);
     b.appendChild(content);
-    b.appendChild(cursor);
     log.appendChild(b);
     currentAssistantTurn = { bubble: b, content, stream };
     scheduleScroll();
   }
 
-  // newStreamSegment creates a <div.md.md-stream> with a single text node child.
-  // Deltas are appended to data on the text node — no element re-creation.
+  // Header: role-coloured avatar circle + role text. Matches the structure
+  // produced server-side for history (see view.html template).
+  function buildHeader(role) {
+    const h = document.createElement('div');
+    h.className = 'bubble-header';
+    const avatar = document.createElement('div');
+    avatar.className = `avatar avatar-${role}`;
+    avatar.textContent = role.charAt(0).toUpperCase();
+    const name = document.createElement('div');
+    name.className = 'role-name';
+    name.textContent = role;
+    h.appendChild(avatar);
+    h.appendChild(name);
+    return h;
+  }
+
   function newStreamSegment() {
     const div = document.createElement('div');
     div.className = 'md md-stream';
@@ -199,26 +271,9 @@
     return div;
   }
 
-  function appendTextDelta(delta) {
-    if (!currentAssistantTurn) startAssistantBubble();
-    // If the most recent child of .content is a tool detail (not our stream
-    // segment), start a fresh segment so text appears after the tool block.
-    const last = currentAssistantTurn.content.lastChild;
-    if (last !== currentAssistantTurn.stream) {
-      const seg = newStreamSegment();
-      currentAssistantTurn.content.appendChild(seg);
-      currentAssistantTurn.stream = seg;
-    }
-    currentAssistantTurn.stream.firstChild.data += delta;
-    scheduleScroll();
-  }
-
-  function finishAssistantBubble() {
+  function finalizeAssistantBubble() {
     if (!currentAssistantTurn) return;
     currentAssistantTurn.bubble.classList.remove('streaming');
-    const cursor = currentAssistantTurn.bubble.querySelector('.cursor');
-    if (cursor) cursor.remove();
-    // Parse each accumulated text segment as markdown.
     const segments = currentAssistantTurn.content.querySelectorAll('.md-stream');
     segments.forEach((seg) => {
       const raw = seg.textContent || '';
@@ -304,9 +359,6 @@
       .replace(/>/g, '&gt;');
   }
 
-  // renderAllMarkdown walks every .md element under root and parses its raw
-  // markdown (from data-raw if present, else textContent) into HTML. Called
-  // once on page load for server-rendered history blocks.
   function renderAllMarkdown(root) {
     root.querySelectorAll('.md').forEach((el) => {
       if (el.classList.contains('md-stream')) return;
