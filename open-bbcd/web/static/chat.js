@@ -8,12 +8,23 @@
 //
 // fetch + ReadableStream (not EventSource) because AG-UI is POST → SSE
 // and EventSource is GET-only.
+//
+// Rendering policy:
+//   - Streaming deltas accumulate as plain text in a <div class="md md-stream">.
+//   - On bubble finish (RUN_FINISHED / fetch end), each md-stream div is parsed
+//     through marked.parse() and replaced with rendered HTML.
+//   - History (server-rendered) is parsed on DOMContentLoaded.
+// Live markdown parsing per delta would thrash the DOM and look broken when a
+// delta breaks mid-token (e.g. mid `**bold`).
 
 (function () {
-  console.info('[chat.js] loaded — AG-UI SSE client v2');
+  console.info('[chat.js] loaded — AG-UI SSE client v3 (markdown + throttled scroll)');
 
   const log = document.getElementById('chat-log');
   if (!log) return;
+
+  // Render all server-rendered history markdown blocks on load.
+  renderAllMarkdown(log);
 
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('chat-send');
@@ -21,9 +32,6 @@
   const sessionID = log.dataset.sessionId;
   if (!agentID || !sessionID) return;
 
-  // currentAssistantTurn holds per-turn DOM refs. textNode is a dedicated
-  // child of `.content` so streaming deltas never wipe sibling <details>
-  // elements (which textContent += would do).
   let currentAssistantTurn = null;
   const toolCallElements = new Map();
 
@@ -34,6 +42,18 @@
       send();
     }
   });
+
+  // Throttled scroller — coalesces multiple scroll requests per frame so a
+  // rapid burst of text deltas does not pin the main thread on layout.
+  let scrollPending = false;
+  function scheduleScroll() {
+    if (scrollPending) return;
+    scrollPending = true;
+    requestAnimationFrame(() => {
+      scrollPending = false;
+      log.scrollTop = log.scrollHeight;
+    });
+  }
 
   async function send() {
     const text = input.value.trim();
@@ -69,7 +89,7 @@
           processSSELine(line);
         }
       }
-      if (buf) processSSELine(buf); // flush trailing partial
+      if (buf) processSSELine(buf);
     } catch (err) {
       console.error('[chat.js] fetch error', err);
       showError(err.message || String(err));
@@ -107,7 +127,6 @@
       case 'TEXT_MESSAGE_START':
       case 'TEXT_MESSAGE_END':
       case 'RUN_FINISHED':
-        // No render side-effect; cursor cleanup happens in finishAssistantBubble.
         break;
       case 'TEXT_MESSAGE_CONTENT':
         appendTextDelta(data.delta || '');
@@ -140,11 +159,14 @@
     role.textContent = '[user]';
     const content = document.createElement('div');
     content.className = 'content';
-    content.textContent = text;
+    const md = document.createElement('div');
+    md.className = 'md';
+    md.innerHTML = renderMarkdown(text);
+    content.appendChild(md);
     b.appendChild(role);
     b.appendChild(content);
     log.appendChild(b);
-    b.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    scheduleScroll();
   }
 
   function startAssistantBubble() {
@@ -155,10 +177,8 @@
     role.textContent = '[assistant]';
     const content = document.createElement('div');
     content.className = 'content';
-    // Dedicated text node — deltas append here without touching sibling
-    // tool-detail elements that we'll add inside `.content` later.
-    const textNode = document.createTextNode('');
-    content.appendChild(textNode);
+    const stream = newStreamSegment();
+    content.appendChild(stream);
     const cursor = document.createElement('span');
     cursor.className = 'cursor';
     cursor.textContent = '▌';
@@ -166,22 +186,31 @@
     b.appendChild(content);
     b.appendChild(cursor);
     log.appendChild(b);
-    currentAssistantTurn = { bubble: b, content, textNode };
-    b.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    currentAssistantTurn = { bubble: b, content, stream };
+    scheduleScroll();
+  }
+
+  // newStreamSegment creates a <div.md.md-stream> with a single text node child.
+  // Deltas are appended to data on the text node — no element re-creation.
+  function newStreamSegment() {
+    const div = document.createElement('div');
+    div.className = 'md md-stream';
+    div.appendChild(document.createTextNode(''));
+    return div;
   }
 
   function appendTextDelta(delta) {
     if (!currentAssistantTurn) startAssistantBubble();
-    // If a tool detail was just rendered, deltas should start a fresh text run
-    // after it — otherwise the text would visually merge into the tool block.
+    // If the most recent child of .content is a tool detail (not our stream
+    // segment), start a fresh segment so text appears after the tool block.
     const last = currentAssistantTurn.content.lastChild;
-    if (last && last.nodeType !== Node.TEXT_NODE) {
-      const t = document.createTextNode('');
-      currentAssistantTurn.content.appendChild(t);
-      currentAssistantTurn.textNode = t;
+    if (last !== currentAssistantTurn.stream) {
+      const seg = newStreamSegment();
+      currentAssistantTurn.content.appendChild(seg);
+      currentAssistantTurn.stream = seg;
     }
-    currentAssistantTurn.textNode.data += delta;
-    currentAssistantTurn.bubble.scrollIntoView({ block: 'end' });
+    currentAssistantTurn.stream.firstChild.data += delta;
+    scheduleScroll();
   }
 
   function finishAssistantBubble() {
@@ -189,7 +218,15 @@
     currentAssistantTurn.bubble.classList.remove('streaming');
     const cursor = currentAssistantTurn.bubble.querySelector('.cursor');
     if (cursor) cursor.remove();
+    // Parse each accumulated text segment as markdown.
+    const segments = currentAssistantTurn.content.querySelectorAll('.md-stream');
+    segments.forEach((seg) => {
+      const raw = seg.textContent || '';
+      seg.classList.remove('md-stream');
+      seg.innerHTML = renderMarkdown(raw);
+    });
     currentAssistantTurn = null;
+    scheduleScroll();
   }
 
   function startToolCall(id, name) {
@@ -204,6 +241,7 @@
     details.appendChild(args);
     currentAssistantTurn.content.appendChild(details);
     toolCallElements.set(id, { summary, args, name });
+    scheduleScroll();
   }
 
   function appendToolArgs(id, delta) {
@@ -238,6 +276,7 @@
     details.appendChild(summary);
     details.appendChild(pre);
     currentAssistantTurn.content.appendChild(details);
+    scheduleScroll();
   }
 
   function showError(msg) {
@@ -245,6 +284,34 @@
     b.className = 'chat-error';
     b.textContent = `Error: ${msg}`;
     log.appendChild(b);
-    b.scrollIntoView({ block: 'end' });
+    scheduleScroll();
+  }
+
+  function renderMarkdown(text) {
+    if (typeof window.marked === 'undefined') return escapeHTML(text);
+    try {
+      return window.marked.parse(text, { breaks: true, gfm: true });
+    } catch (e) {
+      console.error('[chat.js] markdown render failed', e);
+      return escapeHTML(text);
+    }
+  }
+
+  function escapeHTML(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // renderAllMarkdown walks every .md element under root and parses its raw
+  // markdown (from data-raw if present, else textContent) into HTML. Called
+  // once on page load for server-rendered history blocks.
+  function renderAllMarkdown(root) {
+    root.querySelectorAll('.md').forEach((el) => {
+      if (el.classList.contains('md-stream')) return;
+      const raw = el.dataset.raw != null ? el.dataset.raw : el.textContent;
+      el.innerHTML = renderMarkdown(raw);
+    });
   }
 })();

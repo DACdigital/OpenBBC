@@ -22,6 +22,13 @@ release into this directory and bumping the version + checksum here.
 
 - Version: see `htmx.min.js` (existing — vendored prior to this PR)
 
+## marked
+
+- Version: 14.1.4
+- License: MIT
+- Source: https://github.com/markedjs/marked
+- CDN used for fetch: https://cdn.jsdelivr.net/npm/marked@14.1.4/
+
 ## openbbc-flow.js
 
 - First-party module. Bridges Drawflow ⇄ mermaid `flowchart TD` and runs Dagre

@@ -13,7 +13,7 @@
       <div class="content">
         {{range .Blocks}}
           {{if eq .Kind "text"}}
-            <span class="text-block">{{.Text}}</span>
+            <div class="md" data-raw="{{.Text}}">{{.Text}}</div>
           {{else if eq .Kind "tool_call"}}
             <details class="tool-call">
               <summary>▸ {{.ToolName}}(…)</summary>
@@ -39,5 +39,6 @@
 </form>
 
 <link rel="stylesheet" href="/static/chat.css">
+<script src="/static/marked.min.js"></script>
 <script src="/static/chat.js" defer></script>
 {{end}}
