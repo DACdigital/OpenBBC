@@ -67,11 +67,14 @@ func (l *LLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event
 }
 
 // chunkTranslator maps SDK stream events to internal llm.Events. It holds
-// per-stream state: a mapping from content-block index to tool-use ID so that
+// per-stream state per content-block index: a mapping to tool-use ID so that
 // InputJSONDelta events (which carry only an index) can be attributed to the
-// correct tool-use call.
+// correct tool-use call, and the initial Input payload captured from
+// ContentBlockStartEvent — kept until either a delta supersedes it or
+// ContentBlockStopEvent flushes it as a single fragment (no-delta case).
 type chunkTranslator struct {
-	toolUseIDAtIndex map[int64]string
+	toolUseIDAtIndex      map[int64]string
+	pendingInitialInputAt map[int64]json.RawMessage
 }
 
 // translate maps one SDK MessageStreamEventUnion to zero or more internal Events.
@@ -79,6 +82,9 @@ type chunkTranslator struct {
 func (t *chunkTranslator) translate(chunk sdk.MessageStreamEventUnion) []llm.Event {
 	if t.toolUseIDAtIndex == nil {
 		t.toolUseIDAtIndex = map[int64]string{}
+	}
+	if t.pendingInitialInputAt == nil {
+		t.pendingInitialInputAt = map[int64]json.RawMessage{}
 	}
 	switch v := chunk.AsAny().(type) {
 	case sdk.MessageStartEvent:
@@ -91,11 +97,17 @@ func (t *chunkTranslator) translate(chunk sdk.MessageStreamEventUnion) []llm.Eve
 		return nil
 
 	case sdk.ContentBlockStartEvent:
-		// If the block is a tool_use, record the mapping index→ID and emit
-		// ToolUseStartEvent. Text blocks don't need tracking.
+		// If the block is a tool_use, record the mapping index→ID, stash the
+		// initial Input payload (Anthropic always sends a placeholder here,
+		// typically {}), and emit ToolUseStartEvent. The stashed input is
+		// flushed on ContentBlockStop only if no InputJSONDelta arrived —
+		// covering tools the model invokes with no arguments.
 		switch b := v.ContentBlock.AsAny().(type) {
 		case sdk.ToolUseBlock:
 			t.toolUseIDAtIndex[v.Index] = b.ID
+			if len(b.Input) > 0 {
+				t.pendingInitialInputAt[v.Index] = b.Input
+			}
 			return []llm.Event{
 				llm.ToolUseStartEvent{ID: b.ID, Name: b.Name},
 			}
@@ -107,8 +119,15 @@ func (t *chunkTranslator) translate(chunk sdk.MessageStreamEventUnion) []llm.Eve
 		case sdk.TextDelta:
 			return []llm.Event{llm.TextDeltaEvent{Delta: d.Text}}
 		case sdk.InputJSONDelta:
-			// Attribute this fragment to the tool-use block that opened at
-			// the same index in ContentBlockStartEvent.
+			// Empty partial_json is stream noise — Anthropic sometimes emits
+			// one alongside a tool_use that has no real arguments. Ignore it:
+			// don't supersede the start-event placeholder and don't propagate
+			// an empty delta (the AG-UI transport rejects empty deltas).
+			if d.PartialJSON == "" {
+				return nil
+			}
+			// A real fragment supersedes the start-event placeholder.
+			delete(t.pendingInitialInputAt, v.Index)
 			id := t.toolUseIDAtIndex[v.Index]
 			return []llm.Event{llm.ToolUseInputEvent{
 				ID:           id,
@@ -119,9 +138,22 @@ func (t *chunkTranslator) translate(chunk sdk.MessageStreamEventUnion) []llm.Eve
 
 	case sdk.ContentBlockStopEvent:
 		// If this block was a tool_use, emit ToolUseEndEvent and clean up.
+		// If the initial Input payload was never superseded by a delta, flush
+		// it as a single ToolUseInputEvent before the end so downstream
+		// consumers always receive a complete input JSON.
 		if id, ok := t.toolUseIDAtIndex[v.Index]; ok {
+			initial, hadInitial := t.pendingInitialInputAt[v.Index]
+			var events []llm.Event
+			if hadInitial {
+				events = append(events, llm.ToolUseInputEvent{
+					ID:           id,
+					JSONFragment: string(initial),
+				})
+				delete(t.pendingInitialInputAt, v.Index)
+			}
 			delete(t.toolUseIDAtIndex, v.Index)
-			return []llm.Event{llm.ToolUseEndEvent{ID: id}}
+			events = append(events, llm.ToolUseEndEvent{ID: id})
+			return events
 		}
 		return nil
 

@@ -258,27 +258,95 @@ func TestTranslate_ContentBlockDelta_InputJSON_CarriesToolUseID(t *testing.T) {
 	}
 }
 
-func TestTranslate_ContentBlockStop_ToolUse_EmitsToolUseEndEvent(t *testing.T) {
+func TestTranslate_ContentBlockStop_ToolUse_NoDeltas_FlushesInitialInput(t *testing.T) {
+	// When no InputJSONDelta arrives between start and stop (model called the
+	// tool with no arguments), the translator must flush the initial Input
+	// placeholder from ContentBlockStartEvent as a single ToolUseInputEvent
+	// before the end — otherwise downstream sees an empty input and the next
+	// turn omits the field entirely, which Anthropic rejects with 400.
 	tr := &chunkTranslator{}
-	// Register the block at index 2.
 	startRaw := `{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"tu_end","name":"finish","input":{}}}`
 	tr.translate(mustParseEvent(t, startRaw))
 
 	stopRaw := `{"type":"content_block_stop","index":2}`
 	events := tr.translate(mustParseEvent(t, stopRaw))
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events (ToolUseInputEvent + ToolUseEndEvent), got %d", len(events))
 	}
-	ee, ok := events[0].(llm.ToolUseEndEvent)
+	ie, ok := events[0].(llm.ToolUseInputEvent)
 	if !ok {
-		t.Fatalf("expected ToolUseEndEvent, got %T", events[0])
+		t.Fatalf("expected ToolUseInputEvent first, got %T", events[0])
+	}
+	if ie.ID != "tu_end" {
+		t.Fatalf("input ID = %q, want tu_end", ie.ID)
+	}
+	if ie.JSONFragment != "{}" {
+		t.Fatalf("input JSONFragment = %q, want {}", ie.JSONFragment)
+	}
+	ee, ok := events[1].(llm.ToolUseEndEvent)
+	if !ok {
+		t.Fatalf("expected ToolUseEndEvent second, got %T", events[1])
 	}
 	if ee.ID != "tu_end" {
 		t.Fatalf("ID = %q, want tu_end", ee.ID)
 	}
-	// Index should be cleaned up.
 	if _, ok := tr.toolUseIDAtIndex[2]; ok {
 		t.Fatalf("toolUseIDAtIndex[2] should be removed after ContentBlockStop")
+	}
+	if _, ok := tr.pendingInitialInputAt[2]; ok {
+		t.Fatalf("pendingInitialInputAt[2] should be removed after ContentBlockStop")
+	}
+}
+
+func TestTranslate_ContentBlockDelta_EmptyInputJSON_Ignored(t *testing.T) {
+	// Anthropic sometimes emits an input_json_delta with partial_json="" for
+	// tool_use blocks that have no real arguments. That delta is stream noise:
+	// it must NOT supersede the start-event placeholder, and it must NOT be
+	// propagated downstream (the AG-UI transport rejects empty deltas, and
+	// dropping the placeholder would leave the orchestrator with a nil input,
+	// which Anthropic rejects on the next round with "Field required").
+	tr := &chunkTranslator{}
+	startRaw := `{"type":"content_block_start","index":4,"content_block":{"type":"tool_use","id":"tu_n","name":"noop","input":{}}}`
+	tr.translate(mustParseEvent(t, startRaw))
+
+	emptyDelta := `{"type":"content_block_delta","index":4,"delta":{"type":"input_json_delta","partial_json":""}}`
+	events := tr.translate(mustParseEvent(t, emptyDelta))
+	if len(events) != 0 {
+		t.Fatalf("expected empty-fragment delta to be dropped, got %d events", len(events))
+	}
+	if _, ok := tr.pendingInitialInputAt[4]; !ok {
+		t.Fatalf("empty delta must not drop the start-event placeholder")
+	}
+
+	stopRaw := `{"type":"content_block_stop","index":4}`
+	events = tr.translate(mustParseEvent(t, stopRaw))
+	if len(events) != 2 {
+		t.Fatalf("expected ToolUseInputEvent + ToolUseEndEvent on stop, got %d", len(events))
+	}
+	ie, ok := events[0].(llm.ToolUseInputEvent)
+	if !ok || ie.JSONFragment != "{}" {
+		t.Fatalf("expected ToolUseInputEvent with {} fragment, got %#v", events[0])
+	}
+}
+
+func TestTranslate_ContentBlockStop_ToolUse_WithDeltas_InitialInputDropped(t *testing.T) {
+	// When at least one InputJSONDelta arrives, the initial placeholder is
+	// superseded by the delta stream and must NOT be re-emitted on stop —
+	// otherwise the orchestrator would prepend "{}" to the real fragments and
+	// produce malformed JSON.
+	tr := &chunkTranslator{}
+	startRaw := `{"type":"content_block_start","index":3,"content_block":{"type":"tool_use","id":"tu_d","name":"search","input":{}}}`
+	tr.translate(mustParseEvent(t, startRaw))
+	deltaRaw := `{"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"{\"q\":\"x\"}"}}`
+	tr.translate(mustParseEvent(t, deltaRaw))
+
+	stopRaw := `{"type":"content_block_stop","index":3}`
+	events := tr.translate(mustParseEvent(t, stopRaw))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (only ToolUseEndEvent), got %d", len(events))
+	}
+	if _, ok := events[0].(llm.ToolUseEndEvent); !ok {
+		t.Fatalf("expected ToolUseEndEvent, got %T", events[0])
 	}
 }
 
