@@ -42,6 +42,10 @@ func (s *stubConfigStore) GetByID(ctx context.Context, id string) (*types.Agent,
 	return &types.Agent{ID: id, Name: s.cfg.Name, Status: status}, nil
 }
 
+func (s *stubConfigStore) ChainRootID(ctx context.Context, agentID string) (string, error) {
+	return agentID, nil
+}
+
 func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error {
 	s.updates++
 	if s.updateFn != nil {
@@ -89,7 +93,15 @@ func sampleConfig() types.FlowMapConfig {
 
 func newConfigHandler(t *testing.T, getter handler.ConfigStore) *handler.ConfiguratorHandler {
 	t.Helper()
-	h, err := handler.NewConfiguratorHandler(getter, web.Assets)
+	schemaBytes, err := web.Assets.ReadFile("schemas/wizard-v1.yaml")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	var schema types.WizardSchema
+	if err := yaml.Unmarshal(schemaBytes, &schema); err != nil {
+		t.Fatalf("parse schema: %v", err)
+	}
+	h, err := handler.NewConfiguratorHandler(getter, &schema, web.Assets)
 	if err != nil {
 		t.Fatalf("NewConfiguratorHandler: %v", err)
 	}

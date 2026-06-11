@@ -23,12 +23,17 @@ import (
 // (which mock the orchestrator's dependencies).
 
 type stubAgentRepo struct {
-	agent *types.Agent
-	err   error
+	agent  *types.Agent
+	rootID string
+	err    error
 }
 
 func (s *stubAgentRepo) GetByID(ctx context.Context, id string) (*types.Agent, error) {
 	return s.agent, s.err
+}
+
+func (s *stubAgentRepo) ChainRootID(ctx context.Context, agentID string) (string, error) {
+	return s.rootID, s.err
 }
 
 type stubChatStore struct {
@@ -42,11 +47,17 @@ func (s *stubChatStore) EnsureSession(ctx context.Context, sessionID, agentID st
 	s.ensured = append(s.ensured, sessionID)
 	return s.err
 }
+func (s *stubChatStore) GetSession(ctx context.Context, sessionID, agentID string) (*types.ChatSession, error) {
+	return &types.ChatSession{ID: sessionID, AgentID: agentID}, s.err
+}
 func (s *stubChatStore) ListSessions(ctx context.Context, agentID string) ([]*types.ChatSession, error) {
 	return s.sessions, s.err
 }
 func (s *stubChatStore) LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error) {
 	return s.messages, s.err
+}
+func (s *stubChatStore) UpdateSessionTitle(ctx context.Context, sessionID, agentID, title string) error {
+	return s.err
 }
 
 type stubTurnRunner struct {
@@ -158,5 +169,38 @@ func TestChatHandler_Turn_SetsSSEHeaders(t *testing.T) {
 	}
 	if cc := w.Header().Get("Cache-Control"); cc != "no-cache" {
 		t.Fatalf("Cache-Control: got %q", cc)
+	}
+}
+
+// History merges consecutive non-user messages (assistant + tool) into one
+// assistant bubble per turn, matching the live-stream rendering where every
+// text + tool_use + tool_result for one turn lives in a single bubble.
+func TestBuildMessageViews_MergesAssistantTurns(t *testing.T) {
+	msgs := []*types.ChatMessage{
+		{Role: types.ChatRoleUser, Content: []byte(`[{"type":"text","text":"hi"}]`)},
+		{Role: types.ChatRoleAssistant, Content: []byte(`[{"type":"text","text":"let me check"},{"type":"tool_use","id":"tu_1","name":"products_list","input":{}}]`)},
+		{Role: types.ChatRoleTool, Content: []byte(`[{"type":"tool_result","tool_use_id":"tu_1","content":{"ok":true},"is_error":false}]`)},
+		{Role: types.ChatRoleAssistant, Content: []byte(`[{"type":"text","text":"here you go"}]`)},
+		{Role: types.ChatRoleUser, Content: []byte(`[{"type":"text","text":"thanks"}]`)},
+	}
+	views := buildMessageViews(msgs)
+	if len(views) != 3 {
+		t.Fatalf("expected 3 bubbles (user, merged-assistant, user), got %d", len(views))
+	}
+	if views[0].Role != "user" || views[2].Role != "user" {
+		t.Fatalf("first and last bubbles should be user; got %q and %q", views[0].Role, views[2].Role)
+	}
+	if views[1].Role != "assistant" {
+		t.Fatalf("middle bubble should be assistant; got %q", views[1].Role)
+	}
+	got := views[1].Blocks
+	if len(got) != 4 {
+		t.Fatalf("merged assistant bubble should hold all 4 blocks (text + tool_call + tool_result + text); got %d", len(got))
+	}
+	wantKinds := []string{"text", "tool_call", "tool_result", "text"}
+	for i, k := range wantKinds {
+		if got[i].Kind != k {
+			t.Fatalf("block[%d].Kind = %q, want %q", i, got[i].Kind, k)
+		}
 	}
 }

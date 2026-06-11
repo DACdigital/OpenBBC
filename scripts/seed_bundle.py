@@ -51,15 +51,18 @@ def main() -> int:
 
     try:
         with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+            # Seeded bundles represent a hand-verified READY version, so we
+            # also flip status to 'READY' in the same write.
             if args.force:
                 cur.execute(
-                    "UPDATE agents SET bundle = %s::jsonb, updated_at = now() WHERE id = %s::uuid",
+                    "UPDATE agents SET bundle = %s::jsonb, status = 'READY', "
+                    "updated_at = now() WHERE id = %s::uuid",
                     (payload, args.agent_id),
                 )
             else:
                 cur.execute(
-                    "UPDATE agents SET bundle = %s::jsonb, updated_at = now() "
-                    "WHERE id = %s::uuid AND bundle IS NULL",
+                    "UPDATE agents SET bundle = %s::jsonb, status = 'READY', "
+                    "updated_at = now() WHERE id = %s::uuid AND bundle IS NULL",
                     (payload, args.agent_id),
                 )
 
@@ -84,7 +87,7 @@ def main() -> int:
         print(f"error: database connection: {e}", file=sys.stderr)
         return 1
 
-    print(f"✓ bundle written for agent {args.agent_id} ({len(payload)} bytes)")
+    print(f"✓ bundle written for agent {args.agent_id} ({len(payload)} bytes), status=READY")
     return 0
 
 

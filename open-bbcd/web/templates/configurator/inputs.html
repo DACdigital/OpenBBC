@@ -1,0 +1,19 @@
+{{define "tab_content"}}
+<div class="inputs-tab">
+  <p class="inputs-hint">Read-only snapshot of what was submitted in the wizard for this version.</p>
+  <dl class="inputs-list">
+    {{range .WizardFields}}
+    <div class="inputs-row">
+      <dt class="inputs-label">{{.Label}}</dt>
+      <dd class="inputs-value {{if eq .Type "textarea"}}is-textarea{{end}} {{if eq .Type "file"}}is-file{{end}} {{if not .Value}}is-empty{{end}}">
+        {{if .Value}}
+          {{if eq .Type "file"}}<code>{{.Value}}</code>{{else}}{{.Value}}{{end}}
+        {{else}}
+          <span class="inputs-empty">(not provided)</span>
+        {{end}}
+      </dd>
+    </div>
+    {{end}}
+  </dl>
+</div>
+{{end}}

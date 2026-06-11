@@ -20,15 +20,20 @@ import (
 )
 
 // ChatAgentReader is the narrow agent interface needed by ChatHandler.
+// ChainRootID is used to build the back-link URL on the sessions page so
+// it points at the chain (by root ID), not at a specific version.
 type ChatAgentReader interface {
 	GetByID(ctx context.Context, id string) (*types.Agent, error)
+	ChainRootID(ctx context.Context, agentID string) (string, error)
 }
 
 // ChatSessionStore is the narrow chat-repo interface needed by ChatHandler.
 type ChatSessionStore interface {
 	EnsureSession(ctx context.Context, sessionID, agentID string) error
+	GetSession(ctx context.Context, sessionID, agentID string) (*types.ChatSession, error)
 	ListSessions(ctx context.Context, agentID string) ([]*types.ChatSession, error)
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error)
+	UpdateSessionTitle(ctx context.Context, sessionID, agentID, title string) error
 }
 
 // TurnRunner is the orchestrator dependency. Implemented by *chat.Orchestrator.
@@ -107,10 +112,11 @@ func (h *ChatHandler) NewSession(w http.ResponseWriter, r *http.Request) {
 }
 
 type sessionListPageData struct {
-	Active    string
-	AgentID   string
-	AgentName string
-	Sessions  []*types.ChatSession
+	Active      string
+	AgentID     string
+	AgentRootID string
+	AgentName   string
+	Sessions    []*types.ChatSession
 }
 
 // SessionList renders the session-list page for one agent version.
@@ -125,27 +131,34 @@ func (h *ChatHandler) SessionList(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
+	rootID, err := h.agents.ChainRootID(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
 	sessions, err := h.chats.ListSessions(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
 	data := sessionListPageData{
-		Active:    "agents",
-		AgentID:   agentID,
-		AgentName: agent.Name,
-		Sessions:  sessions,
+		Active:      "agents",
+		AgentID:     agentID,
+		AgentRootID: rootID,
+		AgentName:   agent.Name,
+		Sessions:    sessions,
 	}
 	renderTemplate(w, h.sessionsTmpl, "layout", data)
 }
 
 type chatViewPageData struct {
-	Active    string
-	AgentID   string
-	AgentName string
-	SessionID string
-	Messages  []messageView
-	HasBundle bool
+	Active       string
+	AgentID      string
+	AgentName    string
+	SessionID    string
+	SessionTitle string
+	Messages     []messageView
+	HasBundle    bool
 }
 
 // messageView is a UI-ready projection of a persisted ChatMessage. The raw
@@ -167,56 +180,84 @@ type blockView struct {
 	ToolIsMocked bool
 }
 
+// buildMessageViews turns persisted ChatMessage rows into UI bubbles. Each
+// user message is its own bubble; every non-user message (assistant text +
+// tool_use, plus the tool-role wrappers carrying tool_result) is merged into
+// a single assistant bubble per turn, so the history matches the in-stream
+// rendering (one bubble per assistant turn, regardless of how many DB rows
+// the orchestrator split it across).
 func buildMessageViews(msgs []*types.ChatMessage) []messageView {
 	out := make([]messageView, 0, len(msgs))
+	var pending *messageView // open assistant bubble waiting for more blocks
+	flush := func() {
+		if pending != nil {
+			out = append(out, *pending)
+			pending = nil
+		}
+	}
 	for _, m := range msgs {
 		var raw []json.RawMessage
 		if err := json.Unmarshal(m.Content, &raw); err != nil {
 			continue
 		}
-		mv := messageView{Role: string(m.Role)}
-		for _, r := range raw {
-			var head struct {
-				Type string `json:"type"`
-			}
-			if err := json.Unmarshal(r, &head); err != nil {
-				continue
-			}
-			switch head.Type {
-			case "text":
-				var b struct {
-					Text string `json:"text"`
-				}
-				_ = json.Unmarshal(r, &b)
-				mv.Blocks = append(mv.Blocks, blockView{Kind: "text", Text: b.Text})
-			case "tool_use":
-				var b struct {
-					Name  string          `json:"name"`
-					Input json.RawMessage `json:"input"`
-				}
-				_ = json.Unmarshal(r, &b)
-				mv.Blocks = append(mv.Blocks, blockView{
-					Kind:     "tool_call",
-					ToolName: b.Name,
-					ToolArgs: prettyJSON(b.Input),
-				})
-			case "tool_result":
-				var b struct {
-					Content json.RawMessage `json:"content"`
-					IsError bool            `json:"is_error"`
-				}
-				_ = json.Unmarshal(r, &b)
-				mv.Blocks = append(mv.Blocks, blockView{
-					Kind:         "tool_result",
-					ToolResult:   prettyJSON(b.Content),
-					ToolIsError:  b.IsError,
-					ToolIsMocked: strings.Contains(string(b.Content), `"_mocked":true`),
-				})
-			}
+		blocks := decodeBlocks(raw)
+		if m.Role == types.ChatRoleUser {
+			flush()
+			out = append(out, messageView{Role: string(types.ChatRoleUser), Blocks: blocks})
+			continue
 		}
-		out = append(out, mv)
+		// Assistant or tool — both go into the current assistant bubble.
+		if pending == nil {
+			pending = &messageView{Role: string(types.ChatRoleAssistant)}
+		}
+		pending.Blocks = append(pending.Blocks, blocks...)
 	}
+	flush()
 	return out
+}
+
+func decodeBlocks(raw []json.RawMessage) []blockView {
+	blocks := make([]blockView, 0, len(raw))
+	for _, r := range raw {
+		var head struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(r, &head); err != nil {
+			continue
+		}
+		switch head.Type {
+		case "text":
+			var b struct {
+				Text string `json:"text"`
+			}
+			_ = json.Unmarshal(r, &b)
+			blocks = append(blocks, blockView{Kind: "text", Text: b.Text})
+		case "tool_use":
+			var b struct {
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+			}
+			_ = json.Unmarshal(r, &b)
+			blocks = append(blocks, blockView{
+				Kind:     "tool_call",
+				ToolName: b.Name,
+				ToolArgs: prettyJSON(b.Input),
+			})
+		case "tool_result":
+			var b struct {
+				Content json.RawMessage `json:"content"`
+				IsError bool            `json:"is_error"`
+			}
+			_ = json.Unmarshal(r, &b)
+			blocks = append(blocks, blockView{
+				Kind:         "tool_result",
+				ToolResult:   prettyJSON(b.Content),
+				ToolIsError:  b.IsError,
+				ToolIsMocked: strings.Contains(string(b.Content), `"_mocked":true`),
+			})
+		}
+	}
+	return blocks
 }
 
 func prettyJSON(raw json.RawMessage) string {
@@ -253,15 +294,51 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Session row may not exist yet (lazy-created on first turn). A missing
+	// row is fine — leave title empty. Other errors propagate.
+	var sessionTitle string
+	if sess, err := h.chats.GetSession(r.Context(), sessionID, agentID); err == nil {
+		sessionTitle = sess.Title
+	} else if !errors.Is(err, types.ErrNotFound) {
+		Error(w, err)
+		return
+	}
+
 	data := chatViewPageData{
-		Active:    "agents",
-		AgentID:   agentID,
-		AgentName: agent.Name,
-		SessionID: sessionID,
-		Messages:  buildMessageViews(msgs),
-		HasBundle: len(agent.Bundle) > 0,
+		Active:       "agents",
+		AgentID:      agentID,
+		AgentName:    agent.Name,
+		SessionID:    sessionID,
+		SessionTitle: sessionTitle,
+		Messages:     buildMessageViews(msgs),
+		HasBundle:    len(agent.Bundle) > 0,
 	}
 	renderTemplate(w, h.viewTmpl, "layout", data)
+}
+
+// UpdateSessionTitle accepts a JSON body {"title": "..."} and updates the
+// session title. Empty string clears the title (reverts to "Untitled session").
+func (h *ChatHandler) UpdateSessionTitle(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	sessionID := r.PathValue("session_id")
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	title := strings.TrimSpace(body.Title)
+	const maxTitleLen = 200
+	if len(title) > maxTitleLen {
+		title = title[:maxTitleLen]
+	}
+	if err := h.chats.UpdateSessionTitle(r.Context(), sessionID, agentID, title); err != nil {
+		Error(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"title": title})
 }
 
 // TurnRequest is the body of POST /turn — implemented in B24.
