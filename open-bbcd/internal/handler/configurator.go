@@ -22,7 +22,7 @@ import (
 type ConfigStore interface {
 	GetFlowMapConfig(ctx context.Context, agentID string) (cfg []byte, parseErr string, err error)
 	GetByID(ctx context.Context, id string) (*types.Agent, error)
-	ChainRootID(ctx context.Context, agentID string) (string, error)
+	AgentIDOf(ctx context.Context, versionID string) (string, error)
 	UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error
 	UpdateStatus(ctx context.Context, agentID, expectedFrom, to string) error
 }
@@ -127,8 +127,8 @@ func renderMarkdown(agentID, md string) template.HTML {
 
 type configPageData struct {
 	Active            string
-	AgentID           string
-	AgentRootID       string
+	AgentID           string // version row's ID (URL path param semantics, legacy)
+	AgentRootID       string // stable agent ID, used for back-link
 	AgentName         string
 	AgentStatus       string
 	ReadOnly          bool   // true for non-INITIALIZING agents (DRAFT, TRAINING, READY, DEPLOYED)
@@ -159,7 +159,7 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 	if err != nil {
 		return configPageData{}, err
 	}
-	rootID, err := h.repo.ChainRootID(r.Context(), agentID)
+	rootID, err := h.repo.AgentIDOf(r.Context(), agentID)
 	if err != nil {
 		return configPageData{}, err
 	}

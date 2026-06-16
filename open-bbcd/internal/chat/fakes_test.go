@@ -53,7 +53,8 @@ func (f *fakeChatRepo) LoadMessages(ctx context.Context, sessionID string) ([]*t
 	return out, nil
 }
 
-func (f *fakeChatRepo) AppendMessages(ctx context.Context, msgs []types.ChatMessage) error {
+func (f *fakeChatRepo) AppendMessages(ctx context.Context, agentVersionID string, msgs []types.ChatMessage) error {
+	_ = agentVersionID
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.messages = append(f.messages, msgs...)

@@ -42,8 +42,8 @@ func (s *stubConfigStore) GetByID(ctx context.Context, id string) (*types.Agent,
 	return &types.Agent{ID: id, Name: s.cfg.Name, Status: status}, nil
 }
 
-func (s *stubConfigStore) ChainRootID(ctx context.Context, agentID string) (string, error) {
-	return agentID, nil
+func (s *stubConfigStore) AgentIDOf(ctx context.Context, versionID string) (string, error) {
+	return versionID, nil
 }
 
 func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error {

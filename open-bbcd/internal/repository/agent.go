@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/google/uuid"
 )
 
 type AgentRepository struct {
@@ -33,6 +34,7 @@ func scanAgent(s scanner) (*types.Agent, error) {
 	var discoveryFilePath sql.NullString
 	err := s.Scan(
 		&agent.ID,
+		&agent.AgentID,
 		&agent.Name,
 		&description,
 		&bundle,
@@ -64,18 +66,19 @@ func scanAgent(s scanner) (*types.Agent, error) {
 
 // agentColumns lists the SELECT/RETURNING columns. Must stay in sync with
 // scanAgent's positional scan destinations.
-const agentColumns = `id, name, description, bundle, status, parent_version_id, flow_map_config, flow_map_parse_error, discovery_file_path, created_at, updated_at`
+const agentColumns = `id, agent_id, name, description, bundle, status, parent_version_id, flow_map_config, flow_map_parse_error, discovery_file_path, created_at, updated_at`
 
 func (r *AgentRepository) Create(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error) {
 	agent, err := types.NewAgent(opts)
 	if err != nil {
 		return nil, err
 	}
+	id := uuid.NewString()
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO agents (name, description)
-		VALUES ($1, $2)
+		INSERT INTO agents (id, agent_id, name, description)
+		VALUES ($1::uuid, $1::uuid, $2, $3)
 		RETURNING `+agentColumns,
-		agent.Name, agent.Description,
+		id, agent.Name, agent.Description,
 	)
 	return scanAgent(row)
 }
@@ -111,10 +114,10 @@ func (r *AgentRepository) List(ctx context.Context) ([]*types.Agent, error) {
 	return agents, rows.Err()
 }
 
-// ListGrouped fetches all agents and groups them into named version chains.
+// ListGrouped fetches all agents and groups them into named version groups.
 // Within each chain, versions are ordered newest first. Version numbers are
 // computed from position in the parent_version_id linked list.
-func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentChain, error) {
+func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT `+agentColumns+` FROM agents ORDER BY created_at ASC
 	`)
@@ -153,23 +156,23 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentChain, 
 		name     string
 		versions []*types.Agent // oldest first (creation order from query)
 	}
-	chainMap := make(map[string]*accumulator)
+	groupMap := make(map[string]*accumulator)
 	var rootOrder []string // preserves first-seen order for stable output
 
 	for _, a := range all {
 		rootID := rootOf(a)
-		if _, exists := chainMap[rootID]; !exists {
+		if _, exists := groupMap[rootID]; !exists {
 			// Chain name is always the root agent's name; agent names are
 			// immutable per chain so this is stable across all versions.
-			chainMap[rootID] = &accumulator{name: byID[rootID].Name}
+			groupMap[rootID] = &accumulator{name: byID[rootID].Name}
 			rootOrder = append(rootOrder, rootID)
 		}
-		chainMap[rootID].versions = append(chainMap[rootID].versions, a)
+		groupMap[rootID].versions = append(groupMap[rootID].versions, a)
 	}
 
-	chains := make([]types.AgentChain, 0, len(rootOrder))
+	groups := make([]types.AgentGroup, 0, len(rootOrder))
 	for _, rootID := range rootOrder {
-		acc := chainMap[rootID]
+		acc := groupMap[rootID]
 		versions := make([]types.AgentVersion, len(acc.versions))
 		for i, a := range acc.versions {
 			versions[i] = types.AgentVersion{Agent: a, VersionNum: i + 1}
@@ -178,32 +181,129 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentChain, 
 		sort.Slice(versions, func(i, j int) bool {
 			return versions[i].VersionNum > versions[j].VersionNum
 		})
-		chains = append(chains, types.AgentChain{RootID: rootID, Name: acc.name, Versions: versions})
+		groups = append(groups, types.AgentGroup{AgentID: rootID, Name: acc.name, Versions: versions})
 	}
-	return chains, nil
+	return groups, nil
 }
 
-// ChainRootID walks parent_version_id up from agentID to the chain root and
-// returns its ID. Returns ErrNotFound if agentID does not exist.
-func (r *AgentRepository) ChainRootID(ctx context.Context, agentID string) (string, error) {
-	curID := agentID
-	for {
-		var parent sql.NullString
-		err := r.db.QueryRowContext(ctx,
-			`SELECT parent_version_id FROM agents WHERE id = $1`,
-			curID,
-		).Scan(&parent)
+// AgentIDOf returns the stable agent ID for the given version row.
+// Returns ErrNotFound if the version row does not exist.
+func (r *AgentRepository) AgentIDOf(ctx context.Context, versionID string) (string, error) {
+	var agentID string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT agent_id::text FROM agents WHERE id = $1`,
+		versionID,
+	).Scan(&agentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return agentID, nil
+}
+
+// Deploy promotes versionID to DEPLOYED, demoting any other version in the
+// same chain that is currently DEPLOYED. Returns the previously-deployed
+// version ID (if any) so callers can show "v3 was replaced by v4" UI.
+// Re-deploying an already-DEPLOYED version is a no-op success (prev is nil).
+func (r *AgentRepository) Deploy(ctx context.Context, versionID string) (*string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var status, agentID string
+	err = tx.QueryRowContext(ctx,
+		`SELECT status, agent_id::text FROM agents WHERE id = $1`, versionID,
+	).Scan(&status, &agentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, types.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if status == string(types.AgentStatusDeployed) {
+		// No-op success. Commit (no-op) for symmetry.
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if status != string(types.AgentStatusReady) {
+		return nil, types.ErrAgentNotDeployable
+	}
+
+	var prevID sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		UPDATE agents SET status = 'READY', updated_at = now()
+		WHERE agent_id = $1 AND status = 'DEPLOYED' AND id != $2
+		RETURNING id::text
+	`, agentID, versionID).Scan(&prevID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("demote previous: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE agents SET status='DEPLOYED', updated_at = now() WHERE id = $1`, versionID,
+	); err != nil {
+		return nil, fmt.Errorf("promote target: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	if prevID.Valid {
+		return &prevID.String, nil
+	}
+	return nil, nil
+}
+
+// Undeploy flips a DEPLOYED version back to READY. Returns ErrAgentNotDeployed
+// if the target is not currently DEPLOYED, ErrNotFound if it does not exist.
+func (r *AgentRepository) Undeploy(ctx context.Context, versionID string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE agents SET status='READY', updated_at = now() WHERE id = $1 AND status = 'DEPLOYED'`,
+		versionID,
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// Disambiguate: missing row vs. wrong status.
+		var dummy string
+		err := r.db.QueryRowContext(ctx, `SELECT id::text FROM agents WHERE id=$1`, versionID).Scan(&dummy)
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", types.ErrNotFound
+			return types.ErrNotFound
 		}
 		if err != nil {
-			return "", err
+			return err
 		}
-		if !parent.Valid {
-			return curID, nil
-		}
-		curID = parent.String
+		return types.ErrAgentNotDeployed
 	}
+	return nil
+}
+
+// CurrentDeployedVersionID returns the ID of the version currently DEPLOYED in
+// the given chain, or "" if none. Indexed lookup via agents_one_deployed_per_chain.
+func (r *AgentRepository) CurrentDeployedVersionID(ctx context.Context, agentID string) (string, error) {
+	var id string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id::text FROM agents WHERE agent_id = $1 AND status = 'DEPLOYED'`,
+		agentID,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // CreateFromWizard inserts an agent in INITIALIZING status from wizard form
@@ -217,11 +317,15 @@ func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.Creat
 	if r.db == nil {
 		return nil, errors.New("repository: no database connection")
 	}
+	id := opts.ID
+	if id == "" {
+		id = uuid.NewString()
+	}
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO agents (id, name, status, flow_map_config, flow_map_parse_error, discovery_file_path)
-		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, 'INITIALIZING', $3, NULLIF($4, ''), NULLIF($5, ''))
+		INSERT INTO agents (id, agent_id, name, status, flow_map_config, flow_map_parse_error, discovery_file_path)
+		VALUES ($1::uuid, $1::uuid, $2, 'INITIALIZING', $3, NULLIF($4, ''), NULLIF($5, ''))
 		RETURNING `+agentColumns,
-		opts.ID, opts.Name, []byte(opts.FlowMapConfig), opts.FlowMapParseError, opts.DiscoveryFilePath,
+		id, opts.Name, []byte(opts.FlowMapConfig), opts.FlowMapParseError, opts.DiscoveryFilePath,
 	)
 	return scanAgent(row)
 }

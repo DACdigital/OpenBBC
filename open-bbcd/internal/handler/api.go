@@ -87,6 +87,15 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("init chat handler", err)
 	}
 
+	deployedRepo := repository.NewDeployedRepository(db)
+	deployedChatStore := chat.NewDeployedChatStore(deployedRepo)
+	deployedOrchestrator := chat.NewOrchestrator(agentRepo, deployedChatStore, llmClient, toolHandler, logger)
+	deployedOrchestrator.Model = cfg.Anthropic.DefaultModel
+	deployedOrchestrator.MaxTokens = cfg.Anthropic.MaxTokens
+	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
+
+	deployedHandler := NewDeployedHandler(agentRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger)
+
 	mux := http.NewServeMux()
 
 	staticFS, err := fs.Sub(web.Assets, "static")
@@ -124,10 +133,16 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agents/{id}/finalize", configuratorHandler.Finalize)
 	mux.HandleFunc("GET /agents/{id}/config.yaml", configuratorHandler.DownloadYAML)
 
+	mux.HandleFunc("GET /agents/{id}/deploy/confirm", uiHandler.DeployConfirm)
+	mux.HandleFunc("GET /agents/{id}/undeploy/confirm", uiHandler.UndeployConfirm)
+
 	mux.HandleFunc("GET /health", Health)
 	mux.HandleFunc("POST /agents", agentHandler.Create)
 	mux.HandleFunc("GET /agents", agentHandler.List)
 	mux.HandleFunc("GET /agents/{id}", agentHandler.Get)
+	deployHandler := NewDeployHandler(agentRepo)
+	mux.HandleFunc("POST /agents/{id}/deploy", deployHandler.Deploy)
+	mux.HandleFunc("POST /agents/{id}/undeploy", deployHandler.Undeploy)
 	mux.HandleFunc("POST /resources", resourceHandler.Create)
 	mux.HandleFunc("GET /resources/{id}", resourceHandler.Get)
 	mux.HandleFunc("GET /agents/{agent_id}/resources", resourceHandler.ListByAgent)
@@ -137,6 +152,13 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agents/{id}/chat/{session_id}",        chatHandler.ChatView)
 	mux.HandleFunc("PATCH /agents/{id}/chat/{session_id}/title", chatHandler.UpdateSessionTitle)
 	mux.HandleFunc("POST /agents/{id}/chat/{session_id}/turn",  chatHandler.Turn)
+
+	mux.HandleFunc("POST /deployed/{agent_id}/sessions", deployedHandler.CreateSession)
+	mux.HandleFunc("GET /deployed/{agent_id}/sessions", deployedHandler.ListSessions)
+	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{session_id}", deployedHandler.GetSession)
+	mux.HandleFunc("PATCH /deployed/{agent_id}/sessions/{session_id}/title", deployedHandler.UpdateTitle)
+	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}", deployedHandler.DeleteSession)
+	mux.HandleFunc("POST /deployed/{agent_id}/sessions/{session_id}/turn", deployedHandler.Turn)
 
 	return RequestLogger(logger, mux)
 }

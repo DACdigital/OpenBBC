@@ -21,6 +21,7 @@ const (
 
 type Agent struct {
 	ID                string          `json:"id"`
+	AgentID       string          `json:"agent_id"`
 	Name              string          `json:"name"`
 	Description       string          `json:"description,omitempty"`
 	Bundle            json.RawMessage `json:"bundle,omitempty"`
@@ -39,11 +40,11 @@ type AgentVersion struct {
 	VersionNum int
 }
 
-// AgentChain groups versions of the same named agent. Versions are ordered newest first.
-// RootID is the chain's stable identifier: the ID of the oldest version (the only
-// row in the chain with parent_version_id = NULL). Use it for routing.
-type AgentChain struct {
-	RootID   string
+// AgentGroup groups all version rows that share the same logical agent.
+// AgentID is the stable identifier the integrator pastes into clients; it is
+// the ID of the oldest version row (the only one with parent_version_id NULL).
+type AgentGroup struct {
+	AgentID  string
 	Name     string
 	Versions []AgentVersion
 }

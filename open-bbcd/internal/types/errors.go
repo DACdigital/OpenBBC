@@ -27,4 +27,17 @@ var (
 
 	ErrLLMUnavailable    = errors.New("llm: upstream unavailable")
 	ErrToolHandlerFailed = errors.New("tools: handler failed")
+
+	// ErrAgentNotDeployable is returned when /deploy is called on a version
+	// that is not in READY status (or already DEPLOYED, which is a no-op
+	// handled separately).
+	ErrAgentNotDeployable = errors.New("agent: version cannot be deployed (must be READY)")
+
+	// ErrAgentNotDeployed is returned when /undeploy is called on a version
+	// that is not currently DEPLOYED.
+	ErrAgentNotDeployed = errors.New("agent: version is not deployed")
+
+	// ErrUserIDRequired is returned by deployed-runtime endpoints when the
+	// integrator-supplied user_id is missing from the request.
+	ErrUserIDRequired = errors.New("deployed: user_id is required")
 )

@@ -1,7 +1,7 @@
 {{define "content"}}
 <div class="config-page {{if .ReadOnly}}config-readonly{{end}}">
   <div class="config-header">
-    <a href="/agents/ui?agent={{.AgentRootID}}" class="config-back">← Back to versions</a>
+    <a href="/agents/ui?agent={{.AgentID}}" class="config-back">← Back to versions</a>
     <h1>{{.AgentName}}</h1>
     {{if .AgentStatus}}<span class="badge badge-{{.AgentStatus | statusClass}}">{{.AgentStatus}}</span>{{end}}
     {{if .ReadOnly}}

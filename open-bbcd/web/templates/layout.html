@@ -38,6 +38,21 @@
     .col-date{width:140px;color:#a8b3c1}
     .col-count{width:90px;color:#a8b3c1;text-align:right;font-variant-numeric:tabular-nums}
     .col-status{width:140px}
+    .col-actions{width:140px;text-align:right}
+    .btn-small{background:#21262d;color:#e6edf3;border:1px solid #444c56;padding:5px 12px;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer}
+    .btn-small:hover{background:#2d333b;border-color:#6e7681}
+    .btn-small.btn-danger{background:#21130f;color:#f85149;border-color:#5f1a18}
+    .btn-small.btn-danger:hover{background:#2d1418;border-color:#f85149}
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000}
+    .modal-content{background:#1c2128;border:1px solid #30363d;border-radius:8px;padding:24px;min-width:380px;max-width:560px;box-shadow:0 16px 48px rgba(0,0,0,.5);color:#e6edf3;display:flex;flex-direction:column;gap:14px}
+    .modal-content h2{font-size:16px;font-weight:600}
+    .modal-content p{font-size:14px;line-height:1.4;color:#c9d1d9}
+    .modal-content code{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:2px 6px;font-size:13px;color:#79c0ff}
+    .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
+    .modal-actions button{background:#21262d;color:#e6edf3;border:1px solid #444c56;padding:7px 14px;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer}
+    .modal-actions button:hover{background:#2d333b;border-color:#6e7681}
+    .modal-actions button:first-child{background:#1f6feb;border-color:#388bfd;color:#fff}
+    .modal-actions button:first-child:hover{background:#388bfd}
     .agent-link{color:#f0f6fc;text-decoration:none;font-weight:600;font-size:15px}
     .agent-link:hover{color:#79c0ff;text-decoration:underline}
     /* Status pills: visible at a glance — dot indicator + filled background +

@@ -2,7 +2,7 @@
 <link rel="stylesheet" href="/static/chat.css">
 <div class="page-header">
   <div>
-    <a href="/agents/ui?agent={{.AgentRootID}}" class="back-link">← {{.AgentName}}</a>
+    <a href="/agents/ui?agent={{.AgentID}}" class="back-link">← {{.AgentName}}</a>
     <h1>Sessions</h1>
   </div>
   <form method="post" action="/agents/{{.AgentID}}/chat/sessions" class="inline">

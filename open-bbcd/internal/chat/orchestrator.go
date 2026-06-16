@@ -26,7 +26,7 @@ type AgentReader interface {
 type ChatStore interface {
 	EnsureSession(ctx context.Context, sessionID, agentID string) error
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error)
-	AppendMessages(ctx context.Context, msgs []types.ChatMessage) error
+	AppendMessages(ctx context.Context, agentVersionID string, msgs []types.ChatMessage) error
 	NextSeq(ctx context.Context, sessionID string) (int, error)
 }
 
@@ -135,7 +135,7 @@ func (o *Orchestrator) Turn(
 	if err != nil {
 		return failTurn("seq_assign", "next_seq_user", err)
 	}
-	if err := o.chats.AppendMessages(ctx, []types.ChatMessage{{
+	if err := o.chats.AppendMessages(ctx, agent.ID, []types.ChatMessage{{
 		ID:        userMsgID,
 		SessionID: sessionID,
 		Role:      types.ChatRoleUser,
@@ -241,7 +241,7 @@ func (o *Orchestrator) Turn(
 		if err != nil {
 			return failTurn("seq_assign", "next_seq_assistant", err)
 		}
-		if err := o.chats.AppendMessages(ctx, []types.ChatMessage{{
+		if err := o.chats.AppendMessages(ctx, agent.ID, []types.ChatMessage{{
 			ID:        assistantMsgID,
 			SessionID: sessionID,
 			Role:      types.ChatRoleAssistant,
@@ -297,7 +297,7 @@ func (o *Orchestrator) Turn(
 		if err != nil {
 			return failTurn("seq_assign", "next_seq_tool", err)
 		}
-		if err := o.chats.AppendMessages(ctx, []types.ChatMessage{{
+		if err := o.chats.AppendMessages(ctx, agent.ID, []types.ChatMessage{{
 			ID:        toolMsgID,
 			SessionID: sessionID,
 			Role:      types.ChatRoleTool,

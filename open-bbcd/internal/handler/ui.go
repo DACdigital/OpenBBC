@@ -14,7 +14,9 @@ import (
 )
 
 type GroupedAgentRepository interface {
-	ListGrouped(ctx context.Context) ([]types.AgentChain, error)
+	ListGrouped(ctx context.Context) ([]types.AgentGroup, error)
+	GetByID(ctx context.Context, id string) (*types.Agent, error)
+	CurrentDeployedVersionID(ctx context.Context, agentID string) (string, error)
 }
 
 type UIHandler struct {
@@ -25,6 +27,8 @@ type UIHandler struct {
 	agentVersionsTmpl *template.Template
 	wizardTmpl        *template.Template
 	stepTmpl          *template.Template
+	deployModalTmpl   *template.Template
+	undeployModalTmpl *template.Template
 }
 
 func statusClass(status string) string {
@@ -81,6 +85,19 @@ func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, 
 		return nil, err
 	}
 
+	deployModalTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/agent-deploy-modal.html",
+	)
+	if err != nil {
+		return nil, err
+	}
+	undeployModalTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/agent-undeploy-modal.html",
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &UIHandler{
 		agentRepo:         agentRepo,
 		schema:            schema,
@@ -89,6 +106,8 @@ func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, 
 		agentVersionsTmpl: agentVersionsTmpl,
 		wizardTmpl:        wizardTmpl,
 		stepTmpl:          stepTmpl,
+		deployModalTmpl:   deployModalTmpl,
+		undeployModalTmpl: undeployModalTmpl,
 	}, nil
 }
 
@@ -106,7 +125,7 @@ func renderTemplate(w http.ResponseWriter, tmpl *template.Template, name string,
 
 type agentsPageData struct {
 	Active string
-	Chains []types.AgentChain
+	Groups []types.AgentGroup
 }
 
 // AgentsPage serves either the agents list or a single agent chain's version
@@ -114,19 +133,19 @@ type agentsPageData struct {
 // param value is the chain root agent ID — the stable identifier for a chain
 // across version additions.
 func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
-	chains, err := h.agentRepo.ListGrouped(r.Context())
+	groups, err := h.agentRepo.ListGrouped(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	if rootID := r.URL.Query().Get("agent"); rootID != "" {
-		for _, chain := range chains {
-			if chain.RootID == rootID {
+	if agentID := r.URL.Query().Get("agent"); agentID != "" {
+		for _, group := range groups {
+			if group.AgentID == agentID {
 				renderTemplate(w, h.agentVersionsTmpl, "layout", agentVersionsPageData{
 					Active:   "agents",
-					Name:     chain.Name,
-					Versions: chain.Versions,
+					Name:     group.Name,
+					Versions: group.Versions,
 				})
 				return
 			}
@@ -135,7 +154,7 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderTemplate(w, h.agentsTmpl, "layout", agentsPageData{Active: "agents", Chains: chains})
+	renderTemplate(w, h.agentsTmpl, "layout", agentsPageData{Active: "agents", Groups: groups})
 }
 
 type agentVersionsPageData struct {
@@ -203,4 +222,46 @@ func (h *UIHandler) WizardStep(w http.ResponseWriter, r *http.Request) {
 	}
 
 	renderTemplate(w, h.stepTmpl, "step", data)
+}
+
+type deployModalData struct {
+	Version         *types.Agent
+	AgentID     string
+	CurrentDeployed *types.Agent // nil if no current deploy or self
+}
+
+// DeployConfirm renders the deploy confirmation modal partial for one version.
+func (u *UIHandler) DeployConfirm(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ver, err := u.agentRepo.GetByID(r.Context(), id)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	curID, err := u.agentRepo.CurrentDeployedVersionID(r.Context(), ver.AgentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	var cur *types.Agent
+	if curID != "" && curID != ver.ID {
+		cur, _ = u.agentRepo.GetByID(r.Context(), curID)
+	}
+	renderTemplate(w, u.deployModalTmpl, "agent-deploy-modal", deployModalData{
+		Version: ver, AgentID: ver.AgentID, CurrentDeployed: cur,
+	})
+}
+
+// UndeployConfirm renders the undeploy confirmation modal partial.
+func (u *UIHandler) UndeployConfirm(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ver, err := u.agentRepo.GetByID(r.Context(), id)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, u.undeployModalTmpl, "agent-undeploy-modal", struct {
+		Version     *types.Agent
+		AgentID string
+	}{ver, ver.AgentID})
 }
