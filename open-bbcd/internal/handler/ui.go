@@ -21,6 +21,7 @@ type GroupedAgentRepository interface {
 
 type UIHandler struct {
 	agentRepo         GroupedAgentRepository
+	versions          DeployVersionRepository
 	schema            *types.WizardSchema
 	logger            *slog.Logger
 	agentsTmpl        *template.Template
@@ -46,7 +47,7 @@ func statusClass(status string) string {
 	}
 }
 
-func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, webFS fs.FS, logger *slog.Logger) (*UIHandler, error) {
+func NewUIHandler(agentRepo GroupedAgentRepository, versions DeployVersionRepository, schema *types.WizardSchema, webFS fs.FS, logger *slog.Logger) (*UIHandler, error) {
 	funcs := template.FuncMap{
 		"statusClass": statusClass,
 		"add":         func(a, b int) int { return a + b },
@@ -100,6 +101,7 @@ func NewUIHandler(agentRepo GroupedAgentRepository, schema *types.WizardSchema, 
 
 	return &UIHandler{
 		agentRepo:         agentRepo,
+		versions:          versions,
 		schema:            schema,
 		logger:            logger,
 		agentsTmpl:        agentsTmpl,
@@ -144,6 +146,7 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 			if group.AgentID == agentID {
 				renderTemplate(w, h.agentVersionsTmpl, "layout", agentVersionsPageData{
 					Active:   "agents",
+					AgentID:  group.AgentID,
 					Name:     group.Name,
 					Versions: group.Versions,
 				})
@@ -159,8 +162,9 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 
 type agentVersionsPageData struct {
 	Active   string
+	AgentID  string
 	Name     string
-	Versions []types.AgentVersion
+	Versions []types.AgentVersionListItem
 }
 
 type wizardPageData struct {
@@ -224,44 +228,58 @@ func (h *UIHandler) WizardStep(w http.ResponseWriter, r *http.Request) {
 	renderTemplate(w, h.stepTmpl, "step", data)
 }
 
-type deployModalData struct {
-	Version         *types.Agent
-	AgentID     string
-	CurrentDeployed *types.Agent // nil if no current deploy or self
-}
-
 // DeployConfirm renders the deploy confirmation modal partial for one version.
 func (u *UIHandler) DeployConfirm(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	ver, err := u.agentRepo.GetByID(r.Context(), id)
+	agentID := r.PathValue("agent_id")
+	versionID := r.URL.Query().Get("version_id")
+	if versionID == "" {
+		http.Error(w, "version_id query param required", http.StatusBadRequest)
+		return
+	}
+	version, err := u.versions.GetByID(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	curID, err := u.agentRepo.CurrentDeployedVersionID(r.Context(), ver.AgentID)
+	if version.AgentID != agentID {
+		http.NotFound(w, r)
+		return
+	}
+	curID, err := u.versions.CurrentDeployedID(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	var cur *types.Agent
-	if curID != "" && curID != ver.ID {
-		cur, _ = u.agentRepo.GetByID(r.Context(), curID)
+	var current *types.AgentVersion
+	if curID != "" && curID != versionID {
+		current, _ = u.versions.GetByID(r.Context(), curID)
 	}
-	renderTemplate(w, u.deployModalTmpl, "agent-deploy-modal", deployModalData{
-		Version: ver, AgentID: ver.AgentID, CurrentDeployed: cur,
-	})
+	renderTemplate(w, u.deployModalTmpl, "agent-deploy-modal", struct {
+		AgentID         string
+		Version         *types.AgentVersion
+		CurrentDeployed *types.AgentVersion
+	}{agentID, version, current})
 }
 
 // UndeployConfirm renders the undeploy confirmation modal partial.
 func (u *UIHandler) UndeployConfirm(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	ver, err := u.agentRepo.GetByID(r.Context(), id)
+	agentID := r.PathValue("agent_id")
+	curID, err := u.versions.CurrentDeployedID(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if curID == "" {
+		Error(w, types.ErrAgentNotDeployed)
+		return
+	}
+	cur, err := u.versions.GetByID(r.Context(), curID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
 	renderTemplate(w, u.undeployModalTmpl, "agent-undeploy-modal", struct {
-		Version     *types.Agent
 		AgentID string
-	}{ver, ver.AgentID})
+		Version *types.AgentVersion
+	}{agentID, cur})
 }

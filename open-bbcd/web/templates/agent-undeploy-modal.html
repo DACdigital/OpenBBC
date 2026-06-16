@@ -5,7 +5,7 @@
     <p>Take this version offline?</p>
     <p><code>/deployed/{{.AgentID}}</code> will return 404 until you deploy another version of this agent.</p>
     <div class="modal-actions">
-      <button hx-post="/agents/{{.Version.ID}}/undeploy"
+      <button hx-post="/agents/{{.AgentID}}/undeploy"
               hx-on::after-request="window.location.reload()">
         Confirm Undeploy
       </button>
