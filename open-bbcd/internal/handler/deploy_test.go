@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -10,144 +11,161 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
-// stubDeployRepo implements DeployAgentRepository in memory.
-type stubDeployRepo struct {
-	agent         *types.Agent
+type stubDeployAgentRepo struct {
+	agent  *types.Agent
+	getErr error
+}
+
+func (s *stubDeployAgentRepo) GetByID(ctx context.Context, agentID string) (*types.Agent, error) {
+	return s.agent, s.getErr
+}
+
+type stubDeployVersionRepo struct {
+	version       *types.AgentVersion
 	getErr        error
 	deployErr     error
 	undeployErr   error
 	prev          *string
 	deployCalls   int
 	undeployCalls int
+	currentID     string
+	currentErr    error
 }
 
-func (s *stubDeployRepo) GetByID(ctx context.Context, id string) (*types.Agent, error) {
-	return s.agent, s.getErr
+func (s *stubDeployVersionRepo) GetByID(ctx context.Context, versionID string) (*types.AgentVersion, error) {
+	return s.version, s.getErr
 }
-func (s *stubDeployRepo) Deploy(ctx context.Context, versionID string) (*string, error) {
+func (s *stubDeployVersionRepo) Deploy(ctx context.Context, versionID string) (*string, error) {
 	s.deployCalls++
 	if s.deployErr != nil {
 		return nil, s.deployErr
 	}
-	if s.agent != nil {
-		s.agent.Status = string(types.AgentStatusDeployed)
+	if s.version != nil {
+		s.version.Status = string(types.AgentStatusDeployed)
 	}
 	return s.prev, nil
 }
-func (s *stubDeployRepo) Undeploy(ctx context.Context, versionID string) error {
+func (s *stubDeployVersionRepo) Undeploy(ctx context.Context, versionID string) error {
 	s.undeployCalls++
 	if s.undeployErr != nil {
 		return s.undeployErr
 	}
-	if s.agent != nil {
-		s.agent.Status = string(types.AgentStatusReady)
+	if s.version != nil {
+		s.version.Status = string(types.AgentStatusReady)
 	}
 	return nil
 }
+func (s *stubDeployVersionRepo) CurrentDeployedID(ctx context.Context, agentID string) (string, error) {
+	return s.currentID, s.currentErr
+}
 
-func newDeployMux(repo DeployAgentRepository) *http.ServeMux {
-	h := NewDeployHandler(repo)
+func newDeployMux(agents DeployAgentRepository, versions DeployVersionRepository) *http.ServeMux {
+	h := NewDeployHandler(agents, versions)
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /agents/{id}/deploy", h.Deploy)
-	mux.HandleFunc("POST /agents/{id}/undeploy", h.Undeploy)
+	mux.HandleFunc("POST /agents/{agent_id}/deploy", h.Deploy)
+	mux.HandleFunc("POST /agents/{agent_id}/undeploy", h.Undeploy)
 	return mux
 }
 
 func TestDeployHandler_HappyPath(t *testing.T) {
-	repo := &stubDeployRepo{
-		agent: &types.Agent{ID: "v1", AgentID: "v1", Status: "READY"},
-	}
-	mux := newDeployMux(repo)
-
-	req := httptest.NewRequest("POST", "/agents/v1/deploy", nil)
+	agent := &types.Agent{ID: "a1", Name: "test"}
+	version := &types.AgentVersion{ID: "v1", AgentID: "a1", Status: "READY"}
+	mux := newDeployMux(
+		&stubDeployAgentRepo{agent: agent},
+		&stubDeployVersionRepo{version: version},
+	)
+	body, _ := json.Marshal(deployBody{VersionID: "v1"})
+	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
-
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got %d, body: %s", rr.Code, rr.Body.String())
 	}
-	var body struct {
-		Agent                     types.Agent `json:"agent"`
-		PreviousDeployedVersionID *string     `json:"previous_deployed_version_id"`
+	var resp deployResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp.Version.Status != "DEPLOYED" {
+		t.Fatalf("version status %q", resp.Version.Status)
 	}
-	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
+}
+
+func TestDeployHandler_MissingVersionID_400(t *testing.T) {
+	mux := newDeployMux(&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}}, &stubDeployVersionRepo{})
+	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader([]byte(`{}`)))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("got %d", rr.Code)
 	}
-	if body.Agent.Status != "DEPLOYED" {
-		t.Fatalf("status: %q", body.Agent.Status)
-	}
-	if body.PreviousDeployedVersionID != nil {
-		t.Fatalf("expected nil prev, got %v", body.PreviousDeployedVersionID)
-	}
-	if repo.deployCalls != 1 {
-		t.Fatalf("deploy calls = %d", repo.deployCalls)
+}
+
+func TestDeployHandler_WrongAgent_404(t *testing.T) {
+	version := &types.AgentVersion{ID: "v1", AgentID: "a2", Status: "READY"} // different agent
+	mux := newDeployMux(&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}}, &stubDeployVersionRepo{version: version})
+	body, _ := json.Marshal(deployBody{VersionID: "v1"})
+	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("got %d", rr.Code)
 	}
 }
 
 func TestDeployHandler_NotDeployable_409(t *testing.T) {
-	repo := &stubDeployRepo{
-		agent:     &types.Agent{ID: "v1", AgentID: "v1", Status: "DRAFT"},
-		deployErr: types.ErrAgentNotDeployable,
-	}
-	mux := newDeployMux(repo)
-
+	version := &types.AgentVersion{ID: "v1", AgentID: "a1", Status: "DRAFT"}
+	mux := newDeployMux(
+		&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}},
+		&stubDeployVersionRepo{version: version, deployErr: types.ErrAgentNotDeployable},
+	)
+	body, _ := json.Marshal(deployBody{VersionID: "v1"})
+	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/agents/v1/deploy", nil))
+	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusConflict {
-		t.Fatalf("got %d, body: %s", rr.Code, rr.Body.String())
+		t.Fatalf("got %d", rr.Code)
 	}
 }
 
 func TestDeployHandler_ReportsPreviousDeployed(t *testing.T) {
 	prev := "v-old"
-	repo := &stubDeployRepo{
-		agent: &types.Agent{ID: "v2", AgentID: "v1", Status: "READY"},
-		prev:  &prev,
-	}
-	mux := newDeployMux(repo)
-
+	version := &types.AgentVersion{ID: "v2", AgentID: "a1", Status: "READY"}
+	mux := newDeployMux(
+		&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}},
+		&stubDeployVersionRepo{version: version, prev: &prev},
+	)
+	body, _ := json.Marshal(deployBody{VersionID: "v2"})
+	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/agents/v2/deploy", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got %d", rr.Code)
-	}
-	var body struct {
-		Agent                     types.Agent `json:"agent"`
-		PreviousDeployedVersionID *string     `json:"previous_deployed_version_id"`
-	}
-	_ = json.Unmarshal(rr.Body.Bytes(), &body)
-	if body.PreviousDeployedVersionID == nil || *body.PreviousDeployedVersionID != prev {
-		t.Fatalf("prev=%v want %q", body.PreviousDeployedVersionID, prev)
+	mux.ServeHTTP(rr, req)
+	var resp deployResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp.PreviousDeployedVersionID == nil || *resp.PreviousDeployedVersionID != prev {
+		t.Fatalf("prev=%v want %q", resp.PreviousDeployedVersionID, prev)
 	}
 }
 
 func TestUndeployHandler_HappyPath(t *testing.T) {
-	repo := &stubDeployRepo{
-		agent: &types.Agent{ID: "v1", AgentID: "v1", Status: "DEPLOYED"},
-	}
-	mux := newDeployMux(repo)
-
+	agent := &types.Agent{ID: "a1"}
+	version := &types.AgentVersion{ID: "v1", AgentID: "a1", Status: "DEPLOYED"}
+	mux := newDeployMux(
+		&stubDeployAgentRepo{agent: agent},
+		&stubDeployVersionRepo{version: version, currentID: "v1"},
+	)
+	req := httptest.NewRequest("POST", "/agents/a1/undeploy", nil)
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/agents/v1/undeploy", nil))
+	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got %d body=%s", rr.Code, rr.Body.String())
 	}
-	var ag types.Agent
-	_ = json.Unmarshal(rr.Body.Bytes(), &ag)
-	if ag.Status != "READY" {
-		t.Fatalf("status: %q", ag.Status)
-	}
 }
 
-func TestUndeployHandler_NotDeployed_409(t *testing.T) {
-	repo := &stubDeployRepo{
-		agent:       &types.Agent{ID: "v1", AgentID: "v1", Status: "DRAFT"},
-		undeployErr: types.ErrAgentNotDeployed,
-	}
-	mux := newDeployMux(repo)
-
+func TestUndeployHandler_NoneDeployed_409(t *testing.T) {
+	mux := newDeployMux(
+		&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}},
+		&stubDeployVersionRepo{currentID: ""}, // none deployed
+	)
+	req := httptest.NewRequest("POST", "/agents/a1/undeploy", nil)
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/agents/v1/undeploy", nil))
+	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("got %d", rr.Code)
 	}

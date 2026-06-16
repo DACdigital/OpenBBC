@@ -17,54 +17,54 @@ func NewChatRepository(db *sql.DB) *ChatRepository {
 }
 
 // EnsureSession inserts a chat_sessions row with the given id if it
-// doesn't already exist. If the row exists with a different agent_id,
+// doesn't already exist. If the row exists with a different agent_version_id,
 // returns ErrSessionAgentMismatch. Idempotent: calling twice with the
-// same (sessionID, agentID) is a no-op.
+// same (sessionID, versionID) is a no-op.
 //
 // The ON CONFLICT … DO UPDATE SET id = chat_sessions.id is a deliberate
 // no-op update that lets RETURNING fire on conflict — without it,
 // detecting mismatch would require a second round-trip.
-func (r *ChatRepository) EnsureSession(ctx context.Context, sessionID, agentID string) error {
-	var existingAgentID string
+func (r *ChatRepository) EnsureSession(ctx context.Context, sessionID, versionID string) error {
+	var existingVersionID string
 	err := r.db.QueryRowContext(ctx, `
-		INSERT INTO chat_sessions (id, agent_id) VALUES ($1::uuid, $2::uuid)
+		INSERT INTO chat_sessions (id, agent_version_id) VALUES ($1::uuid, $2::uuid)
 		ON CONFLICT (id) DO UPDATE SET id = chat_sessions.id
-		RETURNING agent_id::text
-	`, sessionID, agentID).Scan(&existingAgentID)
+		RETURNING agent_version_id::text
+	`, sessionID, versionID).Scan(&existingVersionID)
 	if err != nil {
 		return err
 	}
-	if existingAgentID != agentID {
+	if existingVersionID != versionID {
 		return types.ErrSessionAgentMismatch
 	}
 	return nil
 }
 
-// GetSession loads a single session and verifies it belongs to agentID.
+// GetSession loads a single session and verifies it belongs to versionID.
 // Returns ErrNotFound if the session doesn't exist and ErrSessionAgentMismatch
-// if it exists but is owned by a different agent.
-func (r *ChatRepository) GetSession(ctx context.Context, sessionID, agentID string) (*types.ChatSession, error) {
+// if it exists but is owned by a different agent version.
+func (r *ChatRepository) GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error) {
 	s := &types.ChatSession{}
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id::text, agent_id::text, COALESCE(title, ''), created_at, updated_at
+		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at
 		FROM chat_sessions
 		WHERE id = $1::uuid
-	`, sessionID).Scan(&s.ID, &s.AgentID, &s.Title, &s.CreatedAt, &s.UpdatedAt)
+	`, sessionID).Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, types.ErrNotFound
 		}
 		return nil, err
 	}
-	if s.AgentID != agentID {
+	if s.AgentVersionID != versionID {
 		return nil, types.ErrSessionAgentMismatch
 	}
 	return s, nil
 }
 
 // UpdateSessionTitle sets the title of a session. Verifies the session belongs
-// to agentID before updating. An empty title clears the column (NULL in DB).
-func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, agentID, title string) error {
+// to versionID before updating. An empty title clears the column (NULL in DB).
+func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error {
 	var nullable sql.NullString
 	if title != "" {
 		nullable = sql.NullString{String: title, Valid: true}
@@ -72,8 +72,8 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, agen
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE chat_sessions
 		SET title = $3, updated_at = now()
-		WHERE id = $1::uuid AND agent_id = $2::uuid
-	`, sessionID, agentID, nullable)
+		WHERE id = $1::uuid AND agent_version_id = $2::uuid
+	`, sessionID, versionID, nullable)
 	if err != nil {
 		return err
 	}
@@ -82,13 +82,13 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, agen
 		return err
 	}
 	if n == 0 {
-		// Either the session doesn't exist or it belongs to another agent.
+		// Either the session doesn't exist or it belongs to another agent version.
 		// Distinguish for the caller.
-		var existingAgent string
+		var existingVersion string
 		err := r.db.QueryRowContext(ctx,
-			`SELECT agent_id::text FROM chat_sessions WHERE id = $1::uuid`,
+			`SELECT agent_version_id::text FROM chat_sessions WHERE id = $1::uuid`,
 			sessionID,
-		).Scan(&existingAgent)
+		).Scan(&existingVersion)
 		if errors.Is(err, sql.ErrNoRows) {
 			return types.ErrNotFound
 		}
@@ -100,14 +100,14 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, agen
 	return nil
 }
 
-// ListSessions returns all sessions for an agent, newest first.
-func (r *ChatRepository) ListSessions(ctx context.Context, agentID string) ([]*types.ChatSession, error) {
+// ListSessions returns all sessions for an agent version, newest first.
+func (r *ChatRepository) ListSessions(ctx context.Context, versionID string) ([]*types.ChatSession, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id::text, agent_id::text, COALESCE(title, ''), created_at, updated_at
+		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at
 		FROM chat_sessions
-		WHERE agent_id = $1::uuid
+		WHERE agent_version_id = $1::uuid
 		ORDER BY created_at DESC
-	`, agentID)
+	`, versionID)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (r *ChatRepository) ListSessions(ctx context.Context, agentID string) ([]*t
 	var out []*types.ChatSession
 	for rows.Next() {
 		s := &types.ChatSession{}
-		if err := rows.Scan(&s.ID, &s.AgentID, &s.Title, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -156,8 +156,8 @@ func (r *ChatRepository) LoadMessages(ctx context.Context, sessionID string) ([]
 // Also bumps the session's updated_at.
 //
 // agentVersionID is accepted for interface conformance with the deployed-store
-// sibling; BO chat sessions are already version-pinned via chat_sessions.agent_id,
-// so this parameter is ignored here.
+// sibling; BO chat sessions are already version-pinned via
+// chat_sessions.agent_version_id, so this parameter is ignored here.
 func (r *ChatRepository) AppendMessages(ctx context.Context, agentVersionID string, msgs []types.ChatMessage) error {
 	_ = agentVersionID
 	if len(msgs) == 0 {

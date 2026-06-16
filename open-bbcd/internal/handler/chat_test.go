@@ -23,17 +23,13 @@ import (
 // (which mock the orchestrator's dependencies).
 
 type stubAgentRepo struct {
-	agent  *types.Agent
-	rootID string
-	err    error
+	version *types.AgentVersion
+	agent   *types.Agent
+	err     error
 }
 
-func (s *stubAgentRepo) GetByID(ctx context.Context, id string) (*types.Agent, error) {
-	return s.agent, s.err
-}
-
-func (s *stubAgentRepo) AgentIDOf(ctx context.Context, versionID string) (string, error) {
-	return s.rootID, s.err
+func (s *stubAgentRepo) GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error) {
+	return s.version, s.agent, s.err
 }
 
 type stubChatStore struct {
@@ -43,20 +39,20 @@ type stubChatStore struct {
 	err      error
 }
 
-func (s *stubChatStore) EnsureSession(ctx context.Context, sessionID, agentID string) error {
+func (s *stubChatStore) EnsureSession(ctx context.Context, sessionID, versionID string) error {
 	s.ensured = append(s.ensured, sessionID)
 	return s.err
 }
-func (s *stubChatStore) GetSession(ctx context.Context, sessionID, agentID string) (*types.ChatSession, error) {
-	return &types.ChatSession{ID: sessionID, AgentID: agentID}, s.err
+func (s *stubChatStore) GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error) {
+	return &types.ChatSession{ID: sessionID, AgentVersionID: versionID}, s.err
 }
-func (s *stubChatStore) ListSessions(ctx context.Context, agentID string) ([]*types.ChatSession, error) {
+func (s *stubChatStore) ListSessions(ctx context.Context, versionID string) ([]*types.ChatSession, error) {
 	return s.sessions, s.err
 }
 func (s *stubChatStore) LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error) {
 	return s.messages, s.err
 }
-func (s *stubChatStore) UpdateSessionTitle(ctx context.Context, sessionID, agentID, title string) error {
+func (s *stubChatStore) UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error {
 	return s.err
 }
 
@@ -88,7 +84,10 @@ func emptyTemplateFS() fs.FS {
 func newTestChatHandler(t *testing.T, runner *stubTurnRunner) *ChatHandler {
 	t.Helper()
 	h, err := NewChatHandler(
-		&stubAgentRepo{agent: &types.Agent{ID: "a", Bundle: []byte(`{}`)}},
+		&stubAgentRepo{
+			version: &types.AgentVersion{ID: "v", AgentID: "a", Bundle: []byte(`{}`)},
+			agent:   &types.Agent{ID: "a", Name: "test"},
+		},
 		&stubChatStore{},
 		runner,
 		jsonl.NewFactory(),
@@ -108,8 +107,8 @@ func TestChatHandler_Turn_HappyPath(t *testing.T) {
 	body, _ := json.Marshal(TurnRequest{
 		Input: []TurnInputBlock{{Type: "text", Text: "hi"}},
 	})
-	r := httptest.NewRequest("POST", "/agents/a/chat/s/turn", bytes.NewReader(body))
-	r.SetPathValue("id", "a")
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", bytes.NewReader(body))
+	r.SetPathValue("version_id", "v")
 	r.SetPathValue("session_id", "s")
 	w := httptest.NewRecorder()
 
@@ -121,7 +120,7 @@ func TestChatHandler_Turn_HappyPath(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "text_delta") {
 		t.Fatalf("expected text_delta in body, got: %q", w.Body.String())
 	}
-	if runner.capturedAgentID != "a" || runner.capturedSessionID != "s" {
+	if runner.capturedAgentID != "v" || runner.capturedSessionID != "s" {
 		t.Fatalf("captured ids: %+v", runner)
 	}
 	if len(runner.capturedInput) != 1 {
@@ -135,8 +134,8 @@ func TestChatHandler_Turn_HappyPath(t *testing.T) {
 func TestChatHandler_Turn_MalformedJSON_Returns400(t *testing.T) {
 	h := newTestChatHandler(t, &stubTurnRunner{})
 
-	r := httptest.NewRequest("POST", "/agents/a/chat/s/turn", strings.NewReader("{not json"))
-	r.SetPathValue("id", "a")
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader("{not json"))
+	r.SetPathValue("version_id", "v")
 	r.SetPathValue("session_id", "s")
 	w := httptest.NewRecorder()
 
@@ -157,8 +156,8 @@ func TestChatHandler_Turn_SetsSSEHeaders(t *testing.T) {
 	body, _ := json.Marshal(TurnRequest{
 		Input: []TurnInputBlock{{Type: "text", Text: "hi"}},
 	})
-	r := httptest.NewRequest("POST", "/agents/a/chat/s/turn", bytes.NewReader(body))
-	r.SetPathValue("id", "a")
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", bytes.NewReader(body))
+	r.SetPathValue("version_id", "v")
 	r.SetPathValue("session_id", "s")
 	w := httptest.NewRecorder()
 

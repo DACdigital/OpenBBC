@@ -42,10 +42,10 @@ wizard:
 `
 
 type mockWizardRepo struct {
-	createFromWizardFn func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error)
+	createFromWizardFn func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error)
 }
 
-func (m *mockWizardRepo) CreateFromWizard(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
+func (m *mockWizardRepo) CreateFromWizard(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
 	return m.createFromWizardFn(ctx, opts)
 }
 
@@ -105,9 +105,11 @@ func buildWizardForm(t *testing.T, fields map[string]string, fileName string, fi
 func TestWizardHandler_Submit_HappyPath(t *testing.T) {
 	var capturedOpts types.CreateAgentFromWizardOpts
 	repo := &mockWizardRepo{
-		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
+		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
 			capturedOpts = opts
-			return &types.Agent{ID: opts.ID, Name: opts.Name, Status: "INITIALIZING"}, nil
+			return &types.Agent{ID: opts.ID, Name: opts.Name},
+				&types.AgentVersion{ID: "v-" + opts.ID, AgentID: opts.ID, Status: "INITIALIZING"},
+				nil
 		},
 	}
 	var capturedKey string
@@ -135,8 +137,8 @@ func TestWizardHandler_Submit_HappyPath(t *testing.T) {
 		t.Fatalf("status = %d, want 303; body = %s", w.Code, w.Body.String())
 	}
 	loc := w.Header().Get("Location")
-	if !strings.HasPrefix(loc, "/agents/") || !strings.HasSuffix(loc, "/configure") {
-		t.Errorf("Location = %q, want /agents/<id>/configure", loc)
+	if !strings.HasPrefix(loc, "/agent_versions/") || !strings.HasSuffix(loc, "/configure") {
+		t.Errorf("Location = %q, want /agent_versions/<id>/configure", loc)
 	}
 	if store.calls != 1 {
 		t.Errorf("store.Put called %d times, want 1", store.calls)
@@ -159,9 +161,9 @@ func TestWizardHandler_Submit_HappyPath(t *testing.T) {
 
 func TestWizardHandler_Submit_MissingFile(t *testing.T) {
 	repo := &mockWizardRepo{
-		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
+		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
 			t.Fatal("repo should not be called")
-			return nil, nil
+			return nil, nil, nil
 		},
 	}
 	store := &mockStorage{}
@@ -187,9 +189,9 @@ func TestWizardHandler_Submit_MissingFile(t *testing.T) {
 
 func TestWizardHandler_Submit_BadExtension(t *testing.T) {
 	repo := &mockWizardRepo{
-		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
+		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
 			t.Fatal("repo should not be called")
-			return nil, nil
+			return nil, nil, nil
 		},
 	}
 	store := &mockStorage{}
@@ -215,9 +217,9 @@ func TestWizardHandler_Submit_BadExtension(t *testing.T) {
 
 func TestWizardHandler_Submit_TooLarge(t *testing.T) {
 	repo := &mockWizardRepo{
-		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
+		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
 			t.Fatal("repo should not be called")
-			return nil, nil
+			return nil, nil, nil
 		},
 	}
 	store := &mockStorage{}
@@ -249,9 +251,9 @@ func TestWizardHandler_Submit_TooLarge(t *testing.T) {
 
 func TestWizardHandler_Submit_StorageFails(t *testing.T) {
 	repo := &mockWizardRepo{
-		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
+		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
 			t.Fatal("repo should not be called when storage fails")
-			return nil, nil
+			return nil, nil, nil
 		},
 	}
 	store := &mockStorage{
@@ -282,8 +284,8 @@ func TestWizardHandler_Submit_RepoFailLogsOrphan(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
 	repo := &mockWizardRepo{
-		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
-			return nil, errors.New("db down")
+		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
+			return nil, nil, errors.New("db down")
 		},
 	}
 	var savedKey string
@@ -321,9 +323,9 @@ func TestWizardHandler_Submit_RepoFailLogsOrphan(t *testing.T) {
 
 func TestWizardHandler_Submit_MissingName(t *testing.T) {
 	repo := &mockWizardRepo{
-		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
+		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
 			t.Fatal("repo should not be called when name is empty")
-			return nil, nil
+			return nil, nil, nil
 		},
 	}
 	store := &mockStorage{}
@@ -353,9 +355,11 @@ func TestWizardHandler_Submit_RealZip_HappyPath(t *testing.T) {
 
 	var capturedOpts types.CreateAgentFromWizardOpts
 	repo := &mockWizardRepo{
-		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error) {
+		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
 			capturedOpts = opts
-			return &types.Agent{ID: opts.ID, Name: opts.Name, Status: "INITIALIZING"}, nil
+			return &types.Agent{ID: opts.ID, Name: opts.Name},
+				&types.AgentVersion{ID: "v-" + opts.ID, AgentID: opts.ID, Status: "INITIALIZING"},
+				nil
 		},
 	}
 	store := &mockStorage{}

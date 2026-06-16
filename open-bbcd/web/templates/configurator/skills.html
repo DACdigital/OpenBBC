@@ -4,21 +4,21 @@
     <div class="config-list-header">Skills ({{len .Config.Skills}})</div>
     <div id="skill-list-rows">
       {{range .Config.Skills}}
-        {{template "skill_row" (dict "AgentID" $.AgentID "Skill" . "SelectedID" (selectedSkillID $.SelectedSkill))}}
+        {{template "skill_row" (dict "VersionID" $.VersionID "Skill" . "SelectedID" (selectedSkillID $.SelectedSkill))}}
       {{else}}
         <p class="empty-state">No skills in this discovery snapshot.</p>
       {{end}}
     </div>
     {{if not .ReadOnly}}
     <button class="skill-add-trigger"
-            hx-get="/agents/{{.AgentID}}/configure/skills/new"
+            hx-get="/agent_versions/{{.VersionID}}/configure/skills/new"
             hx-target=".config-detail-pane"
             hx-swap="innerHTML">+ Add skill</button>
     {{end}}
   </aside>
   <main class="config-detail-pane">
     {{if .SelectedSkill}}
-      {{template "skill_detail" (dict "AgentID" .AgentID "Skill" .SelectedSkill "Capabilities" .Config.Capabilities "ReadOnly" .ReadOnly)}}
+      {{template "skill_detail" (dict "VersionID" .VersionID "Skill" .SelectedSkill "Capabilities" .Config.Capabilities "ReadOnly" .ReadOnly)}}
     {{else}}
       <p class="config-detail-empty">{{if .ReadOnly}}Select a skill on the left to preview.{{else}}Select a skill on the left or click + Add skill.{{end}}</p>
     {{end}}

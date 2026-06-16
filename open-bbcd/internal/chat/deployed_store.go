@@ -27,18 +27,16 @@ func NewDeployedChatStore(repo DeployedRepositoryAPI) *DeployedChatStore {
 	return &DeployedChatStore{repo: repo}
 }
 
-// EnsureSession verifies the session row exists AND belongs to the given
-// chain root. Unlike BO chat's lazy creation, deployed sessions must be
-// created explicitly before /turn (so user_id scope can be enforced).
-func (s *DeployedChatStore) EnsureSession(ctx context.Context, sessionID, agentID string) error {
-	sess, err := s.repo.GetSessionByID(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	if sess.AgentID != agentID {
-		return types.ErrNotFound
-	}
-	return nil
+// EnsureSession in the deployed runtime only verifies the session row exists.
+// The deployed handler validates (session_id, user_id) and the session's
+// agent_id BEFORE invoking the orchestrator, so the scope check is already
+// done by the time this runs. The orchestrator's "agentID" parameter in the
+// deployed runtime is actually a version row's id (the resolved currently-
+// deployed version), which is why a literal sess.AgentID comparison would
+// fail.
+func (s *DeployedChatStore) EnsureSession(ctx context.Context, sessionID, _ string) error {
+	_, err := s.repo.GetSessionByID(ctx, sessionID)
+	return err
 }
 
 // LoadMessages translates DeployedMessage rows to ChatMessage shape for the

@@ -22,11 +22,11 @@ type stubConfigStore struct {
 	parseErr      string
 	updates       int
 	updateFn      func(cfg []byte) error
-	statusFn      func(agentID, expectedFrom, to string) error
+	statusFn      func(versionID, expectedFrom, to string) error
 	currentStatus string // optional override; defaults to "INITIALIZING"
 }
 
-func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, agentID string) ([]byte, string, error) {
+func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
 	if s.getErr != nil {
 		return nil, "", s.getErr
 	}
@@ -34,19 +34,20 @@ func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, agentID string) 
 	return b, s.parseErr, nil
 }
 
-func (s *stubConfigStore) GetByID(ctx context.Context, id string) (*types.Agent, error) {
+func (s *stubConfigStore) GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error) {
 	status := s.currentStatus
 	if status == "" {
 		status = "INITIALIZING"
 	}
-	return &types.Agent{ID: id, Name: s.cfg.Name, Status: status}, nil
+	// The stub uses the URL's version_id for both ids — there's only one
+	// config in this fake, and per-version calls (GetFlowMapConfig /
+	// UpdateFlowMapConfig) ignore the id anyway.
+	version := &types.AgentVersion{ID: versionID, AgentID: versionID, Status: status}
+	agent := &types.Agent{ID: versionID, Name: s.cfg.Name}
+	return version, agent, nil
 }
 
-func (s *stubConfigStore) AgentIDOf(ctx context.Context, versionID string) (string, error) {
-	return versionID, nil
-}
-
-func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error {
+func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error {
 	s.updates++
 	if s.updateFn != nil {
 		return s.updateFn(cfg)
@@ -59,9 +60,9 @@ func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, agentID strin
 	return nil
 }
 
-func (s *stubConfigStore) UpdateStatus(ctx context.Context, agentID, expectedFrom, to string) error {
+func (s *stubConfigStore) UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error {
 	if s.statusFn != nil {
-		return s.statusFn(agentID, expectedFrom, to)
+		return s.statusFn(versionID, expectedFrom, to)
 	}
 	cur := s.currentStatus
 	if cur == "" {
@@ -110,8 +111,8 @@ func newConfigHandler(t *testing.T, getter handler.ConfigStore) *handler.Configu
 
 func TestConfigurator_FlowsTab_RendersFlowsList(t *testing.T) {
 	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig()})
-	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure/flows", nil)
-	req.SetPathValue("id", "abc")
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure/flows", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.Flows(w, req)
 	if w.Code != http.StatusOK {
@@ -129,8 +130,8 @@ func TestConfigurator_FlowsTab_NodeCountReflectsMermaid(t *testing.T) {
 		Mermaid: "flowchart TD\n  start([start]) --> s_po[place-order]\n  s_po --> e([end])\n",
 	}
 	h := newConfigHandler(t, &stubConfigStore{cfg: cfg})
-	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure/flows", nil)
-	req.SetPathValue("id", "abc")
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure/flows", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.Flows(w, req)
 	if w.Code != http.StatusOK {
@@ -143,8 +144,8 @@ func TestConfigurator_FlowsTab_NodeCountReflectsMermaid(t *testing.T) {
 
 func TestConfigurator_SkillsTab_ShowsSkillRow(t *testing.T) {
 	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig()})
-	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure/skills", nil)
-	req.SetPathValue("id", "abc")
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure/skills", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.Skills(w, req)
 	if w.Code != http.StatusOK {
@@ -157,8 +158,8 @@ func TestConfigurator_SkillsTab_ShowsSkillRow(t *testing.T) {
 
 func TestConfigurator_CapabilitiesTab_IsReadOnly(t *testing.T) {
 	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig()})
-	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure/capabilities", nil)
-	req.SetPathValue("id", "abc")
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure/capabilities", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.Capabilities(w, req)
 	if w.Code != http.StatusOK {
@@ -172,8 +173,8 @@ func TestConfigurator_CapabilitiesTab_IsReadOnly(t *testing.T) {
 
 func TestConfigurator_ParseError_ShowsErrorBanner(t *testing.T) {
 	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig(), parseErr: "missing tools-proposed.json"})
-	req := httptest.NewRequest(http.MethodGet, "/agents/abc/configure", nil)
-	req.SetPathValue("id", "abc")
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.Index(w, req)
 	if w.Code != http.StatusOK {
@@ -190,10 +191,10 @@ func TestConfigurator_FlowIncluded_Toggle(t *testing.T) {
 
 	// Toggle off
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/flows/place-order/included",
+		"/agent_versions/abc/configure/flows/place-order/included",
 		strings.NewReader("included=false"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("flowId", "place-order")
 	w := httptest.NewRecorder()
 	h.FlowIncluded(w, req)
@@ -210,10 +211,10 @@ func TestConfigurator_FlowIncluded_Toggle(t *testing.T) {
 
 	// Toggle back on.
 	req2 := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/flows/place-order/included",
+		"/agent_versions/abc/configure/flows/place-order/included",
 		strings.NewReader("included=true"))
 	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req2.SetPathValue("id", "abc")
+	req2.SetPathValue("version_id", "abc")
 	req2.SetPathValue("flowId", "place-order")
 	w2 := httptest.NewRecorder()
 	h.FlowIncluded(w2, req2)
@@ -229,10 +230,10 @@ func TestConfigurator_FlowIncluded_UnknownFlow_404(t *testing.T) {
 	store := &stubConfigStore{cfg: sampleConfig()}
 	h := newConfigHandler(t, store)
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/flows/ghost/included",
+		"/agent_versions/abc/configure/flows/ghost/included",
 		strings.NewReader("included=false"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("flowId", "ghost")
 	w := httptest.NewRecorder()
 	h.FlowIncluded(w, req)
@@ -255,10 +256,10 @@ func TestConfigurator_SkillUpdate_HappyPath(t *testing.T) {
 		"external":      {"false"},
 	}
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/skills/place-order",
+		"/agent_versions/abc/configure/skills/place-order",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("skillId", "place-order")
 	w := httptest.NewRecorder()
 	h.SkillUpdate(w, req)
@@ -289,10 +290,10 @@ func TestConfigurator_SkillUpdate_External(t *testing.T) {
 		"user_phrases":  {""},
 	}
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/skills/place-order",
+		"/agent_versions/abc/configure/skills/place-order",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("skillId", "place-order")
 	w := httptest.NewRecorder()
 	h.SkillUpdate(w, req)
@@ -317,10 +318,10 @@ func TestConfigurator_SkillUpdate_InvalidRole(t *testing.T) {
 		"role": {"banana"}, // invalid
 	}
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/skills/place-order",
+		"/agent_versions/abc/configure/skills/place-order",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("skillId", "place-order")
 	w := httptest.NewRecorder()
 	h.SkillUpdate(w, req)
@@ -342,10 +343,10 @@ func TestConfigurator_SkillCreate_HappyPath(t *testing.T) {
 		"user_phrases":  {"send email\nemail me"},
 	}
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/skills",
+		"/agent_versions/abc/configure/skills",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.SkillCreate(w, req)
 	if w.Code != http.StatusOK {
@@ -379,10 +380,10 @@ func TestConfigurator_SkillCreate_NameCollision_GetsDiscriminator(t *testing.T) 
 		"external": {"true"},
 	}
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/skills",
+		"/agent_versions/abc/configure/skills",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.SkillCreate(w, req)
 	if w.Code != http.StatusOK {
@@ -400,10 +401,10 @@ func TestConfigurator_SkillCreate_NameRequired(t *testing.T) {
 
 	form := url.Values{"role": {"write"}, "external": {"true"}}
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/skills",
+		"/agent_versions/abc/configure/skills",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.SkillCreate(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -421,8 +422,8 @@ func TestConfigurator_SkillDelete_Custom_OK(t *testing.T) {
 	h := newConfigHandler(t, store)
 
 	req := httptest.NewRequest(http.MethodDelete,
-		"/agents/abc/configure/skills/custom-thing", nil)
-	req.SetPathValue("id", "abc")
+		"/agent_versions/abc/configure/skills/custom-thing", nil)
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("skillId", "custom-thing")
 	w := httptest.NewRecorder()
 	h.SkillDelete(w, req)
@@ -441,8 +442,8 @@ func TestConfigurator_SkillDelete_Discovered_409(t *testing.T) {
 	h := newConfigHandler(t, store)
 
 	req := httptest.NewRequest(http.MethodDelete,
-		"/agents/abc/configure/skills/place-order", nil)
-	req.SetPathValue("id", "abc")
+		"/agent_versions/abc/configure/skills/place-order", nil)
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("skillId", "place-order")
 	w := httptest.NewRecorder()
 	h.SkillDelete(w, req)
@@ -465,8 +466,8 @@ func TestConfigurator_SkillDelete_Referenced_409(t *testing.T) {
 	h := newConfigHandler(t, store)
 
 	req := httptest.NewRequest(http.MethodDelete,
-		"/agents/abc/configure/skills/needed-by-flow", nil)
-	req.SetPathValue("id", "abc")
+		"/agent_versions/abc/configure/skills/needed-by-flow", nil)
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("skillId", "needed-by-flow")
 	w := httptest.NewRecorder()
 	h.SkillDelete(w, req)
@@ -484,10 +485,10 @@ func TestConfigurator_WorkflowUpdate_HappyPath(t *testing.T) {
 		"layout": {"start": {"x": 40, "y": 40}, "s_x": {"x": 40, "y": 140}, "e": {"x": 40, "y": 240}}
 	}`
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/flows/place-order/workflow",
+		"/agent_versions/abc/configure/flows/place-order/workflow",
 		strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("flowId", "place-order")
 	w := httptest.NewRecorder()
 	h.WorkflowUpdate(w, req)
@@ -513,10 +514,10 @@ func TestConfigurator_WorkflowUpdate_RejectsUnknownSkill(t *testing.T) {
 		"layout": {}
 	}`
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/flows/place-order/workflow",
+		"/agent_versions/abc/configure/flows/place-order/workflow",
 		strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("flowId", "place-order")
 	w := httptest.NewRecorder()
 	h.WorkflowUpdate(w, req)
@@ -532,10 +533,10 @@ func TestConfigurator_WorkflowUpdate_RejectsMalformedMermaid(t *testing.T) {
 
 	body := `{"mermaid": "this is not mermaid", "layout": {}}`
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/flows/place-order/workflow",
+		"/agent_versions/abc/configure/flows/place-order/workflow",
 		strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("flowId", "place-order")
 	w := httptest.NewRecorder()
 	h.WorkflowUpdate(w, req)
@@ -551,10 +552,10 @@ func TestConfigurator_WorkflowUpdate_UnknownFlow_404(t *testing.T) {
 
 	body := `{"mermaid": "flowchart TD\n  start([start]) --> e([end])", "layout": {}}`
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/configure/flows/ghost/workflow",
+		"/agent_versions/abc/configure/flows/ghost/workflow",
 		strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("version_id", "abc")
 	req.SetPathValue("flowId", "ghost")
 	w := httptest.NewRecorder()
 	h.WorkflowUpdate(w, req)
@@ -576,8 +577,8 @@ func TestConfigurator_FinalizeConfirm_RendersPage(t *testing.T) {
 	h := newConfigHandler(t, store)
 
 	req := httptest.NewRequest(http.MethodGet,
-		"/agents/abc/configure/finalize", nil)
-	req.SetPathValue("id", "abc")
+		"/agent_versions/abc/configure/finalize", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.FinalizeConfirm(w, req)
 
@@ -588,7 +589,7 @@ func TestConfigurator_FinalizeConfirm_RendersPage(t *testing.T) {
 	if !strings.Contains(body, "Finalize") {
 		t.Errorf("response should contain a Finalize heading or button: first 200 chars = %s", body[:minInt(200, len(body))])
 	}
-	if !strings.Contains(body, "/agents/abc/finalize") {
+	if !strings.Contains(body, "/agent_versions/abc/finalize") {
 		t.Errorf("response should include the POST target: first 200 chars = %s", body[:minInt(200, len(body))])
 	}
 }
@@ -598,8 +599,8 @@ func TestConfigurator_Finalize_HappyPath_RedirectsToAgentsUI(t *testing.T) {
 	h := newConfigHandler(t, store)
 
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/finalize", nil)
-	req.SetPathValue("id", "abc")
+		"/agent_versions/abc/finalize", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.Finalize(w, req)
 
@@ -619,8 +620,8 @@ func TestConfigurator_Finalize_WrongStatus_409(t *testing.T) {
 	h := newConfigHandler(t, store)
 
 	req := httptest.NewRequest(http.MethodPost,
-		"/agents/abc/finalize", nil)
-	req.SetPathValue("id", "abc")
+		"/agent_versions/abc/finalize", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.Finalize(w, req)
 
@@ -633,8 +634,8 @@ func TestConfigurator_DownloadYAML_HappyPath(t *testing.T) {
 	store := &stubConfigStore{cfg: sampleConfig(), currentStatus: "DRAFT"}
 	h := newConfigHandler(t, store)
 
-	req := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
-	req.SetPathValue("id", "abc")
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/config.yaml", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.DownloadYAML(w, req)
 
@@ -664,8 +665,8 @@ func TestConfigurator_DownloadYAML_RoundTrip(t *testing.T) {
 	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
 	h := newConfigHandler(t, store)
 
-	req := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
-	req.SetPathValue("id", "abc")
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/config.yaml", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.DownloadYAML(w, req)
 	if w.Code != http.StatusOK {
@@ -710,8 +711,8 @@ func TestConfigurator_DownloadYAML_NoBlockScalarIndentIndicators(t *testing.T) {
 	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
 	h := newConfigHandler(t, store)
 
-	req := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
-	req.SetPathValue("id", "abc")
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/config.yaml", nil)
+	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
 	h.DownloadYAML(w, req)
 	if w.Code != http.StatusOK {
@@ -785,8 +786,8 @@ func TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans(t *testing.T) {
 	h := newConfigHandler(t, store)
 
 	// Default (no clean=true): full content preserved.
-	reqFull := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml", nil)
-	reqFull.SetPathValue("id", "abc")
+	reqFull := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/config.yaml", nil)
+	reqFull.SetPathValue("version_id", "abc")
 	wFull := httptest.NewRecorder()
 	h.DownloadYAML(wFull, reqFull)
 	var full types.FlowMapConfig
@@ -801,8 +802,8 @@ func TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans(t *testing.T) {
 	}
 
 	// ?clean=true: filtered.
-	reqClean := httptest.NewRequest(http.MethodGet, "/agents/abc/config.yaml?clean=true", nil)
-	reqClean.SetPathValue("id", "abc")
+	reqClean := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/config.yaml?clean=true", nil)
+	reqClean.SetPathValue("version_id", "abc")
 	wClean := httptest.NewRecorder()
 	h.DownloadYAML(wClean, reqClean)
 	var clean types.FlowMapConfig

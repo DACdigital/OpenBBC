@@ -20,7 +20,7 @@ type stubDeployedAgentReader struct {
 	err        error
 }
 
-func (s *stubDeployedAgentReader) CurrentDeployedVersionID(ctx context.Context, agentID string) (string, error) {
+func (s *stubDeployedAgentReader) CurrentDeployedID(ctx context.Context, agentID string) (string, error) {
 	return s.deployedID, s.err
 }
 

@@ -10,7 +10,8 @@
       <code>/deployed/{{.AgentID}}</code>
     {{end}}
     <div class="modal-actions">
-      <button hx-post="/agents/{{.Version.ID}}/deploy"
+      <button hx-post="/agents/{{.AgentID}}/deploy"
+              hx-vals='{"version_id":"{{.Version.ID}}"}'
               hx-on::after-request="window.location.reload()">
         Confirm Deploy
       </button>

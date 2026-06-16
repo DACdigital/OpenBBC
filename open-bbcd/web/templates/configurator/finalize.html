@@ -31,9 +31,9 @@
     </div>
   </div>
 
-  <form method="POST" action="/agents/{{.AgentID}}/finalize" class="config-finalize-form">
+  <form method="POST" action="/agent_versions/{{.VersionID}}/finalize" class="config-finalize-form">
     <button type="submit" class="btn-primary">Yes, finalize →</button>
-    <a href="/agents/{{.AgentID}}/configure/flows" class="btn-secondary">Cancel</a>
+    <a href="/agent_versions/{{.VersionID}}/configure/flows" class="btn-secondary">Cancel</a>
   </form>
 </div>
 {{end}}

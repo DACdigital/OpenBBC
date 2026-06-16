@@ -17,7 +17,7 @@ import (
 )
 
 type WizardAgentRepository interface {
-	CreateFromWizard(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, error)
+	CreateFromWizard(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error)
 }
 
 type WizardHandler struct {
@@ -126,7 +126,7 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		cfgJSON = b
 	}
 
-	agent, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
+	_, version, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
 		ID:                agentID,
 		Name:              wizardInput["name"],
 		FlowMapConfig:     cfgJSON,
@@ -143,5 +143,5 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/agents/"+agent.ID+"/configure", http.StatusSeeOther)
+	http.Redirect(w, r, "/agent_versions/"+version.ID+"/configure", http.StatusSeeOther)
 }
