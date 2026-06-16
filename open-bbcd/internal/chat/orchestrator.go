@@ -18,13 +18,22 @@ import (
 )
 
 // AgentReader is the narrow agent-side interface the orchestrator needs.
+// The orchestrator is version-centric: it loads a version row (which carries
+// the bundle) by its id. In BO chat the id is a chat_sessions.agent_version_id;
+// in deployed runtime it's resolved via DeployedRepository before Turn.
 type AgentReader interface {
-	GetByID(ctx context.Context, id string) (*types.Agent, error)
+	GetByID(ctx context.Context, versionID string) (*types.AgentVersion, error)
 }
 
 // ChatStore is the narrow chat-repo interface the orchestrator needs.
+//
+// scopeID is the per-impl ownership scope passed through from Turn's agentID
+// parameter: BO chat's ChatRepository treats it as the version row id
+// (chat_sessions.agent_version_id), while DeployedChatStore treats it as the
+// per-agent id (deployed_sessions.agent_id). The orchestrator itself doesn't
+// interpret the value — it just forwards it.
 type ChatStore interface {
-	EnsureSession(ctx context.Context, sessionID, agentID string) error
+	EnsureSession(ctx context.Context, sessionID, scopeID string) error
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error)
 	AppendMessages(ctx context.Context, agentVersionID string, msgs []types.ChatMessage) error
 	NextSeq(ctx context.Context, sessionID string) (int, error)
@@ -88,16 +97,20 @@ func (o *Orchestrator) Turn(
 		return err
 	}
 
-	// 1. Load agent + verify bundle exists.
-	agent, err := o.agents.GetByID(ctx, agentID)
+	// 1. Load version + verify bundle exists. `agentID` is the orchestrator's
+	// scope identifier — in BO chat it's the version row id, in deployed
+	// runtime it's been resolved to a version id before Turn is invoked.
+	version, err := o.agents.GetByID(ctx, agentID)
 	if err != nil {
 		return failTurn("agent_load", "load_agent", err)
 	}
-	if len(agent.Bundle) == 0 {
+	if len(version.Bundle) == 0 {
 		return failTurn("agent_not_runnable", "verify_bundle", types.ErrAgentNotRunnable)
 	}
 
-	// 2. Ensure session row exists (lazy-create).
+	// 2. Ensure session row exists (lazy-create). The ChatStore impl decides
+	// how to interpret the second arg (version-id for BO chat,
+	// per-agent-id for deployed runtime).
 	if err := o.chats.EnsureSession(ctx, sessionID, agentID); err != nil {
 		return failTurn("session_error", "ensure_session", err)
 	}
@@ -112,11 +125,11 @@ func (o *Orchestrator) Turn(
 	var bundleHead struct {
 		MainPrompt string `json:"main_prompt"`
 	}
-	if err := json.Unmarshal(agent.Bundle, &bundleHead); err != nil {
+	if err := json.Unmarshal(version.Bundle, &bundleHead); err != nil {
 		return failTurn("bundle_parse", "parse_bundle", err)
 	}
 
-	toolDefs, err := o.tools.Tools(agent.Bundle)
+	toolDefs, err := o.tools.Tools(version.Bundle)
 	if err != nil {
 		return failTurn("tools_init", "build_tool_defs", err)
 	}
@@ -135,7 +148,7 @@ func (o *Orchestrator) Turn(
 	if err != nil {
 		return failTurn("seq_assign", "next_seq_user", err)
 	}
-	if err := o.chats.AppendMessages(ctx, agent.ID, []types.ChatMessage{{
+	if err := o.chats.AppendMessages(ctx, version.ID, []types.ChatMessage{{
 		ID:        userMsgID,
 		SessionID: sessionID,
 		Role:      types.ChatRoleUser,
@@ -241,7 +254,7 @@ func (o *Orchestrator) Turn(
 		if err != nil {
 			return failTurn("seq_assign", "next_seq_assistant", err)
 		}
-		if err := o.chats.AppendMessages(ctx, agent.ID, []types.ChatMessage{{
+		if err := o.chats.AppendMessages(ctx, version.ID, []types.ChatMessage{{
 			ID:        assistantMsgID,
 			SessionID: sessionID,
 			Role:      types.ChatRoleAssistant,
@@ -265,7 +278,7 @@ func (o *Orchestrator) Turn(
 		// Execute the pending tools and build a tool-role message.
 		toolBlocks := make([]llm.Block, 0, len(pendingToolUses))
 		for _, tu := range pendingToolUses {
-			res, err := o.tools.Call(ctx, agent.Bundle, tools.Call{
+			res, err := o.tools.Call(ctx, version.Bundle, tools.Call{
 				ID:    tu.ID,
 				Name:  tu.Name,
 				Input: tu.Input,
@@ -297,7 +310,7 @@ func (o *Orchestrator) Turn(
 		if err != nil {
 			return failTurn("seq_assign", "next_seq_tool", err)
 		}
-		if err := o.chats.AppendMessages(ctx, agent.ID, []types.ChatMessage{{
+		if err := o.chats.AppendMessages(ctx, version.ID, []types.ChatMessage{{
 			ID:        toolMsgID,
 			SessionID: sessionID,
 			Role:      types.ChatRoleTool,

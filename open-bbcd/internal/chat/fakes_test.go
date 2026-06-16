@@ -12,12 +12,12 @@ import (
 )
 
 type fakeAgentRepo struct {
-	agent *types.Agent
-	err   error
+	version *types.AgentVersion
+	err     error
 }
 
-func (f *fakeAgentRepo) GetByID(ctx context.Context, id string) (*types.Agent, error) {
-	return f.agent, f.err
+func (f *fakeAgentRepo) GetByID(ctx context.Context, id string) (*types.AgentVersion, error) {
+	return f.version, f.err
 }
 
 type fakeChatRepo struct {
@@ -27,16 +27,16 @@ type fakeChatRepo struct {
 	nextSeq  int
 }
 
-func (f *fakeChatRepo) EnsureSession(ctx context.Context, sessionID, agentID string) error {
+func (f *fakeChatRepo) EnsureSession(ctx context.Context, sessionID, scopeID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.ensured == nil {
 		f.ensured = map[string]string{}
 	}
-	if cur, ok := f.ensured[sessionID]; ok && cur != agentID {
+	if cur, ok := f.ensured[sessionID]; ok && cur != scopeID {
 		return types.ErrSessionAgentMismatch
 	}
-	f.ensured[sessionID] = agentID
+	f.ensured[sessionID] = scopeID
 	return nil
 }
 
