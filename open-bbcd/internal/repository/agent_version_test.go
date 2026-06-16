@@ -12,10 +12,12 @@ import (
 )
 
 // seedReadyAgentVersion creates an agent + a READY version with a dummy bundle.
-// Returns (agentID, versionID).
-func seedReadyAgentVersion(t *testing.T) (string, string) {
+// Returns (agentID, versionID) plus the repos and db handle from withRepo.
+// Callers MUST reuse these returns instead of calling withRepo again (which
+// would truncate the just-seeded rows).
+func seedReadyAgentVersion(t *testing.T) (agentID, versionID string, agentRepo *AgentRepository, versionRepo *AgentVersionRepository, db *sql.DB) {
 	t.Helper()
-	agentRepo, _, db := withRepo(t)
+	agentRepo, versionRepo, db = withRepo(t)
 	ctx := context.Background()
 	agent, version, err := agentRepo.CreateFromWizard(ctx, types.CreateAgentFromWizardOpts{
 		Name: "av-" + uuid.NewString()[:8],
@@ -28,7 +30,7 @@ func seedReadyAgentVersion(t *testing.T) (string, string) {
 	); err != nil {
 		t.Fatalf("seed READY: %v", err)
 	}
-	return agent.ID, version.ID
+	return agent.ID, version.ID, agentRepo, versionRepo, db
 }
 
 // insertReadyChildVersion inserts a READY child version under parentID.
@@ -49,8 +51,7 @@ func insertReadyChildVersion(t *testing.T, db *sql.DB, parentID string) string {
 }
 
 func TestAgentVersionRepository_GetByID(t *testing.T) {
-	_, versionID := seedReadyAgentVersion(t)
-	_, versionRepo, _ := withRepo(t)
+	_, versionID, _, versionRepo, _ := seedReadyAgentVersion(t)
 	v, err := versionRepo.GetByID(context.Background(), versionID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
@@ -64,8 +65,7 @@ func TestAgentVersionRepository_GetByID(t *testing.T) {
 }
 
 func TestAgentVersionRepository_GetWithAgent(t *testing.T) {
-	agentID, versionID := seedReadyAgentVersion(t)
-	_, versionRepo, _ := withRepo(t)
+	agentID, versionID, _, versionRepo, _ := seedReadyAgentVersion(t)
 	v, a, err := versionRepo.GetWithAgent(context.Background(), versionID)
 	if err != nil {
 		t.Fatalf("GetWithAgent: %v", err)
@@ -76,8 +76,7 @@ func TestAgentVersionRepository_GetWithAgent(t *testing.T) {
 }
 
 func TestAgentVersionRepository_Deploy_HappyPath(t *testing.T) {
-	_, versionID := seedReadyAgentVersion(t)
-	_, versionRepo, _ := withRepo(t)
+	_, versionID, _, versionRepo, _ := seedReadyAgentVersion(t)
 	ctx := context.Background()
 	prev, err := versionRepo.Deploy(ctx, versionID)
 	if err != nil {
@@ -93,8 +92,7 @@ func TestAgentVersionRepository_Deploy_HappyPath(t *testing.T) {
 }
 
 func TestAgentVersionRepository_Deploy_Rotates(t *testing.T) {
-	_, versionID := seedReadyAgentVersion(t)
-	_, versionRepo, db := withRepo(t)
+	_, versionID, _, versionRepo, db := seedReadyAgentVersion(t)
 	ctx := context.Background()
 	_, _ = versionRepo.Deploy(ctx, versionID)
 	child := insertReadyChildVersion(t, db, versionID)
@@ -130,8 +128,7 @@ func TestAgentVersionRepository_Deploy_NotDeployable(t *testing.T) {
 }
 
 func TestAgentVersionRepository_Deploy_Idempotent(t *testing.T) {
-	_, versionID := seedReadyAgentVersion(t)
-	_, versionRepo, _ := withRepo(t)
+	_, versionID, _, versionRepo, _ := seedReadyAgentVersion(t)
 	ctx := context.Background()
 	_, _ = versionRepo.Deploy(ctx, versionID)
 	prev, err := versionRepo.Deploy(ctx, versionID)
@@ -148,8 +145,7 @@ func TestAgentVersionRepository_Deploy_Idempotent(t *testing.T) {
 }
 
 func TestAgentVersionRepository_Undeploy(t *testing.T) {
-	_, versionID := seedReadyAgentVersion(t)
-	_, versionRepo, _ := withRepo(t)
+	_, versionID, _, versionRepo, _ := seedReadyAgentVersion(t)
 	ctx := context.Background()
 	_, _ = versionRepo.Deploy(ctx, versionID)
 	if err := versionRepo.Undeploy(ctx, versionID); err != nil {
@@ -165,8 +161,7 @@ func TestAgentVersionRepository_Undeploy(t *testing.T) {
 }
 
 func TestAgentVersionRepository_CurrentDeployedID(t *testing.T) {
-	agentID, versionID := seedReadyAgentVersion(t)
-	_, versionRepo, _ := withRepo(t)
+	agentID, versionID, _, versionRepo, _ := seedReadyAgentVersion(t)
 	ctx := context.Background()
 	id, err := versionRepo.CurrentDeployedID(ctx, agentID)
 	if err != nil {
