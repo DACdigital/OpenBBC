@@ -38,7 +38,7 @@ func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AgentHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := r.PathValue("agent_id")
 	if id == "" {
 		JSON(w, http.StatusBadRequest, ErrorResponse{Error: "id is required"})
 		return
