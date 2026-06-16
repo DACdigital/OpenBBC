@@ -154,7 +154,12 @@ func (r *ChatRepository) LoadMessages(ctx context.Context, sessionID string) ([]
 // Each message must have a unique seq within the session (enforced by
 // UNIQUE constraint). Idempotent on (id) — ON CONFLICT DO NOTHING.
 // Also bumps the session's updated_at.
-func (r *ChatRepository) AppendMessages(ctx context.Context, msgs []types.ChatMessage) error {
+//
+// agentVersionID is accepted for interface conformance with the deployed-store
+// sibling; BO chat sessions are already version-pinned via chat_sessions.agent_id,
+// so this parameter is ignored here.
+func (r *ChatRepository) AppendMessages(ctx context.Context, agentVersionID string, msgs []types.ChatMessage) error {
+	_ = agentVersionID
 	if len(msgs) == 0 {
 		return nil
 	}
