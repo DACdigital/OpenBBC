@@ -19,7 +19,7 @@ import (
 // Each call hands back a fresh schema-scoped tablespace by truncating the
 // tables it touches at the start of the test — minimizing cross-test
 // interference without dropping migrations.
-func withRepo(t *testing.T) (*AgentRepository, *sql.DB) {
+func withRepo(t *testing.T) (*AgentRepository, *AgentVersionRepository, *sql.DB) {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -39,5 +39,5 @@ func withRepo(t *testing.T) (*AgentRepository, *sql.DB) {
 	if _, err := db.Exec(`TRUNCATE deployed_messages, deployed_sessions, chat_messages, chat_sessions, resources, agent_versions, agents RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
-	return NewAgentRepository(db), db
+	return NewAgentRepository(db), NewAgentVersionRepository(db), db
 }

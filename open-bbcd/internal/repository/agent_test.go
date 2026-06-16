@@ -25,7 +25,7 @@ func TestAgentRepository_CreateFromWizard_ValidationError(t *testing.T) {
 }
 
 func TestAgentRepository_Create_ReturnsAgent(t *testing.T) {
-	repo, _ := withRepo(t)
+	repo, _, _ := withRepo(t)
 	ctx := context.Background()
 	a, err := repo.Create(ctx, types.CreateAgentOpts{Name: "create-test"})
 	if err != nil {
@@ -40,7 +40,7 @@ func TestAgentRepository_Create_ReturnsAgent(t *testing.T) {
 }
 
 func TestAgentRepository_CreateFromWizard_CreatesAgentAndVersion(t *testing.T) {
-	repo, db := withRepo(t)
+	repo, _, db := withRepo(t)
 	ctx := context.Background()
 	agent, version, err := repo.CreateFromWizard(ctx, types.CreateAgentFromWizardOpts{
 		Name: "wizard-test",

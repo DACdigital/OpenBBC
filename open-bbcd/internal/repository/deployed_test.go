@@ -10,18 +10,25 @@ import (
 	"github.com/google/uuid"
 )
 
-func newDeployedRepoTest(t *testing.T) (*DeployedRepository, *AgentRepository, string) {
+func newDeployedRepoTest(t *testing.T) (*DeployedRepository, *AgentVersionRepository, string) {
 	t.Helper()
-	agentRepo, db := withRepo(t)
+	agentRepo, versionRepo, db := withRepo(t)
 	ctx := context.Background()
-	root, _ := agentRepo.Create(ctx, types.CreateAgentOpts{Name: "depl-" + uuid.NewString()[:8]})
-	if _, err := db.ExecContext(ctx, `UPDATE agents SET status='READY' WHERE id=$1`, root.ID); err != nil {
+	agent, version, err := agentRepo.CreateFromWizard(ctx, types.CreateAgentFromWizardOpts{
+		Name: "depl-" + uuid.NewString()[:8],
+	})
+	if err != nil {
+		t.Fatalf("CreateFromWizard: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE agent_versions SET status='READY', bundle='{}'::jsonb WHERE id=$1`, version.ID,
+	); err != nil {
 		t.Fatalf("seed READY: %v", err)
 	}
-	if _, err := agentRepo.Deploy(ctx, root.ID); err != nil {
+	if _, err := versionRepo.Deploy(ctx, version.ID); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	return NewDeployedRepository(db), agentRepo, root.ID
+	return NewDeployedRepository(db), versionRepo, agent.ID
 }
 
 func TestDeployedRepository_CreateAndGetSession(t *testing.T) {
@@ -74,10 +81,10 @@ func TestDeployedRepository_ListSessions_ScopedByUser(t *testing.T) {
 }
 
 func TestDeployedRepository_AppendMessages_StampsVersion(t *testing.T) {
-	repo, agentRepo, chainRoot := newDeployedRepoTest(t)
+	repo, versionRepo, chainRoot := newDeployedRepoTest(t)
 	ctx := context.Background()
 
-	versionID, _ := agentRepo.CurrentDeployedVersionID(ctx, chainRoot)
+	versionID, _ := versionRepo.CurrentDeployedID(ctx, chainRoot)
 	sess, _ := repo.CreateSession(ctx, chainRoot, "user-A", "")
 
 	err := repo.AppendMessages(ctx, []types.DeployedMessage{
@@ -103,9 +110,9 @@ func TestDeployedRepository_AppendMessages_StampsVersion(t *testing.T) {
 }
 
 func TestDeployedRepository_DeleteSession_CascadesMessages(t *testing.T) {
-	repo, agentRepo, chainRoot := newDeployedRepoTest(t)
+	repo, versionRepo, chainRoot := newDeployedRepoTest(t)
 	ctx := context.Background()
-	versionID, _ := agentRepo.CurrentDeployedVersionID(ctx, chainRoot)
+	versionID, _ := versionRepo.CurrentDeployedID(ctx, chainRoot)
 	sess, _ := repo.CreateSession(ctx, chainRoot, "user-A", "")
 	_ = repo.AppendMessages(ctx, []types.DeployedMessage{
 		{SessionID: sess.ID, AgentVersionID: versionID, Role: types.ChatRoleUser,
