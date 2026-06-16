@@ -21,6 +21,7 @@ const (
 
 type Agent struct {
 	ID                string          `json:"id"`
+	ChainRootID       string          `json:"chain_root_id"`
 	Name              string          `json:"name"`
 	Description       string          `json:"description,omitempty"`
 	Bundle            json.RawMessage `json:"bundle,omitempty"`

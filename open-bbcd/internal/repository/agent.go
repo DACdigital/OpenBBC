@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/google/uuid"
 )
 
 type AgentRepository struct {
@@ -33,6 +34,7 @@ func scanAgent(s scanner) (*types.Agent, error) {
 	var discoveryFilePath sql.NullString
 	err := s.Scan(
 		&agent.ID,
+		&agent.ChainRootID,
 		&agent.Name,
 		&description,
 		&bundle,
@@ -64,18 +66,19 @@ func scanAgent(s scanner) (*types.Agent, error) {
 
 // agentColumns lists the SELECT/RETURNING columns. Must stay in sync with
 // scanAgent's positional scan destinations.
-const agentColumns = `id, name, description, bundle, status, parent_version_id, flow_map_config, flow_map_parse_error, discovery_file_path, created_at, updated_at`
+const agentColumns = `id, chain_root_id, name, description, bundle, status, parent_version_id, flow_map_config, flow_map_parse_error, discovery_file_path, created_at, updated_at`
 
 func (r *AgentRepository) Create(ctx context.Context, opts types.CreateAgentOpts) (*types.Agent, error) {
 	agent, err := types.NewAgent(opts)
 	if err != nil {
 		return nil, err
 	}
+	id := uuid.NewString()
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO agents (name, description)
-		VALUES ($1, $2)
+		INSERT INTO agents (id, chain_root_id, name, description)
+		VALUES ($1::uuid, $1::uuid, $2, $3)
 		RETURNING `+agentColumns,
-		agent.Name, agent.Description,
+		id, agent.Name, agent.Description,
 	)
 	return scanAgent(row)
 }
@@ -217,11 +220,15 @@ func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.Creat
 	if r.db == nil {
 		return nil, errors.New("repository: no database connection")
 	}
+	id := opts.ID
+	if id == "" {
+		id = uuid.NewString()
+	}
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO agents (id, name, status, flow_map_config, flow_map_parse_error, discovery_file_path)
-		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, 'INITIALIZING', $3, NULLIF($4, ''), NULLIF($5, ''))
+		INSERT INTO agents (id, chain_root_id, name, status, flow_map_config, flow_map_parse_error, discovery_file_path)
+		VALUES ($1::uuid, $1::uuid, $2, 'INITIALIZING', $3, NULLIF($4, ''), NULLIF($5, ''))
 		RETURNING `+agentColumns,
-		opts.ID, opts.Name, []byte(opts.FlowMapConfig), opts.FlowMapParseError, opts.DiscoveryFilePath,
+		id, opts.Name, []byte(opts.FlowMapConfig), opts.FlowMapParseError, opts.DiscoveryFilePath,
 	)
 	return scanAgent(row)
 }
