@@ -20,14 +20,14 @@
     <div class="session-subtitle">{{.AgentName}}</div>
   </div>
   <div class="chat-actions">
-    <a href="/agents/{{.AgentID}}/chat" class="btn-secondary">Sessions</a>
-    <form method="post" action="/agents/{{.AgentID}}/chat/sessions" style="display:inline">
+    <a href="/agent_versions/{{.VersionID}}/chat" class="btn-secondary">Sessions</a>
+    <form method="post" action="/agent_versions/{{.VersionID}}/chat/sessions" style="display:inline">
       <button type="submit" class="btn-primary">+ New Session</button>
     </form>
   </div>
 </div>
 
-<div id="chat-log" class="chat-log" data-agent-id="{{.AgentID}}" data-session-id="{{.SessionID}}">
+<div id="chat-log" class="chat-log" data-version-id="{{.VersionID}}" data-session-id="{{.SessionID}}">
   {{range .Messages}}
     <div class="chat-bubble {{.Role}}">
       <div class="bubble-header">

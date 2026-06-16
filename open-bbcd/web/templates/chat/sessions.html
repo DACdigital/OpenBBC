@@ -5,7 +5,7 @@
     <a href="/agents/ui?agent={{.AgentID}}" class="back-link">← {{.AgentName}}</a>
     <h1>Sessions</h1>
   </div>
-  <form method="post" action="/agents/{{.AgentID}}/chat/sessions" class="inline">
+  <form method="post" action="/agent_versions/{{.VersionID}}/chat/sessions" class="inline">
     <button type="submit" class="btn-primary">+ New Session</button>
   </form>
 </div>
@@ -21,12 +21,12 @@
   </thead>
   <tbody>
     {{range .Sessions}}
-    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agents/{{$.AgentID}}/chat/{{.ID}}">
+    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agent_versions/{{$.VersionID}}/chat/{{.ID}}">
       <td>
         {{if .Title}}
-          <a class="session-link" href="/agents/{{$.AgentID}}/chat/{{.ID}}">{{.Title}}</a>
+          <a class="session-link" href="/agent_versions/{{$.VersionID}}/chat/{{.ID}}">{{.Title}}</a>
         {{else}}
-          <a class="session-link untitled" href="/agents/{{$.AgentID}}/chat/{{.ID}}">Untitled session</a>
+          <a class="session-link untitled" href="/agent_versions/{{$.VersionID}}/chat/{{.ID}}">Untitled session</a>
         {{end}}
       </td>
       <td class="col-date">{{.CreatedAt.Format "Jan 2, 2006 15:04"}}</td>

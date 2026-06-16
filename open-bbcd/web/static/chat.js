@@ -1,5 +1,5 @@
 // chat.js — vanilla JS chat client.
-// Subscribes to AG-UI SSE stream from POST /agents/{id}/chat/{session_id}/turn.
+// Subscribes to AG-UI SSE stream from POST /agent_versions/{version_id}/chat/{session_id}/turn.
 //
 // AG-UI Go SDK wire format (NOT W3C `event: TYPE` headers):
 //   id: <event_id>
@@ -27,9 +27,9 @@
 
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('chat-send');
-  const agentID = log.dataset.agentId;
+  const versionID = log.dataset.versionId;
   const sessionID = log.dataset.sessionId;
-  if (!agentID || !sessionID) return;
+  if (!versionID || !sessionID) return;
 
   let currentAssistantTurn = null;
   let displayBuf = '';
@@ -68,7 +68,7 @@
     startAssistantBubble();
 
     try {
-      const resp = await fetch(`/agents/${agentID}/chat/${sessionID}/turn`, {
+      const resp = await fetch(`/agent_versions/${versionID}/chat/${sessionID}/turn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ input: [{ type: 'text', text }] }),
@@ -402,7 +402,7 @@
       e.preventDefault();
       const newTitle = input.value.trim();
       try {
-        const res = await fetch(`/agents/${agentID}/chat/${sessionID}/title`, {
+        const res = await fetch(`/agent_versions/${versionID}/chat/${sessionID}/title`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: newTitle }),

@@ -19,21 +19,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// ChatAgentReader is the narrow agent interface needed by ChatHandler.
-// AgentID is used to build the back-link URL on the sessions page so
-// it points at the chain (by root ID), not at a specific version.
+// ChatAgentReader is the narrow agent-version interface needed by ChatHandler.
+// One call returns the version row and its owning Agent via JOIN so the
+// handler can populate both VersionID (URL param) and AgentID (back-link)
+// page-data fields without a second round-trip.
 type ChatAgentReader interface {
-	GetByID(ctx context.Context, id string) (*types.Agent, error)
-	AgentIDOf(ctx context.Context, versionID string) (string, error)
+	GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error)
 }
 
 // ChatSessionStore is the narrow chat-repo interface needed by ChatHandler.
+// All non-message methods are scoped to an agent version (chat_sessions.agent_version_id).
 type ChatSessionStore interface {
-	EnsureSession(ctx context.Context, sessionID, agentID string) error
-	GetSession(ctx context.Context, sessionID, agentID string) (*types.ChatSession, error)
-	ListSessions(ctx context.Context, agentID string) ([]*types.ChatSession, error)
+	EnsureSession(ctx context.Context, sessionID, versionID string) error
+	GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error)
+	ListSessions(ctx context.Context, versionID string) ([]*types.ChatSession, error)
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error)
-	UpdateSessionTitle(ctx context.Context, sessionID, agentID, title string) error
+	UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error
 }
 
 // TurnRunner is the orchestrator dependency. Implemented by *chat.Orchestrator.
@@ -91,38 +92,38 @@ func NewChatHandler(
 }
 
 // NewSession creates a new chat_sessions row and 303-redirects to the chat view.
-// Returns 409 if the agent has no bundle yet.
+// Returns 409 if the version has no bundle yet.
 func (h *ChatHandler) NewSession(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	agent, err := h.agents.GetByID(r.Context(), agentID)
+	versionID := r.PathValue("version_id")
+	version, _, err := h.agents.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	if len(agent.Bundle) == 0 {
+	if len(version.Bundle) == 0 {
 		Error(w, types.ErrAgentNotRunnable)
 		return
 	}
 	sessionID := uuid.NewString()
-	if err := h.chats.EnsureSession(r.Context(), sessionID, agentID); err != nil {
+	if err := h.chats.EnsureSession(r.Context(), sessionID, versionID); err != nil {
 		Error(w, err)
 		return
 	}
-	http.Redirect(w, r, "/agents/"+agentID+"/chat/"+sessionID, http.StatusSeeOther)
+	http.Redirect(w, r, "/agent_versions/"+versionID+"/chat/"+sessionID, http.StatusSeeOther)
 }
 
 type sessionListPageData struct {
-	Active      string
-	AgentID     string // version row's ID (URL path param semantics, legacy)
-	AgentRootID string // stable agent ID, used for back-link to agent listing
-	AgentName   string
-	Sessions    []*types.ChatSession
+	Active    string
+	VersionID string // URL path param value (a version row's ID)
+	AgentID   string // stable agent ID, used for back-link to agent listing
+	AgentName string
+	Sessions  []*types.ChatSession
 }
 
 // SessionList renders the session-list page for one agent version.
 func (h *ChatHandler) SessionList(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	agent, err := h.agents.GetByID(r.Context(), agentID)
+	versionID := r.PathValue("version_id")
+	_, agent, err := h.agents.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			http.NotFound(w, r)
@@ -131,29 +132,25 @@ func (h *ChatHandler) SessionList(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	rootID, err := h.agents.AgentIDOf(r.Context(), agentID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	sessions, err := h.chats.ListSessions(r.Context(), agentID)
+	sessions, err := h.chats.ListSessions(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
 	data := sessionListPageData{
-		Active:      "agents",
-		AgentID:     agentID,
-		AgentRootID: rootID,
-		AgentName:   agent.Name,
-		Sessions:    sessions,
+		Active:    "agents",
+		VersionID: versionID,
+		AgentID:   agent.ID,
+		AgentName: agent.Name,
+		Sessions:  sessions,
 	}
 	renderTemplate(w, h.sessionsTmpl, "layout", data)
 }
 
 type chatViewPageData struct {
 	Active       string
-	AgentID      string
+	VersionID    string // URL path param value (a version row's ID)
+	AgentID      string // stable agent ID, used for back-link to agent listing
 	AgentName    string
 	SessionID    string
 	SessionTitle string
@@ -274,10 +271,10 @@ func prettyJSON(raw json.RawMessage) string {
 // ChatView renders the chat UI for one session. If session_id doesn't
 // exist yet, renders an empty view (lazy creation by first POST /turn).
 func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
+	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
 
-	agent, err := h.agents.GetByID(r.Context(), agentID)
+	version, agent, err := h.agents.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			http.NotFound(w, r)
@@ -297,7 +294,7 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 	// Session row may not exist yet (lazy-created on first turn). A missing
 	// row is fine — leave title empty. Other errors propagate.
 	var sessionTitle string
-	if sess, err := h.chats.GetSession(r.Context(), sessionID, agentID); err == nil {
+	if sess, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
 		sessionTitle = sess.Title
 	} else if !errors.Is(err, types.ErrNotFound) {
 		Error(w, err)
@@ -306,12 +303,13 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 
 	data := chatViewPageData{
 		Active:       "agents",
-		AgentID:      agentID,
+		VersionID:    versionID,
+		AgentID:      agent.ID,
 		AgentName:    agent.Name,
 		SessionID:    sessionID,
 		SessionTitle: sessionTitle,
 		Messages:     buildMessageViews(msgs),
-		HasBundle:    len(agent.Bundle) > 0,
+		HasBundle:    len(version.Bundle) > 0,
 	}
 	renderTemplate(w, h.viewTmpl, "layout", data)
 }
@@ -319,7 +317,7 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 // UpdateSessionTitle accepts a JSON body {"title": "..."} and updates the
 // session title. Empty string clears the title (reverts to "Untitled session").
 func (h *ChatHandler) UpdateSessionTitle(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
+	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
 	var body struct {
 		Title string `json:"title"`
@@ -333,7 +331,7 @@ func (h *ChatHandler) UpdateSessionTitle(w http.ResponseWriter, r *http.Request)
 	if len(title) > maxTitleLen {
 		title = title[:maxTitleLen]
 	}
-	if err := h.chats.UpdateSessionTitle(r.Context(), sessionID, agentID, title); err != nil {
+	if err := h.chats.UpdateSessionTitle(r.Context(), sessionID, versionID, title); err != nil {
 		Error(w, err)
 		return
 	}
@@ -356,13 +354,13 @@ type TurnInputBlock struct {
 // already been streamed by the orchestrator as ErrorEvent — they are
 // only logged here.
 func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
+	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
 
 	var req TurnRequest
 	if err := DecodeJSON(r, &req); err != nil {
 		h.logger.Error("chat turn: decode JSON request body failed",
-			slog.String("agent_id", agentID),
+			slog.String("version_id", versionID),
 			slog.String("session_id", sessionID),
 			slog.Any("err", err),
 		)
@@ -389,7 +387,7 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	sink, err := h.transport.NewSink(w)
 	if err != nil {
 		h.logger.Error("chat turn: transport sink construction failed",
-			slog.String("agent_id", agentID),
+			slog.String("version_id", versionID),
 			slog.String("session_id", sessionID),
 			slog.Any("err", err),
 		)
@@ -401,9 +399,11 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	// streaming. Defer-closing the sink is owned here, NOT by the orchestrator.
 	w.WriteHeader(http.StatusOK)
 
-	if err := h.orch.Turn(r.Context(), agentID, sessionID, input, sink); err != nil {
+	// orch.Turn's first scope-id param is still named `agentID` (orchestrator
+	// legacy — see Task 6 notes). It expects a version row's ID.
+	if err := h.orch.Turn(r.Context(), versionID, sessionID, input, sink); err != nil {
 		h.logger.Error("chat turn failed",
-			slog.String("agent_id", agentID),
+			slog.String("version_id", versionID),
 			slog.String("session_id", sessionID),
 			slog.Any("err", err),
 		)
