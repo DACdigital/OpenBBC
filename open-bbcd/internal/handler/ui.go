@@ -16,7 +16,6 @@ import (
 type GroupedAgentRepository interface {
 	ListGrouped(ctx context.Context) ([]types.AgentGroup, error)
 	GetByID(ctx context.Context, id string) (*types.Agent, error)
-	CurrentDeployedVersionID(ctx context.Context, agentID string) (string, error)
 }
 
 type UIHandler struct {
