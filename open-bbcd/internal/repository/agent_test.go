@@ -27,7 +27,7 @@ func TestAgentRepository_CreateFromWizard_ValidationError(t *testing.T) {
 	}
 }
 
-func TestAgentRepository_Create_SetsChainRootIDToSelf(t *testing.T) {
+func TestAgentRepository_Create_SetsAgentIDToSelf(t *testing.T) {
 	t.Parallel()
 	repo, _ := withRepo(t)
 	ctx := context.Background()
@@ -36,13 +36,13 @@ func TestAgentRepository_Create_SetsChainRootIDToSelf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if agent.ChainRootID != agent.ID {
-		t.Fatalf("expected chain_root_id == id, got chain_root_id=%q id=%q",
-			agent.ChainRootID, agent.ID)
+	if agent.AgentID != agent.ID {
+		t.Fatalf("expected agent_id == id, got agent_id=%q id=%q",
+			agent.AgentID, agent.ID)
 	}
 }
 
-func TestAgentRepository_CreateFromWizard_SetsChainRootIDToSelf(t *testing.T) {
+func TestAgentRepository_CreateFromWizard_SetsAgentIDToSelf(t *testing.T) {
 	t.Parallel()
 	repo, _ := withRepo(t)
 	ctx := context.Background()
@@ -53,9 +53,9 @@ func TestAgentRepository_CreateFromWizard_SetsChainRootIDToSelf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFromWizard: %v", err)
 	}
-	if agent.ChainRootID != agent.ID {
-		t.Fatalf("expected chain_root_id == id, got chain_root_id=%q id=%q",
-			agent.ChainRootID, agent.ID)
+	if agent.AgentID != agent.ID {
+		t.Fatalf("expected agent_id == id, got agent_id=%q id=%q",
+			agent.AgentID, agent.ID)
 	}
 }
 
@@ -64,12 +64,12 @@ func TestAgentRepository_CreateFromWizard_SetsChainRootIDToSelf(t *testing.T) {
 func insertReadyChildVersion(t *testing.T, db *sql.DB, parentID string) string {
 	t.Helper()
 	var rootID string
-	if err := db.QueryRow(`SELECT chain_root_id::text FROM agents WHERE id=$1`, parentID).Scan(&rootID); err != nil {
+	if err := db.QueryRow(`SELECT agent_id::text FROM agents WHERE id=$1`, parentID).Scan(&rootID); err != nil {
 		t.Fatalf("lookup root: %v", err)
 	}
 	id := uuid.NewString()
 	_, err := db.Exec(`
-		INSERT INTO agents (id, chain_root_id, name, status, parent_version_id, bundle)
+		INSERT INTO agents (id, agent_id, name, status, parent_version_id, bundle)
 		SELECT $1::uuid, $2::uuid, name, 'READY', $3::uuid, '{}'::jsonb FROM agents WHERE id=$3::uuid
 	`, id, rootID, parentID)
 	if err != nil {
@@ -226,14 +226,14 @@ func TestAgentRepository_PartialUniqueIndex_RejectsDoubleDeploy(t *testing.T) {
 
 	rootID := uuid.NewString()
 	_, err := db.ExecContext(ctx,
-		`INSERT INTO agents (id, chain_root_id, name, status) VALUES ($1::uuid, $1::uuid, 'dbl-a', 'DEPLOYED')`,
+		`INSERT INTO agents (id, agent_id, name, status) VALUES ($1::uuid, $1::uuid, 'dbl-a', 'DEPLOYED')`,
 		rootID)
 	if err != nil {
 		t.Fatalf("first deploy insert: %v", err)
 	}
 	siblingID := uuid.NewString()
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO agents (id, chain_root_id, name, status, parent_version_id) VALUES ($1::uuid, $2::uuid, 'dbl-a', 'DEPLOYED', $2::uuid)`,
+		`INSERT INTO agents (id, agent_id, name, status, parent_version_id) VALUES ($1::uuid, $2::uuid, 'dbl-a', 'DEPLOYED', $2::uuid)`,
 		siblingID, rootID)
 	if err == nil {
 		t.Fatalf("expected partial unique index violation, got nil error")

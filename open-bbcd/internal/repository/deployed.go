@@ -20,7 +20,7 @@ func NewDeployedRepository(db *sql.DB) *DeployedRepository {
 func scanDeployedSession(s scanner) (*types.DeployedSession, error) {
 	sess := &types.DeployedSession{}
 	var title sql.NullString
-	err := s.Scan(&sess.ID, &sess.ChainRootID, &sess.UserID, &title, &sess.CreatedAt, &sess.UpdatedAt)
+	err := s.Scan(&sess.ID, &sess.AgentID, &sess.UserID, &title, &sess.CreatedAt, &sess.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -28,18 +28,18 @@ func scanDeployedSession(s scanner) (*types.DeployedSession, error) {
 	return sess, nil
 }
 
-const deployedSessionCols = `id::text, chain_root_id::text, user_id, title, created_at, updated_at`
+const deployedSessionCols = `id::text, agent_id::text, user_id, title, created_at, updated_at`
 
 // CreateSession inserts a session row. UserID is required (NOT NULL).
-func (r *DeployedRepository) CreateSession(ctx context.Context, chainRootID, userID, title string) (*types.DeployedSession, error) {
+func (r *DeployedRepository) CreateSession(ctx context.Context, agentID, userID, title string) (*types.DeployedSession, error) {
 	if userID == "" {
 		return nil, types.ErrUserIDRequired
 	}
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO deployed_sessions (chain_root_id, user_id, title)
+		INSERT INTO deployed_sessions (agent_id, user_id, title)
 		VALUES ($1::uuid, $2, NULLIF($3, ''))
 		RETURNING `+deployedSessionCols,
-		chainRootID, userID, title,
+		agentID, userID, title,
 	)
 	return scanDeployedSession(row)
 }
@@ -78,16 +78,16 @@ func (r *DeployedRepository) GetSessionByID(ctx context.Context, sessionID strin
 	return sess, err
 }
 
-// ListSessions returns all sessions for (chainRootID, userID), newest first.
-func (r *DeployedRepository) ListSessions(ctx context.Context, chainRootID, userID string) ([]*types.DeployedSession, error) {
+// ListSessions returns all sessions for (agentID, userID), newest first.
+func (r *DeployedRepository) ListSessions(ctx context.Context, agentID, userID string) ([]*types.DeployedSession, error) {
 	if userID == "" {
 		return nil, types.ErrUserIDRequired
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT `+deployedSessionCols+` FROM deployed_sessions
-		WHERE chain_root_id = $1::uuid AND user_id = $2
+		WHERE agent_id = $1::uuid AND user_id = $2
 		ORDER BY created_at DESC
-	`, chainRootID, userID)
+	`, agentID, userID)
 	if err != nil {
 		return nil, err
 	}

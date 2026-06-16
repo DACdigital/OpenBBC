@@ -20,7 +20,7 @@ type stubDeployedAgentReader struct {
 	err        error
 }
 
-func (s *stubDeployedAgentReader) CurrentDeployedVersionID(ctx context.Context, chainRootID string) (string, error) {
+func (s *stubDeployedAgentReader) CurrentDeployedVersionID(ctx context.Context, agentID string) (string, error) {
 	return s.deployedID, s.err
 }
 
@@ -37,12 +37,12 @@ func newStubDeployedStore() *stubDeployedStore {
 		messages: map[string][]*types.DeployedMessage{},
 	}
 }
-func (s *stubDeployedStore) CreateSession(ctx context.Context, chainRootID, userID, title string) (*types.DeployedSession, error) {
+func (s *stubDeployedStore) CreateSession(ctx context.Context, agentID, userID, title string) (*types.DeployedSession, error) {
 	if s.createErr != nil {
 		return nil, s.createErr
 	}
-	id := "sess-" + userID + "-" + chainRootID + "-" + title
-	sess := &types.DeployedSession{ID: id, ChainRootID: chainRootID, UserID: userID, Title: title, CreatedAt: time.Now()}
+	id := "sess-" + userID + "-" + agentID + "-" + title
+	sess := &types.DeployedSession{ID: id, AgentID: agentID, UserID: userID, Title: title, CreatedAt: time.Now()}
 	s.sessions[id] = sess
 	return sess, nil
 }
@@ -53,10 +53,10 @@ func (s *stubDeployedStore) GetSession(ctx context.Context, sessionID, userID st
 	}
 	return sess, nil
 }
-func (s *stubDeployedStore) ListSessions(ctx context.Context, chainRootID, userID string) ([]*types.DeployedSession, error) {
+func (s *stubDeployedStore) ListSessions(ctx context.Context, agentID, userID string) ([]*types.DeployedSession, error) {
 	var out []*types.DeployedSession
 	for _, sess := range s.sessions {
-		if sess.ChainRootID == chainRootID && sess.UserID == userID {
+		if sess.AgentID == agentID && sess.UserID == userID {
 			out = append(out, sess)
 		}
 	}
@@ -228,7 +228,7 @@ func TestDeployedHandler_Turn_WrongUser_404(t *testing.T) {
 func TestDeployedHandler_Turn_NoDeployedVersion_404(t *testing.T) {
 	store := newStubDeployedStore()
 	// Pre-seed a session as if a deploy used to exist (so the session is real).
-	store.sessions["s1"] = &types.DeployedSession{ID: "s1", ChainRootID: "chain-a", UserID: "u"}
+	store.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "chain-a", UserID: "u"}
 	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: ""}, store, &stubTurnRunner{}, jsonl.NewFactory())
 
 	body, _ := json.Marshal(map[string]any{"user_id": "u", "input": []map[string]string{{"type": "text", "text": "x"}}})

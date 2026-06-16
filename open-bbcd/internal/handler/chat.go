@@ -20,11 +20,11 @@ import (
 )
 
 // ChatAgentReader is the narrow agent interface needed by ChatHandler.
-// ChainRootID is used to build the back-link URL on the sessions page so
+// AgentID is used to build the back-link URL on the sessions page so
 // it points at the chain (by root ID), not at a specific version.
 type ChatAgentReader interface {
 	GetByID(ctx context.Context, id string) (*types.Agent, error)
-	ChainRootID(ctx context.Context, agentID string) (string, error)
+	AgentIDOf(ctx context.Context, versionID string) (string, error)
 }
 
 // ChatSessionStore is the narrow chat-repo interface needed by ChatHandler.
@@ -113,8 +113,8 @@ func (h *ChatHandler) NewSession(w http.ResponseWriter, r *http.Request) {
 
 type sessionListPageData struct {
 	Active      string
-	AgentID     string
-	AgentRootID string
+	AgentID     string // version row's ID (URL path param semantics, legacy)
+	AgentRootID string // stable agent ID, used for back-link to agent listing
 	AgentName   string
 	Sessions    []*types.ChatSession
 }
@@ -131,7 +131,7 @@ func (h *ChatHandler) SessionList(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	rootID, err := h.agents.ChainRootID(r.Context(), agentID)
+	rootID, err := h.agents.AgentIDOf(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
 		return

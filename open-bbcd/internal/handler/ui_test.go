@@ -28,10 +28,10 @@ wizard:
 `
 
 type mockGroupedAgentRepo struct {
-	listGroupedFn func(ctx context.Context) ([]types.AgentChain, error)
+	listGroupedFn func(ctx context.Context) ([]types.AgentGroup, error)
 }
 
-func (m *mockGroupedAgentRepo) ListGrouped(ctx context.Context) ([]types.AgentChain, error) {
+func (m *mockGroupedAgentRepo) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
 	return m.listGroupedFn(ctx)
 }
 

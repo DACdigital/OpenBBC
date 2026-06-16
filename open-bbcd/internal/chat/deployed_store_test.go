@@ -50,7 +50,7 @@ func (f *fakeDeployedRepo) NextSeq(ctx context.Context, sessionID string) (int, 
 
 func TestDeployedChatStore_EnsureSession_MatchesChainRoot(t *testing.T) {
 	f := newFakeDeployedRepo()
-	f.sessions["s1"] = &types.DeployedSession{ID: "s1", ChainRootID: "chain-A", UserID: "u"}
+	f.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "chain-A", UserID: "u"}
 	store := NewDeployedChatStore(f)
 
 	if err := store.EnsureSession(context.Background(), "s1", "chain-A"); err != nil {
@@ -60,7 +60,7 @@ func TestDeployedChatStore_EnsureSession_MatchesChainRoot(t *testing.T) {
 
 func TestDeployedChatStore_EnsureSession_ChainMismatch_NotFound(t *testing.T) {
 	f := newFakeDeployedRepo()
-	f.sessions["s1"] = &types.DeployedSession{ID: "s1", ChainRootID: "chain-A", UserID: "u"}
+	f.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "chain-A", UserID: "u"}
 	store := NewDeployedChatStore(f)
 
 	err := store.EnsureSession(context.Background(), "s1", "chain-B")
@@ -71,7 +71,7 @@ func TestDeployedChatStore_EnsureSession_ChainMismatch_NotFound(t *testing.T) {
 
 func TestDeployedChatStore_AppendMessages_StampsAgentVersionID(t *testing.T) {
 	f := newFakeDeployedRepo()
-	f.sessions["s1"] = &types.DeployedSession{ID: "s1", ChainRootID: "chain-A", UserID: "u"}
+	f.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "chain-A", UserID: "u"}
 	store := NewDeployedChatStore(f)
 
 	err := store.AppendMessages(context.Background(), "v-7", []types.ChatMessage{

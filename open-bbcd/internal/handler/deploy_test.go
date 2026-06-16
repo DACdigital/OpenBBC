@@ -55,7 +55,7 @@ func newDeployMux(repo DeployAgentRepository) *http.ServeMux {
 
 func TestDeployHandler_HappyPath(t *testing.T) {
 	repo := &stubDeployRepo{
-		agent: &types.Agent{ID: "v1", ChainRootID: "v1", Status: "READY"},
+		agent: &types.Agent{ID: "v1", AgentID: "v1", Status: "READY"},
 	}
 	mux := newDeployMux(repo)
 
@@ -86,7 +86,7 @@ func TestDeployHandler_HappyPath(t *testing.T) {
 
 func TestDeployHandler_NotDeployable_409(t *testing.T) {
 	repo := &stubDeployRepo{
-		agent:     &types.Agent{ID: "v1", ChainRootID: "v1", Status: "DRAFT"},
+		agent:     &types.Agent{ID: "v1", AgentID: "v1", Status: "DRAFT"},
 		deployErr: types.ErrAgentNotDeployable,
 	}
 	mux := newDeployMux(repo)
@@ -101,7 +101,7 @@ func TestDeployHandler_NotDeployable_409(t *testing.T) {
 func TestDeployHandler_ReportsPreviousDeployed(t *testing.T) {
 	prev := "v-old"
 	repo := &stubDeployRepo{
-		agent: &types.Agent{ID: "v2", ChainRootID: "v1", Status: "READY"},
+		agent: &types.Agent{ID: "v2", AgentID: "v1", Status: "READY"},
 		prev:  &prev,
 	}
 	mux := newDeployMux(repo)
@@ -123,7 +123,7 @@ func TestDeployHandler_ReportsPreviousDeployed(t *testing.T) {
 
 func TestUndeployHandler_HappyPath(t *testing.T) {
 	repo := &stubDeployRepo{
-		agent: &types.Agent{ID: "v1", ChainRootID: "v1", Status: "DEPLOYED"},
+		agent: &types.Agent{ID: "v1", AgentID: "v1", Status: "DEPLOYED"},
 	}
 	mux := newDeployMux(repo)
 
@@ -141,7 +141,7 @@ func TestUndeployHandler_HappyPath(t *testing.T) {
 
 func TestUndeployHandler_NotDeployed_409(t *testing.T) {
 	repo := &stubDeployRepo{
-		agent:       &types.Agent{ID: "v1", ChainRootID: "v1", Status: "DRAFT"},
+		agent:       &types.Agent{ID: "v1", AgentID: "v1", Status: "DRAFT"},
 		undeployErr: types.ErrAgentNotDeployed,
 	}
 	mux := newDeployMux(repo)

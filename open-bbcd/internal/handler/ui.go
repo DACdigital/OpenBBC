@@ -14,9 +14,9 @@ import (
 )
 
 type GroupedAgentRepository interface {
-	ListGrouped(ctx context.Context) ([]types.AgentChain, error)
+	ListGrouped(ctx context.Context) ([]types.AgentGroup, error)
 	GetByID(ctx context.Context, id string) (*types.Agent, error)
-	CurrentDeployedVersionID(ctx context.Context, chainRootID string) (string, error)
+	CurrentDeployedVersionID(ctx context.Context, agentID string) (string, error)
 }
 
 type UIHandler struct {
@@ -125,7 +125,7 @@ func renderTemplate(w http.ResponseWriter, tmpl *template.Template, name string,
 
 type agentsPageData struct {
 	Active string
-	Chains []types.AgentChain
+	Groups []types.AgentGroup
 }
 
 // AgentsPage serves either the agents list or a single agent chain's version
@@ -133,19 +133,19 @@ type agentsPageData struct {
 // param value is the chain root agent ID — the stable identifier for a chain
 // across version additions.
 func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
-	chains, err := h.agentRepo.ListGrouped(r.Context())
+	groups, err := h.agentRepo.ListGrouped(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	if rootID := r.URL.Query().Get("agent"); rootID != "" {
-		for _, chain := range chains {
-			if chain.RootID == rootID {
+	if agentID := r.URL.Query().Get("agent"); agentID != "" {
+		for _, group := range groups {
+			if group.AgentID == agentID {
 				renderTemplate(w, h.agentVersionsTmpl, "layout", agentVersionsPageData{
 					Active:   "agents",
-					Name:     chain.Name,
-					Versions: chain.Versions,
+					Name:     group.Name,
+					Versions: group.Versions,
 				})
 				return
 			}
@@ -154,7 +154,7 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderTemplate(w, h.agentsTmpl, "layout", agentsPageData{Active: "agents", Chains: chains})
+	renderTemplate(w, h.agentsTmpl, "layout", agentsPageData{Active: "agents", Groups: groups})
 }
 
 type agentVersionsPageData struct {
@@ -226,7 +226,7 @@ func (h *UIHandler) WizardStep(w http.ResponseWriter, r *http.Request) {
 
 type deployModalData struct {
 	Version         *types.Agent
-	ChainRootID     string
+	AgentID     string
 	CurrentDeployed *types.Agent // nil if no current deploy or self
 }
 
@@ -238,7 +238,7 @@ func (u *UIHandler) DeployConfirm(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	curID, err := u.agentRepo.CurrentDeployedVersionID(r.Context(), ver.ChainRootID)
+	curID, err := u.agentRepo.CurrentDeployedVersionID(r.Context(), ver.AgentID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -248,7 +248,7 @@ func (u *UIHandler) DeployConfirm(w http.ResponseWriter, r *http.Request) {
 		cur, _ = u.agentRepo.GetByID(r.Context(), curID)
 	}
 	renderTemplate(w, u.deployModalTmpl, "agent-deploy-modal", deployModalData{
-		Version: ver, ChainRootID: ver.ChainRootID, CurrentDeployed: cur,
+		Version: ver, AgentID: ver.AgentID, CurrentDeployed: cur,
 	})
 }
 
@@ -262,6 +262,6 @@ func (u *UIHandler) UndeployConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	renderTemplate(w, u.undeployModalTmpl, "agent-undeploy-modal", struct {
 		Version     *types.Agent
-		ChainRootID string
-	}{ver, ver.ChainRootID})
+		AgentID string
+	}{ver, ver.AgentID})
 }

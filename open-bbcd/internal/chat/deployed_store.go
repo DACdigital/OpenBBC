@@ -30,12 +30,12 @@ func NewDeployedChatStore(repo DeployedRepositoryAPI) *DeployedChatStore {
 // EnsureSession verifies the session row exists AND belongs to the given
 // chain root. Unlike BO chat's lazy creation, deployed sessions must be
 // created explicitly before /turn (so user_id scope can be enforced).
-func (s *DeployedChatStore) EnsureSession(ctx context.Context, sessionID, chainRootID string) error {
+func (s *DeployedChatStore) EnsureSession(ctx context.Context, sessionID, agentID string) error {
 	sess, err := s.repo.GetSessionByID(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	if sess.ChainRootID != chainRootID {
+	if sess.AgentID != agentID {
 		return types.ErrNotFound
 	}
 	return nil

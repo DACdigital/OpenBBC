@@ -15,14 +15,14 @@ import (
 
 // DeployedAgentReader is the narrow interface the deployed handler needs.
 type DeployedAgentReader interface {
-	CurrentDeployedVersionID(ctx context.Context, chainRootID string) (string, error)
+	CurrentDeployedVersionID(ctx context.Context, agentID string) (string, error)
 }
 
 // DeployedStore is the narrow repo interface for deployed sessions/messages.
 type DeployedStore interface {
-	CreateSession(ctx context.Context, chainRootID, userID, title string) (*types.DeployedSession, error)
+	CreateSession(ctx context.Context, agentID, userID, title string) (*types.DeployedSession, error)
 	GetSession(ctx context.Context, sessionID, userID string) (*types.DeployedSession, error)
-	ListSessions(ctx context.Context, chainRootID, userID string) ([]*types.DeployedSession, error)
+	ListSessions(ctx context.Context, agentID, userID string) ([]*types.DeployedSession, error)
 	UpdateSessionTitle(ctx context.Context, sessionID, userID, title string) error
 	DeleteSession(ctx context.Context, sessionID, userID string) error
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.DeployedMessage, error)
@@ -57,8 +57,8 @@ func NewDeployedHandler(
 // requireDeployed resolves the chain root's currently-deployed version.
 // Returns (versionID, true) if a version is deployed; ("", false) and a
 // 404 written to w if no version is deployed (no existence leak).
-func (h *DeployedHandler) requireDeployed(w http.ResponseWriter, r *http.Request, chainRootID string) (string, bool) {
-	v, err := h.agents.CurrentDeployedVersionID(r.Context(), chainRootID)
+func (h *DeployedHandler) requireDeployed(w http.ResponseWriter, r *http.Request, agentID string) (string, bool) {
+	v, err := h.agents.CurrentDeployedVersionID(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
 		return "", false
@@ -72,8 +72,8 @@ func (h *DeployedHandler) requireDeployed(w http.ResponseWriter, r *http.Request
 
 // CreateSession handles POST /deployed/{agent_id}/sessions
 func (h *DeployedHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
-	chainRootID := r.PathValue("agent_id")
-	if _, ok := h.requireDeployed(w, r, chainRootID); !ok {
+	agentID := r.PathValue("agent_id")
+	if _, ok := h.requireDeployed(w, r, agentID); !ok {
 		return
 	}
 	var body struct {
@@ -88,7 +88,7 @@ func (h *DeployedHandler) CreateSession(w http.ResponseWriter, r *http.Request) 
 		Error(w, types.ErrUserIDRequired)
 		return
 	}
-	sess, err := h.store.CreateSession(r.Context(), chainRootID, body.UserID, body.Title)
+	sess, err := h.store.CreateSession(r.Context(), agentID, body.UserID, body.Title)
 	if err != nil {
 		Error(w, err)
 		return
@@ -100,8 +100,8 @@ func (h *DeployedHandler) CreateSession(w http.ResponseWriter, r *http.Request) 
 
 // ListSessions handles GET /deployed/{agent_id}/sessions?user_id=X
 func (h *DeployedHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
-	chainRootID := r.PathValue("agent_id")
-	if _, ok := h.requireDeployed(w, r, chainRootID); !ok {
+	agentID := r.PathValue("agent_id")
+	if _, ok := h.requireDeployed(w, r, agentID); !ok {
 		return
 	}
 	userID := r.URL.Query().Get("user_id")
@@ -109,7 +109,7 @@ func (h *DeployedHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 		Error(w, types.ErrUserIDRequired)
 		return
 	}
-	sessions, err := h.store.ListSessions(r.Context(), chainRootID, userID)
+	sessions, err := h.store.ListSessions(r.Context(), agentID, userID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -120,9 +120,9 @@ func (h *DeployedHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 
 // GetSession handles GET /deployed/{agent_id}/sessions/{session_id}?user_id=X
 func (h *DeployedHandler) GetSession(w http.ResponseWriter, r *http.Request) {
-	chainRootID := r.PathValue("agent_id")
+	agentID := r.PathValue("agent_id")
 	sessionID := r.PathValue("session_id")
-	if _, ok := h.requireDeployed(w, r, chainRootID); !ok {
+	if _, ok := h.requireDeployed(w, r, agentID); !ok {
 		return
 	}
 	userID := r.URL.Query().Get("user_id")
@@ -135,7 +135,7 @@ func (h *DeployedHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	if sess.ChainRootID != chainRootID {
+	if sess.AgentID != agentID {
 		Error(w, types.ErrNotFound)
 		return
 	}
@@ -153,9 +153,9 @@ func (h *DeployedHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 
 // UpdateTitle handles PATCH /deployed/{agent_id}/sessions/{session_id}/title
 func (h *DeployedHandler) UpdateTitle(w http.ResponseWriter, r *http.Request) {
-	chainRootID := r.PathValue("agent_id")
+	agentID := r.PathValue("agent_id")
 	sessionID := r.PathValue("session_id")
-	if _, ok := h.requireDeployed(w, r, chainRootID); !ok {
+	if _, ok := h.requireDeployed(w, r, agentID); !ok {
 		return
 	}
 	var body struct {
@@ -179,9 +179,9 @@ func (h *DeployedHandler) UpdateTitle(w http.ResponseWriter, r *http.Request) {
 
 // DeleteSession handles DELETE /deployed/{agent_id}/sessions/{session_id}?user_id=X
 func (h *DeployedHandler) DeleteSession(w http.ResponseWriter, r *http.Request) {
-	chainRootID := r.PathValue("agent_id")
+	agentID := r.PathValue("agent_id")
 	sessionID := r.PathValue("session_id")
-	if _, ok := h.requireDeployed(w, r, chainRootID); !ok {
+	if _, ok := h.requireDeployed(w, r, agentID); !ok {
 		return
 	}
 	userID := r.URL.Query().Get("user_id")
@@ -208,10 +208,10 @@ type turnRequest struct {
 // AG-UI SSE on success. Validates (session_id, user_id) before opening the
 // stream so we can return clean 4xx codes for auth/scope failures.
 func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
-	chainRootID := r.PathValue("agent_id")
+	agentID := r.PathValue("agent_id")
 	sessionID := r.PathValue("session_id")
 
-	versionID, ok := h.requireDeployed(w, r, chainRootID)
+	versionID, ok := h.requireDeployed(w, r, agentID)
 	if !ok {
 		return
 	}
@@ -233,7 +233,7 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	if sess.ChainRootID != chainRootID {
+	if sess.AgentID != agentID {
 		Error(w, types.ErrNotFound)
 		return
 	}
@@ -258,7 +258,7 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.orch.Turn(r.Context(), versionID, sessionID, input, sink); err != nil {
 		h.logger.Error("deployed turn failed",
-			slog.String("chain_root_id", chainRootID),
+			slog.String("agent_id", agentID),
 			slog.String("version_id", versionID),
 			slog.String("session_id", sessionID),
 			slog.Any("err", err),

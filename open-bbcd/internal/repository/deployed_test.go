@@ -32,7 +32,7 @@ func TestDeployedRepository_CreateAndGetSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	if sess.UserID != "user-A" || sess.ChainRootID != chainRoot {
+	if sess.UserID != "user-A" || sess.AgentID != chainRoot {
 		t.Fatalf("scope: %+v", sess)
 	}
 

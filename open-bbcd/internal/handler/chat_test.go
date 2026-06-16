@@ -32,7 +32,7 @@ func (s *stubAgentRepo) GetByID(ctx context.Context, id string) (*types.Agent, e
 	return s.agent, s.err
 }
 
-func (s *stubAgentRepo) ChainRootID(ctx context.Context, agentID string) (string, error) {
+func (s *stubAgentRepo) AgentIDOf(ctx context.Context, versionID string) (string, error) {
 	return s.rootID, s.err
 }
 

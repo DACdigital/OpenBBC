@@ -7,7 +7,7 @@
       <p>Existing sessions will continue against the new version on their next turn.</p>
     {{else}}
       <p>This version will go live at:</p>
-      <code>/deployed/{{.ChainRootID}}</code>
+      <code>/deployed/{{.AgentID}}</code>
     {{end}}
     <div class="modal-actions">
       <button hx-post="/agents/{{.Version.ID}}/deploy"
