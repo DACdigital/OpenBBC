@@ -1,0 +1,16 @@
+{{define "agent-undeploy-modal"}}
+<div class="modal" id="undeploy-modal">
+  <div class="modal-content">
+    <h2>Undeploy version</h2>
+    <p>Take this version offline?</p>
+    <p><code>/deployed/{{.ChainRootID}}</code> will return 404 until you deploy another version of this agent.</p>
+    <div class="modal-actions">
+      <button hx-post="/agents/{{.Version.ID}}/undeploy"
+              hx-on::after-request="window.location.reload()">
+        Confirm Undeploy
+      </button>
+      <button onclick="document.getElementById('undeploy-modal').remove()">Cancel</button>
+    </div>
+  </div>
+</div>
+{{end}}

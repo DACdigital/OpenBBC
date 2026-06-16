@@ -133,6 +133,9 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agents/{id}/finalize", configuratorHandler.Finalize)
 	mux.HandleFunc("GET /agents/{id}/config.yaml", configuratorHandler.DownloadYAML)
 
+	mux.HandleFunc("GET /agents/{id}/deploy/confirm", uiHandler.DeployConfirm)
+	mux.HandleFunc("GET /agents/{id}/undeploy/confirm", uiHandler.UndeployConfirm)
+
 	mux.HandleFunc("GET /health", Health)
 	mux.HandleFunc("POST /agents", agentHandler.Create)
 	mux.HandleFunc("GET /agents", agentHandler.List)

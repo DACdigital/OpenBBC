@@ -10,17 +10,29 @@
       <th class="col-version">Version</th>
       <th class="col-status">Status</th>
       <th class="col-date">Created</th>
+      <th class="col-actions">Actions</th>
     </tr>
   </thead>
   <tbody>
     {{range .Versions}}
     {{$href := printf "/agents/%s/configure" .Agent.ID}}
-    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="{{$href}}">
+    <tr>
       <td class="col-version {{if gt .VersionNum 1}}old{{end}}">
         <a class="agent-link" href="{{$href}}">v{{.VersionNum}}</a>
       </td>
       <td class="col-status"><span class="badge badge-{{.Agent.Status | statusClass}}">{{.Agent.Status}}</span></td>
       <td class="col-date">{{.Agent.CreatedAt.Format "Jan 2, 2006"}}</td>
+      <td class="col-actions">
+        {{if eq .Agent.Status "READY"}}
+          <button class="btn-small"
+                  hx-get="/agents/{{.Agent.ID}}/deploy/confirm"
+                  hx-target="body" hx-swap="beforeend">Deploy</button>
+        {{else if eq .Agent.Status "DEPLOYED"}}
+          <button class="btn-small btn-danger"
+                  hx-get="/agents/{{.Agent.ID}}/undeploy/confirm"
+                  hx-target="body" hx-swap="beforeend">Undeploy</button>
+        {{end}}
+      </td>
     </tr>
     {{end}}
   </tbody>
