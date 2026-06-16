@@ -1,4 +1,4 @@
-.PHONY: build run test clean migrate-up migrate-down migrate-status migrate-create
+.PHONY: build run test test-integration clean migrate-up migrate-down migrate-status migrate-create
 
 BINARY_NAME=open-bbcd
 BUILD_DIR=bin
@@ -11,6 +11,10 @@ run:
 	go run ./cmd/open-bbcd
 
 test:
+	go test -v -race ./...
+
+test-integration:
+	@if [ -z "$$DATABASE_URL" ]; then echo "set DATABASE_URL first"; exit 1; fi
 	go test -v -race ./...
 
 clean:
