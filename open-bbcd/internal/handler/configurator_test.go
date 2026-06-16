@@ -26,7 +26,7 @@ type stubConfigStore struct {
 	currentStatus string // optional override; defaults to "INITIALIZING"
 }
 
-func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, agentID string) ([]byte, string, error) {
+func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
 	if s.getErr != nil {
 		return nil, "", s.getErr
 	}
@@ -39,15 +39,15 @@ func (s *stubConfigStore) GetWithAgent(ctx context.Context, versionID string) (*
 	if status == "" {
 		status = "INITIALIZING"
 	}
-	// The stub treats the URL's version_id as ALSO being the agent_id so test
-	// fixtures don't have to thread two identifiers. Per-agent calls
-	// (GetFlowMapConfig / UpdateFlowMapConfig) ignore the id anyway.
+	// The stub uses the URL's version_id for both ids — there's only one
+	// config in this fake, and per-version calls (GetFlowMapConfig /
+	// UpdateFlowMapConfig) ignore the id anyway.
 	version := &types.AgentVersion{ID: versionID, AgentID: versionID, Status: status}
 	agent := &types.Agent{ID: versionID, Name: s.cfg.Name}
 	return version, agent, nil
 }
 
-func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error {
+func (s *stubConfigStore) UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error {
 	s.updates++
 	if s.updateFn != nil {
 		return s.updateFn(cfg)

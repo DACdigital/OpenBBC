@@ -20,15 +20,14 @@ import (
 
 // ConfigStore is the narrow interface the configurator depends on.
 //
-// GetWithAgent returns both the version row (for status/bundle) and its owning
-// Agent (for name/flow_map_config). The flow-map config lives on the Agent
-// (per-agent), while status and bundle live on the AgentVersion. Other methods
-// are scoped: GetFlowMapConfig / UpdateFlowMapConfig take an agent_id;
-// UpdateStatus takes a version_id.
+// GetWithAgent returns both the version row (for status/bundle/flow_map_config)
+// and its owning Agent (for display fields like name + discovery file path).
+// All other methods are scoped per-version: flow_map_config, parse error,
+// and lifecycle status all live on AgentVersion after migration 014.
 type ConfigStore interface {
 	GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error)
-	GetFlowMapConfig(ctx context.Context, agentID string) (cfg []byte, parseErr string, err error)
-	UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error
+	GetFlowMapConfig(ctx context.Context, versionID string) (cfg []byte, parseErr string, err error)
+	UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error
 	UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error
 }
 
@@ -165,7 +164,7 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 	if err != nil {
 		return configPageData{}, err
 	}
-	cfgBytes, parseErr, err := h.repo.GetFlowMapConfig(r.Context(), agent.ID)
+	cfgBytes, parseErr, err := h.repo.GetFlowMapConfig(r.Context(), version.ID)
 	if err != nil {
 		return configPageData{}, err
 	}
@@ -339,26 +338,26 @@ func tplDict(kv ...any) (map[string]any, error) {
 
 // requireEditable resolves the version_id to the (version, agent) pair and
 // verifies the version is in INITIALIZING — the only state where the
-// configurator accepts edits. Returns the agent's stable ID so callers can
-// route subsequent config CRUD against the per-agent flow_map_config.
-// Used as a guard at the top of every mutating handler so a stale tab or
-// hand-crafted request can't change a finalized version.
-func (h *ConfiguratorHandler) requireEditable(ctx context.Context, versionID string) (agentID string, err error) {
-	version, agent, err := h.repo.GetWithAgent(ctx, versionID)
+// configurator accepts edits. Returns the version's ID so callers can route
+// subsequent config CRUD against the per-version flow_map_config. Used as a
+// guard at the top of every mutating handler so a stale tab or hand-crafted
+// request can't change a finalized version.
+func (h *ConfiguratorHandler) requireEditable(ctx context.Context, versionID string) (string, error) {
+	version, _, err := h.repo.GetWithAgent(ctx, versionID)
 	if err != nil {
 		return "", err
 	}
 	if version.Status != "INITIALIZING" {
 		return "", types.ErrInvalidAgentStatus
 	}
-	return agent.ID, nil
+	return version.ID, nil
 }
 
-// loadConfig fetches the agent's flow_map_config and unmarshals into a
-// FlowMapConfig. Returns ErrNotFound if the agent does not exist or has no
+// loadConfig fetches the version's flow_map_config and unmarshals into a
+// FlowMapConfig. Returns ErrNotFound if the version does not exist or has no
 // config persisted (the configurator pages assume the wizard already ran).
-func (h *ConfiguratorHandler) loadConfig(ctx context.Context, agentID string) (types.FlowMapConfig, error) {
-	cfgBytes, _, err := h.repo.GetFlowMapConfig(ctx, agentID)
+func (h *ConfiguratorHandler) loadConfig(ctx context.Context, versionID string) (types.FlowMapConfig, error) {
+	cfgBytes, _, err := h.repo.GetFlowMapConfig(ctx, versionID)
 	if err != nil {
 		return types.FlowMapConfig{}, err
 	}
@@ -373,12 +372,12 @@ func (h *ConfiguratorHandler) loadConfig(ctx context.Context, agentID string) (t
 }
 
 // saveConfig marshals cfg to JSON and writes it via the repository.
-func (h *ConfiguratorHandler) saveConfig(ctx context.Context, agentID string, cfg types.FlowMapConfig) error {
+func (h *ConfiguratorHandler) saveConfig(ctx context.Context, versionID string, cfg types.FlowMapConfig) error {
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	return h.repo.UpdateFlowMapConfig(ctx, agentID, b)
+	return h.repo.UpdateFlowMapConfig(ctx, versionID, b)
 }
 
 // FlowIncluded toggles a flow's `included` boolean. Body: "included=true"
@@ -393,12 +392,12 @@ func (h *ConfiguratorHandler) FlowIncluded(w http.ResponseWriter, r *http.Reques
 
 	versionID := r.PathValue("version_id")
 	flowID := r.PathValue("flowId")
-	agentID, err := h.requireEditable(r.Context(), versionID)
+	vID, err := h.requireEditable(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	cfg, err := h.loadConfig(r.Context(), agentID)
+	cfg, err := h.loadConfig(r.Context(), vID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -417,7 +416,7 @@ func (h *ConfiguratorHandler) FlowIncluded(w http.ResponseWriter, r *http.Reques
 	}
 	cfg.Flows[idx].Included = included
 
-	if err := h.saveConfig(r.Context(), agentID, cfg); err != nil {
+	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
 		Error(w, err)
 		return
 	}
@@ -490,12 +489,12 @@ func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	versionID := r.PathValue("version_id")
-	agentID, err := h.requireEditable(r.Context(), versionID)
+	vID, err := h.requireEditable(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	cfg, err := h.loadConfig(r.Context(), agentID)
+	cfg, err := h.loadConfig(r.Context(), vID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -524,7 +523,7 @@ func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request
 	parsed.Origin = "custom"
 
 	cfg.Skills = append(cfg.Skills, parsed)
-	if err := h.saveConfig(r.Context(), agentID, cfg); err != nil {
+	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
 		Error(w, err)
 		return
 	}
@@ -543,12 +542,12 @@ func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request
 func (h *ConfiguratorHandler) SkillDelete(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	skillID := r.PathValue("skillId")
-	agentID, err := h.requireEditable(r.Context(), versionID)
+	vID, err := h.requireEditable(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	cfg, err := h.loadConfig(r.Context(), agentID)
+	cfg, err := h.loadConfig(r.Context(), vID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -577,7 +576,7 @@ func (h *ConfiguratorHandler) SkillDelete(w http.ResponseWriter, r *http.Request
 	}
 
 	cfg.Skills = append(cfg.Skills[:idx], cfg.Skills[idx+1:]...)
-	if err := h.saveConfig(r.Context(), agentID, cfg); err != nil {
+	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
 		Error(w, err)
 		return
 	}
@@ -590,12 +589,12 @@ func (h *ConfiguratorHandler) SkillDelete(w http.ResponseWriter, r *http.Request
 // instead of updating an existing one.
 func (h *ConfiguratorHandler) SkillNew(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
-	_, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
+	version, _, err := h.repo.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	cfg, err := h.loadConfig(r.Context(), agent.ID)
+	cfg, err := h.loadConfig(r.Context(), version.ID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -626,12 +625,12 @@ func (h *ConfiguratorHandler) WorkflowUpdate(w http.ResponseWriter, r *http.Requ
 
 	versionID := r.PathValue("version_id")
 	flowID := r.PathValue("flowId")
-	agentID, err := h.requireEditable(r.Context(), versionID)
+	vID, err := h.requireEditable(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	cfg, err := h.loadConfig(r.Context(), agentID)
+	cfg, err := h.loadConfig(r.Context(), vID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -667,7 +666,7 @@ func (h *ConfiguratorHandler) WorkflowUpdate(w http.ResponseWriter, r *http.Requ
 		Layout:  body.Layout,
 	}
 
-	if err := h.saveConfig(r.Context(), agentID, cfg); err != nil {
+	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
 		Error(w, err)
 		return
 	}
@@ -753,7 +752,7 @@ func tplWorkflowState(wf types.Workflow) (template.JS, error) {
 // the agent doesn't exist or has no config persisted yet.
 func (h *ConfiguratorHandler) DownloadYAML(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
-	_, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
+	version, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			http.NotFound(w, r)
@@ -762,7 +761,7 @@ func (h *ConfiguratorHandler) DownloadYAML(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	cfg, err := h.loadConfig(r.Context(), agent.ID)
+	cfg, err := h.loadConfig(r.Context(), version.ID)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			http.NotFound(w, r)
@@ -867,7 +866,7 @@ func sanitiseFilename(name string) string {
 // POSTs to /agent_versions/{version_id}/finalize.
 func (h *ConfiguratorHandler) FinalizeConfirm(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
-	_, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
+	version, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			http.NotFound(w, r)
@@ -876,7 +875,7 @@ func (h *ConfiguratorHandler) FinalizeConfirm(w http.ResponseWriter, r *http.Req
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	cfgBytes, parseErr, err := h.repo.GetFlowMapConfig(r.Context(), agent.ID)
+	cfgBytes, parseErr, err := h.repo.GetFlowMapConfig(r.Context(), version.ID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -918,12 +917,12 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 	}
 	versionID := r.PathValue("version_id")
 	skillID := r.PathValue("skillId")
-	agentID, err := h.requireEditable(r.Context(), versionID)
+	vID, err := h.requireEditable(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	cfg, err := h.loadConfig(r.Context(), agentID)
+	cfg, err := h.loadConfig(r.Context(), vID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -962,7 +961,7 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 	cur.ProposedTool = parsed.ProposedTool
 	cur.UserPhrases = parsed.UserPhrases
 
-	if err := h.saveConfig(r.Context(), agentID, cfg); err != nil {
+	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
 		Error(w, err)
 		return
 	}

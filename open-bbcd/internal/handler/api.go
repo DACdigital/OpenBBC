@@ -30,12 +30,11 @@ const (
 	IdleTimeout  = 60 * time.Second
 )
 
-// configStore satisfies ConfigStore by forwarding methods to the split repos.
-// Embedding both *AgentRepository and *AgentVersionRepository would cause a
-// GetByID ambiguity (one returns *Agent, the other *AgentVersion), so we
-// forward explicitly.
+// configStore satisfies ConfigStore by forwarding methods to AgentVersionRepository.
+// After the flow_map_config move (migration 014), every ConfigStore method is
+// keyed by version_id and lives on AgentVersionRepository — including
+// GetWithAgent, which joins the version's owning agent for display fields.
 type configStore struct {
-	agents   *repository.AgentRepository
 	versions *repository.AgentVersionRepository
 }
 
@@ -43,12 +42,12 @@ func (s *configStore) GetWithAgent(ctx context.Context, versionID string) (*type
 	return s.versions.GetWithAgent(ctx, versionID)
 }
 
-func (s *configStore) GetFlowMapConfig(ctx context.Context, agentID string) ([]byte, string, error) {
-	return s.agents.GetFlowMapConfig(ctx, agentID)
+func (s *configStore) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
+	return s.versions.GetFlowMapConfig(ctx, versionID)
 }
 
-func (s *configStore) UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error {
-	return s.agents.UpdateFlowMapConfig(ctx, agentID, cfg)
+func (s *configStore) UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error {
+	return s.versions.UpdateFlowMapConfig(ctx, versionID, cfg)
 }
 
 func (s *configStore) UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error {
@@ -83,7 +82,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	maxUploadBytes := int64(cfg.Discovery.MaxUploadMB) << 20
 	wizardHandler := NewWizardHandler(agentRepo, &schema, store, maxUploadBytes, logger)
 
-	configuratorHandler, err := NewConfiguratorHandler(&configStore{agents: agentRepo, versions: versionRepo}, &schema, web.Assets)
+	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, &schema, web.Assets)
 	if err != nil {
 		fatal("init configurator handler", err)
 	}
