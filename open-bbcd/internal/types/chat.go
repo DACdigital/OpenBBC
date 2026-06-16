@@ -6,11 +6,11 @@ import (
 )
 
 type ChatSession struct {
-	ID        string    `json:"id"`
-	AgentID   string    `json:"agent_id"`
-	Title     string    `json:"title,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	AgentVersionID string    `json:"agent_version_id"`
+	Title          string    `json:"title,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type ChatRole string
