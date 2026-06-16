@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -195,7 +196,73 @@ func (h *DeployedHandler) DeleteSession(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Turn — implemented in Task 11. Placeholder so the route is wireable now.
+type turnRequest struct {
+	UserID string `json:"user_id"`
+	Input  []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"input"`
+}
+
+// Turn runs one chat turn against the currently-deployed version of the chain.
+// AG-UI SSE on success. Validates (session_id, user_id) before opening the
+// stream so we can return clean 4xx codes for auth/scope failures.
 func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented yet (Task 11)", http.StatusNotImplemented)
+	chainRootID := r.PathValue("agent_id")
+	sessionID := r.PathValue("session_id")
+
+	versionID, ok := h.requireDeployed(w, r, chainRootID)
+	if !ok {
+		return
+	}
+
+	var req turnRequest
+	if err := DecodeJSON(r, &req); err != nil {
+		Error(w, err)
+		return
+	}
+	if req.UserID == "" {
+		Error(w, types.ErrUserIDRequired)
+		return
+	}
+
+	// Verify (session_id, user_id) matches a stored row BEFORE we open the SSE.
+	// Once SSE headers are set, errors must flow as ErrorEvent only.
+	sess, err := h.store.GetSession(r.Context(), sessionID, req.UserID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if sess.ChainRootID != chainRootID {
+		http.NotFound(w, r)
+		return
+	}
+
+	input := make([]llm.Block, 0, len(req.Input))
+	for _, b := range req.Input {
+		if b.Type == "text" && b.Text != "" {
+			input = append(input, llm.TextBlock{Text: b.Text})
+		}
+	}
+
+	w.Header().Set("Content-Type", h.transport.ContentType())
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	sink, err := h.transport.NewSink(w)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+
+	if err := h.orch.Turn(r.Context(), versionID, sessionID, input, sink); err != nil {
+		h.logger.Error("deployed turn failed",
+			slog.String("chain_root_id", chainRootID),
+			slog.String("version_id", versionID),
+			slog.String("session_id", sessionID),
+			slog.Any("err", err),
+		)
+		// Orchestrator already emitted ErrorEvent in-band. Nothing more to do.
+	}
 }

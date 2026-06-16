@@ -169,3 +169,72 @@ func TestDeployedHandler_GetSession_WrongUser_404(t *testing.T) {
 		t.Fatalf("got %d, want 404", rr2.Code)
 	}
 }
+
+func TestDeployedHandler_Turn_HappyPath(t *testing.T) {
+	store := newStubDeployedStore()
+	runner := &stubTurnRunner{}
+	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: "v-current"}, store, runner, jsonl.NewFactory())
+
+	body, _ := json.Marshal(map[string]string{"user_id": "user-A"})
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/chain-a/sessions", bytes.NewReader(body)))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d", rr.Code)
+	}
+	var sess types.DeployedSession
+	_ = json.NewDecoder(rr.Body).Decode(&sess)
+
+	body2, _ := json.Marshal(map[string]any{
+		"user_id": "user-A",
+		"input":   []map[string]string{{"type": "text", "text": "hi"}},
+	})
+	rr2 := httptest.NewRecorder()
+	mux.ServeHTTP(rr2, httptest.NewRequest("POST",
+		"/deployed/chain-a/sessions/"+sess.ID+"/turn", bytes.NewReader(body2)))
+
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("got %d body=%s", rr2.Code, rr2.Body.String())
+	}
+	if runner.capturedAgentID != "v-current" {
+		t.Fatalf("agentID=%q want v-current", runner.capturedAgentID)
+	}
+	if runner.capturedSessionID != sess.ID {
+		t.Fatalf("sessionID=%q want %q", runner.capturedSessionID, sess.ID)
+	}
+}
+
+func TestDeployedHandler_Turn_WrongUser_404(t *testing.T) {
+	store := newStubDeployedStore()
+	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: "v-current"}, store, &stubTurnRunner{}, jsonl.NewFactory())
+
+	body, _ := json.Marshal(map[string]string{"user_id": "user-A"})
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/chain-a/sessions", bytes.NewReader(body)))
+	var sess types.DeployedSession
+	_ = json.NewDecoder(rr.Body).Decode(&sess)
+
+	body2, _ := json.Marshal(map[string]any{
+		"user_id": "user-B",
+		"input":   []map[string]string{{"type": "text", "text": "x"}},
+	})
+	rr2 := httptest.NewRecorder()
+	mux.ServeHTTP(rr2, httptest.NewRequest("POST",
+		"/deployed/chain-a/sessions/"+sess.ID+"/turn", bytes.NewReader(body2)))
+	if rr2.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want 404", rr2.Code)
+	}
+}
+
+func TestDeployedHandler_Turn_NoDeployedVersion_404(t *testing.T) {
+	store := newStubDeployedStore()
+	// Pre-seed a session as if a deploy used to exist (so the session is real).
+	store.sessions["s1"] = &types.DeployedSession{ID: "s1", ChainRootID: "chain-a", UserID: "u"}
+	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: ""}, store, &stubTurnRunner{}, jsonl.NewFactory())
+
+	body, _ := json.Marshal(map[string]any{"user_id": "u", "input": []map[string]string{{"type": "text", "text": "x"}}})
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/chain-a/sessions/s1/turn", bytes.NewReader(body)))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("got %d", rr.Code)
+	}
+}
