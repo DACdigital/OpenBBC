@@ -19,20 +19,16 @@ func NewAgentRepository(db *sql.DB) *AgentRepository {
 	return &AgentRepository{db: db}
 }
 
-const agentColumns = `id, name, description, flow_map_config, flow_map_parse_error, discovery_file_path, created_at`
+const agentColumns = `id, name, description, discovery_file_path, created_at`
 
 func scanAgent(s scanner) (*types.Agent, error) {
 	a := &types.Agent{}
 	var description sql.NullString
-	var cfg []byte
-	var parseErr sql.NullString
 	var disc sql.NullString
-	if err := s.Scan(&a.ID, &a.Name, &description, &cfg, &parseErr, &disc, &a.CreatedAt); err != nil {
+	if err := s.Scan(&a.ID, &a.Name, &description, &disc, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	a.Description = description.String
-	a.FlowMapConfig = cfg
-	a.FlowMapParseError = parseErr.String
 	a.DiscoveryFilePath = disc.String
 	return a, nil
 }
@@ -76,10 +72,10 @@ func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.Creat
 	defer func() { _ = tx.Rollback() }()
 
 	agentRow := tx.QueryRowContext(ctx, `
-		INSERT INTO agents (id, name, flow_map_config, flow_map_parse_error, discovery_file_path)
-		VALUES ($1::uuid, $2, $3, NULLIF($4, ''), NULLIF($5, ''))
+		INSERT INTO agents (id, name, discovery_file_path)
+		VALUES ($1::uuid, $2, NULLIF($3, ''))
 		RETURNING `+agentColumns,
-		agentID, opts.Name, []byte(opts.FlowMapConfig), opts.FlowMapParseError, opts.DiscoveryFilePath,
+		agentID, opts.Name, opts.DiscoveryFilePath,
 	)
 	agent, err := scanAgent(agentRow)
 	if err != nil {
@@ -87,10 +83,10 @@ func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.Creat
 	}
 
 	versionRow := tx.QueryRowContext(ctx, `
-		INSERT INTO agent_versions (id, agent_id, status)
-		VALUES ($1::uuid, $2::uuid, 'INITIALIZING')
+		INSERT INTO agent_versions (id, agent_id, status, flow_map_config, flow_map_parse_error)
+		VALUES ($1::uuid, $2::uuid, 'INITIALIZING', $3, NULLIF($4, ''))
 		RETURNING `+agentVersionColumns,
-		versionID, agentID,
+		versionID, agentID, []byte(opts.FlowMapConfig), opts.FlowMapParseError,
 	)
 	version, err := scanAgentVersion(versionRow)
 	if err != nil {
@@ -217,42 +213,4 @@ func assignVersionNumbers(g *types.AgentGroup) {
 		}
 		g.Versions[i].VersionNum = num
 	}
-}
-
-// GetFlowMapConfig returns the agent's flow_map_config + parse_error.
-// Returns ErrNotFound if the agent does not exist.
-func (r *AgentRepository) GetFlowMapConfig(ctx context.Context, agentID string) ([]byte, string, error) {
-	var cfg []byte
-	var parseErr sql.NullString
-	err := r.db.QueryRowContext(ctx,
-		`SELECT flow_map_config, flow_map_parse_error FROM agents WHERE id = $1`,
-		agentID,
-	).Scan(&cfg, &parseErr)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, "", types.ErrNotFound
-	}
-	if err != nil {
-		return nil, "", err
-	}
-	return cfg, parseErr.String, nil
-}
-
-// UpdateFlowMapConfig overwrites the agent's config in place. (Future: this
-// will spawn a new agent instead. Out of scope for this PR.)
-func (r *AgentRepository) UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error {
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE agents SET flow_map_config = $2, flow_map_parse_error = NULL WHERE id = $1`,
-		agentID, cfg,
-	)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return types.ErrNotFound
-	}
-	return nil
 }

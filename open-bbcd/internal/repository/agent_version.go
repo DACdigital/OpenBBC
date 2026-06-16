@@ -18,19 +18,23 @@ func NewAgentVersionRepository(db *sql.DB) *AgentVersionRepository {
 	return &AgentVersionRepository{db: db}
 }
 
-const agentVersionColumns = `id, agent_id, parent_version_id, status, bundle, created_at, updated_at`
+const agentVersionColumns = `id, agent_id, parent_version_id, status, bundle, flow_map_config, flow_map_parse_error, created_at, updated_at`
 
 func scanAgentVersion(s scanner) (*types.AgentVersion, error) {
 	v := &types.AgentVersion{}
 	var parent sql.NullString
 	var bundle []byte
-	if err := s.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &bundle, &v.CreatedAt, &v.UpdatedAt); err != nil {
+	var cfg []byte
+	var parseErr sql.NullString
+	if err := s.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &bundle, &cfg, &parseErr, &v.CreatedAt, &v.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if parent.Valid {
 		v.ParentVersionID = &parent.String
 	}
 	v.Bundle = bundle
+	v.FlowMapConfig = cfg
+	v.FlowMapParseError = parseErr.String
 	return v, nil
 }
 
@@ -48,8 +52,8 @@ func (r *AgentVersionRepository) GetByID(ctx context.Context, versionID string) 
 // Used by chat/configurator handlers that need both.
 func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.bundle, av.created_at, av.updated_at,
-		       a.id::text, a.name, a.description, a.flow_map_config, a.flow_map_parse_error, a.discovery_file_path, a.created_at
+		SELECT av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.bundle, av.flow_map_config, av.flow_map_parse_error, av.created_at, av.updated_at,
+		       a.id::text, a.name, a.description, a.discovery_file_path, a.created_at
 		FROM agent_versions av
 		JOIN agents a ON a.id = av.agent_id
 		WHERE av.id = $1
@@ -58,12 +62,12 @@ func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID str
 	a := &types.Agent{}
 	var parent sql.NullString
 	var bundle []byte
+	var vCfg []byte
+	var vParseErr sql.NullString
 	var aDesc sql.NullString
-	var aCfg []byte
-	var aParseErr sql.NullString
 	var aDisc sql.NullString
-	err := row.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &bundle, &v.CreatedAt, &v.UpdatedAt,
-		&a.ID, &a.Name, &aDesc, &aCfg, &aParseErr, &aDisc, &a.CreatedAt)
+	err := row.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &bundle, &vCfg, &vParseErr, &v.CreatedAt, &v.UpdatedAt,
+		&a.ID, &a.Name, &aDesc, &aDisc, &a.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, types.ErrNotFound
 	}
@@ -74,9 +78,9 @@ func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID str
 		v.ParentVersionID = &parent.String
 	}
 	v.Bundle = bundle
+	v.FlowMapConfig = vCfg
+	v.FlowMapParseError = vParseErr.String
 	a.Description = aDesc.String
-	a.FlowMapConfig = aCfg
-	a.FlowMapParseError = aParseErr.String
 	a.DiscoveryFilePath = aDisc.String
 	return v, a, nil
 }
@@ -214,6 +218,45 @@ func (r *AgentVersionRepository) UpdateStatus(ctx context.Context, versionID, ex
 	}
 	if n == 0 {
 		return types.ErrInvalidAgentStatus
+	}
+	return nil
+}
+
+// GetFlowMapConfig returns the version's flow_map_config + parse_error.
+// Returns ErrNotFound if the version does not exist.
+func (r *AgentVersionRepository) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
+	var cfg []byte
+	var parseErr sql.NullString
+	err := r.db.QueryRowContext(ctx,
+		`SELECT flow_map_config, flow_map_parse_error FROM agent_versions WHERE id = $1`,
+		versionID,
+	).Scan(&cfg, &parseErr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "", types.ErrNotFound
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return cfg, parseErr.String, nil
+}
+
+// UpdateFlowMapConfig overwrites this version's config in place. (Future:
+// when the FE enables edits, this should spawn a new version. Out of scope
+// for now.)
+func (r *AgentVersionRepository) UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE agent_versions SET flow_map_config = $2, flow_map_parse_error = NULL, updated_at = now() WHERE id = $1`,
+		versionID, cfg,
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return types.ErrNotFound
 	}
 	return nil
 }
