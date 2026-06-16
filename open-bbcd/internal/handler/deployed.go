@@ -64,7 +64,7 @@ func (h *DeployedHandler) requireDeployed(w http.ResponseWriter, r *http.Request
 		return "", false
 	}
 	if v == "" {
-		http.NotFound(w, r)
+		Error(w, types.ErrNotFound)
 		return "", false
 	}
 	return v, true
@@ -136,7 +136,7 @@ func (h *DeployedHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess.ChainRootID != chainRootID {
-		http.NotFound(w, r)
+		Error(w, types.ErrNotFound)
 		return
 	}
 	msgs, err := h.store.LoadMessages(r.Context(), sessionID)
@@ -234,7 +234,7 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess.ChainRootID != chainRootID {
-		http.NotFound(w, r)
+		Error(w, types.ErrNotFound)
 		return
 	}
 
