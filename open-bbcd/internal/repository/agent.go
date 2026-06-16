@@ -186,27 +186,21 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentChain, 
 	return chains, nil
 }
 
-// ChainRootID walks parent_version_id up from agentID to the chain root and
-// returns its ID. Returns ErrNotFound if agentID does not exist.
+// ChainRootID returns the chain root ID stored on the agent row.
+// Returns ErrNotFound if agentID does not exist.
 func (r *AgentRepository) ChainRootID(ctx context.Context, agentID string) (string, error) {
-	curID := agentID
-	for {
-		var parent sql.NullString
-		err := r.db.QueryRowContext(ctx,
-			`SELECT parent_version_id FROM agents WHERE id = $1`,
-			curID,
-		).Scan(&parent)
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", types.ErrNotFound
-		}
-		if err != nil {
-			return "", err
-		}
-		if !parent.Valid {
-			return curID, nil
-		}
-		curID = parent.String
+	var rootID string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT chain_root_id::text FROM agents WHERE id = $1`,
+		agentID,
+	).Scan(&rootID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
 	}
+	if err != nil {
+		return "", err
+	}
+	return rootID, nil
 }
 
 // CreateFromWizard inserts an agent in INITIALIZING status from wizard form
