@@ -21,8 +21,8 @@
     <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agents/ui?agent={{.AgentID}}">
       <td><a class="agent-link" href="/agents/ui?agent={{.AgentID}}">{{.Name}}</a></td>
       <td class="col-version">v{{$latest.VersionNum}}</td>
-      <td class="col-status"><span class="badge badge-{{$latest.Agent.Status | statusClass}}">{{$latest.Agent.Status}}</span></td>
-      <td class="col-date">{{$latest.Agent.CreatedAt.Format "Jan 2, 2006"}}</td>
+      <td class="col-status"><span class="badge badge-{{$latest.Version.Status | statusClass}}">{{$latest.Version.Status}}</span></td>
+      <td class="col-date">{{$latest.Version.CreatedAt.Format "Jan 2, 2006"}}</td>
       <td class="col-count">{{len .Versions}}</td>
     </tr>
     {{end}}

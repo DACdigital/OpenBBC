@@ -48,23 +48,23 @@ func (f *fakeDeployedRepo) NextSeq(ctx context.Context, sessionID string) (int, 
 	return len(f.messages[sessionID]) + 1, nil
 }
 
-func TestDeployedChatStore_EnsureSession_MatchesChainRoot(t *testing.T) {
+func TestDeployedChatStore_EnsureSession_ExistingSession(t *testing.T) {
 	f := newFakeDeployedRepo()
 	f.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "chain-A", UserID: "u"}
 	store := NewDeployedChatStore(f)
 
-	if err := store.EnsureSession(context.Background(), "s1", "chain-A"); err != nil {
+	// Scope check is done upstream in the deployed handler — EnsureSession
+	// here only confirms the row exists, regardless of the second arg.
+	if err := store.EnsureSession(context.Background(), "s1", "ignored"); err != nil {
 		t.Fatalf("EnsureSession: %v", err)
 	}
 }
 
-func TestDeployedChatStore_EnsureSession_ChainMismatch_NotFound(t *testing.T) {
+func TestDeployedChatStore_EnsureSession_MissingSession_NotFound(t *testing.T) {
 	f := newFakeDeployedRepo()
-	f.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "chain-A", UserID: "u"}
 	store := NewDeployedChatStore(f)
-
-	err := store.EnsureSession(context.Background(), "s1", "chain-B")
-	if err == nil || !errors.Is(err, types.ErrNotFound) {
+	err := store.EnsureSession(context.Background(), "no-such-session", "ignored")
+	if !errors.Is(err, types.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
