@@ -15,7 +15,7 @@ import (
 
 // DeployedAgentReader is the narrow interface the deployed handler needs.
 type DeployedAgentReader interface {
-	CurrentDeployedVersionID(ctx context.Context, agentID string) (string, error)
+	CurrentDeployedID(ctx context.Context, agentID string) (string, error)
 }
 
 // DeployedStore is the narrow repo interface for deployed sessions/messages.
@@ -58,7 +58,7 @@ func NewDeployedHandler(
 // Returns (versionID, true) if a version is deployed; ("", false) and a
 // 404 written to w if no version is deployed (no existence leak).
 func (h *DeployedHandler) requireDeployed(w http.ResponseWriter, r *http.Request, agentID string) (string, bool) {
-	v, err := h.agents.CurrentDeployedVersionID(r.Context(), agentID)
+	v, err := h.agents.CurrentDeployedID(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
 		return "", false
