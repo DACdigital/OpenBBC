@@ -3,14 +3,14 @@
   <aside class="config-list">
     <div class="config-list-header">Flows ({{len .Config.Flows}})</div>
     {{range .Config.Flows}}
-      {{template "flow_row" (dict "AgentID" $.AgentID "Flow" . "SelectedID" (selectedFlowID $.SelectedFlow) "ReadOnly" $.ReadOnly)}}
+      {{template "flow_row" (dict "VersionID" $.VersionID "Flow" . "SelectedID" (selectedFlowID $.SelectedFlow) "ReadOnly" $.ReadOnly)}}
     {{else}}
       <p class="empty-state">No flows in this discovery snapshot.</p>
     {{end}}
   </aside>
   <main class="config-detail-pane">
     {{if .SelectedFlow}}
-      {{template "flow_detail" (dict "AgentID" .AgentID "Flow" .SelectedFlow "Skills" .Config.Skills "ReadOnly" .ReadOnly)}}
+      {{template "flow_detail" (dict "VersionID" .VersionID "Flow" .SelectedFlow "Skills" .Config.Skills "ReadOnly" .ReadOnly)}}
     {{else}}
       <p class="config-detail-empty">Select a flow on the left.</p>
     {{end}}

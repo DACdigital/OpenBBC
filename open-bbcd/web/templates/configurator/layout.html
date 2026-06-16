@@ -7,9 +7,9 @@
     {{if .ReadOnly}}
     <span class="config-spacer"></span>
     <div class="config-actions">
-      <a href="/agents/{{.AgentID}}/config.yaml" class="btn-secondary">Download YAML</a>
+      <a href="/agent_versions/{{.VersionID}}/config.yaml" class="btn-secondary">Download YAML</a>
       {{if .HasBundle}}
-        <form method="post" action="/agents/{{.AgentID}}/chat/sessions" style="display:inline">
+        <form method="post" action="/agent_versions/{{.VersionID}}/chat/sessions" style="display:inline">
           <button type="submit" class="btn-primary">Run</button>
         </form>
       {{else}}
@@ -22,18 +22,18 @@
   </div>
 
   <nav class="config-tabs">
-    <a href="/agents/{{.AgentID}}/configure/flows"
+    <a href="/agent_versions/{{.VersionID}}/configure/flows"
        class="config-tab {{if eq .Tab "flows"}}active{{end}}">Flows</a>
-    <a href="/agents/{{.AgentID}}/configure/skills"
+    <a href="/agent_versions/{{.VersionID}}/configure/skills"
        class="config-tab {{if eq .Tab "skills"}}active{{end}}">Skills</a>
-    <a href="/agents/{{.AgentID}}/configure/capabilities"
+    <a href="/agent_versions/{{.VersionID}}/configure/capabilities"
        class="config-tab {{if eq .Tab "capabilities"}}active{{end}}">Capabilities</a>
     {{if .ReadOnly}}
-    <a href="/agents/{{.AgentID}}/configure/inputs"
+    <a href="/agent_versions/{{.VersionID}}/configure/inputs"
        class="config-tab {{if eq .Tab "inputs"}}active{{end}}">Inputs</a>
     {{else}}
     <span class="config-spacer"></span>
-    <a href="/agents/{{.AgentID}}/configure/finalize"
+    <a href="/agent_versions/{{.VersionID}}/configure/finalize"
        class="config-tab {{if eq .Tab "finalize"}}active{{end}}">Finalize →</a>
     {{end}}
   </nav>

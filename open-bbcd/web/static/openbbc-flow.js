@@ -199,7 +199,7 @@
   // Markup contract for a workflow-editor container:
   //   <div class="obf-editor"
   //        data-obf-editor
-  //        data-agent-id="<uuid>"
+  //        data-version-id="<uuid>"
   //        data-flow-id="<flow-id>"
   //        data-skills='["skill-id-1","skill-id-2",...]'>
   //     <div class="obf-toolbar">
@@ -518,7 +518,7 @@
     async function doSave() {
       const next = currentWorkflow();
       const mermaid = OpenBBCFlow.serializeMermaid(next);
-      const url = `/agents/${root.dataset.agentId}/configure/flows/${root.dataset.flowId}/workflow`;
+      const url = `/agent_versions/${root.dataset.versionId}/configure/flows/${root.dataset.flowId}/workflow`;
       try {
         const res = await fetch(url, {
           method: "POST",

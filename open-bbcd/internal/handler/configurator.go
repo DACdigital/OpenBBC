@@ -19,12 +19,17 @@ import (
 )
 
 // ConfigStore is the narrow interface the configurator depends on.
+//
+// GetWithAgent returns both the version row (for status/bundle) and its owning
+// Agent (for name/flow_map_config). The flow-map config lives on the Agent
+// (per-agent), while status and bundle live on the AgentVersion. Other methods
+// are scoped: GetFlowMapConfig / UpdateFlowMapConfig take an agent_id;
+// UpdateStatus takes a version_id.
 type ConfigStore interface {
+	GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error)
 	GetFlowMapConfig(ctx context.Context, agentID string) (cfg []byte, parseErr string, err error)
-	GetByID(ctx context.Context, id string) (*types.Agent, error)
-	AgentIDOf(ctx context.Context, versionID string) (string, error)
 	UpdateFlowMapConfig(ctx context.Context, agentID string, cfg []byte) error
-	UpdateStatus(ctx context.Context, agentID, expectedFrom, to string) error
+	UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error
 }
 
 type ConfiguratorHandler struct {
@@ -108,14 +113,15 @@ var proseRelLink = regexp.MustCompile(`\.\./(skills|capabilities|flows)/([^)\s]+
 
 // renderMarkdown converts a prose markdown blob (from the discovery
 // skill) to HTML. Relative links into the .flow-map directory layout
-// are rewritten to the agent's in-app configurator routes so they
-// actually navigate. Trusted input — prose is generated, not user-typed.
-func renderMarkdown(agentID, md string) template.HTML {
+// are rewritten to the configurator routes (scoped by version_id) so
+// they actually navigate. Trusted input — prose is generated, not
+// user-typed.
+func renderMarkdown(versionID, md string) template.HTML {
 	if md == "" {
 		return ""
 	}
-	if agentID != "" {
-		base := "/agents/" + agentID + "/configure/"
+	if versionID != "" {
+		base := "/agent_versions/" + versionID + "/configure/"
 		md = proseRelLink.ReplaceAllString(md, base+"$1/$2")
 	}
 	var buf bytes.Buffer
@@ -127,11 +133,11 @@ func renderMarkdown(agentID, md string) template.HTML {
 
 type configPageData struct {
 	Active            string
-	AgentID           string // version row's ID (URL path param semantics, legacy)
-	AgentRootID       string // stable agent ID, used for back-link
+	VersionID         string // URL path param value (a version row's ID)
+	AgentID           string // stable agent ID, used for back-link to the version list
 	AgentName         string
-	AgentStatus       string
-	ReadOnly          bool   // true for non-INITIALIZING agents (DRAFT, TRAINING, READY, DEPLOYED)
+	AgentStatus       string // version's status (lives on AgentVersion now)
+	ReadOnly          bool   // true for non-INITIALIZING versions (DRAFT, TRAINING, READY, DEPLOYED)
 	HasBundle         bool   // true when this version has a generated bundle (Run is enabled)
 	Tab               string // "flows" | "skills" | "capabilities" | "inputs"
 	Config            types.FlowMapConfig
@@ -154,16 +160,12 @@ type wizardFieldView struct {
 }
 
 func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
-	agentID := r.PathValue("id")
-	agent, err := h.repo.GetByID(r.Context(), agentID)
+	versionID := r.PathValue("version_id")
+	version, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		return configPageData{}, err
 	}
-	rootID, err := h.repo.AgentIDOf(r.Context(), agentID)
-	if err != nil {
-		return configPageData{}, err
-	}
-	cfgBytes, parseErr, err := h.repo.GetFlowMapConfig(r.Context(), agentID)
+	cfgBytes, parseErr, err := h.repo.GetFlowMapConfig(r.Context(), agent.ID)
 	if err != nil {
 		return configPageData{}, err
 	}
@@ -175,12 +177,12 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 	}
 	return configPageData{
 		Active:            "agents",
-		AgentID:           agentID,
-		AgentRootID:       rootID,
+		VersionID:         versionID,
+		AgentID:           agent.ID,
 		AgentName:         agent.Name,
-		AgentStatus:       agent.Status,
-		ReadOnly:          agent.Status != "INITIALIZING",
-		HasBundle:         len(agent.Bundle) > 0,
+		AgentStatus:       version.Status,
+		ReadOnly:          version.Status != "INITIALIZING",
+		HasBundle:         len(version.Bundle) > 0,
 		Config:            cfg,
 		ParseError:        parseErr,
 		DiscoveryFilePath: agent.DiscoveryFilePath,
@@ -319,7 +321,7 @@ func (h *ConfiguratorHandler) Capabilities(w http.ResponseWriter, r *http.Reques
 // tplDict builds a map[string]any from alternating key/value template args.
 // Used to pass multiple named values into a sub-template invocation:
 //
-//	{{template "flow_row" (dict "AgentID" $.AgentID "Flow" .)}}
+//	{{template "flow_row" (dict "VersionID" $.VersionID "Flow" .)}}
 func tplDict(kv ...any) (map[string]any, error) {
 	if len(kv)%2 != 0 {
 		return nil, errors.New("dict: odd number of args")
@@ -335,19 +337,21 @@ func tplDict(kv ...any) (map[string]any, error) {
 	return m, nil
 }
 
-// requireEditable returns ErrInvalidAgentStatus if the agent isn't in
-// INITIALIZING — the only state where the configurator accepts edits.
-// Used as a guard at the top of every mutating handler so a stale tab
-// or a hand-crafted request can't change a finalized agent.
-func (h *ConfiguratorHandler) requireEditable(ctx context.Context, agentID string) error {
-	agent, err := h.repo.GetByID(ctx, agentID)
+// requireEditable resolves the version_id to the (version, agent) pair and
+// verifies the version is in INITIALIZING — the only state where the
+// configurator accepts edits. Returns the agent's stable ID so callers can
+// route subsequent config CRUD against the per-agent flow_map_config.
+// Used as a guard at the top of every mutating handler so a stale tab or
+// hand-crafted request can't change a finalized version.
+func (h *ConfiguratorHandler) requireEditable(ctx context.Context, versionID string) (agentID string, err error) {
+	version, agent, err := h.repo.GetWithAgent(ctx, versionID)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if agent.Status != "INITIALIZING" {
-		return types.ErrInvalidAgentStatus
+	if version.Status != "INITIALIZING" {
+		return "", types.ErrInvalidAgentStatus
 	}
-	return nil
+	return agent.ID, nil
 }
 
 // loadConfig fetches the agent's flow_map_config and unmarshals into a
@@ -387,9 +391,10 @@ func (h *ConfiguratorHandler) FlowIncluded(w http.ResponseWriter, r *http.Reques
 	}
 	included := r.FormValue("included") == "true"
 
-	agentID := r.PathValue("id")
+	versionID := r.PathValue("version_id")
 	flowID := r.PathValue("flowId")
-	if err := h.requireEditable(r.Context(), agentID); err != nil {
+	agentID, err := h.requireEditable(r.Context(), versionID)
+	if err != nil {
 		Error(w, err)
 		return
 	}
@@ -417,9 +422,10 @@ func (h *ConfiguratorHandler) FlowIncluded(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Re-render the flow row so htmx can swap it in place.
+	// Re-render the flow row so htmx can swap it in place. Template's
+	// VersionID drives the htmx URL for the toggle/back actions.
 	renderTemplate(w, h.flowsTmpl, "flow_row", map[string]any{
-		"AgentID":    agentID,
+		"VersionID":  versionID,
 		"Flow":       cfg.Flows[idx],
 		"SelectedID": "",
 	})
@@ -483,8 +489,9 @@ func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
-	agentID := r.PathValue("id")
-	if err := h.requireEditable(r.Context(), agentID); err != nil {
+	versionID := r.PathValue("version_id")
+	agentID, err := h.requireEditable(r.Context(), versionID)
+	if err != nil {
 		Error(w, err)
 		return
 	}
@@ -523,7 +530,7 @@ func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request
 	}
 
 	renderTemplate(w, h.skillsTmpl, "skill_row", map[string]any{
-		"AgentID":    agentID,
+		"VersionID":  versionID,
 		"Skill":      parsed,
 		"SelectedID": "",
 	})
@@ -534,9 +541,10 @@ func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request
 // workflow (409). On success returns 200 with an empty body so htmx can
 // remove the row in place.
 func (h *ConfiguratorHandler) SkillDelete(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
+	versionID := r.PathValue("version_id")
 	skillID := r.PathValue("skillId")
-	if err := h.requireEditable(r.Context(), agentID); err != nil {
+	agentID, err := h.requireEditable(r.Context(), versionID)
+	if err != nil {
 		Error(w, err)
 		return
 	}
@@ -581,15 +589,20 @@ func (h *ConfiguratorHandler) SkillDelete(w http.ResponseWriter, r *http.Request
 // The form's submit URL is /skills (no skillId), creating a new row
 // instead of updating an existing one.
 func (h *ConfiguratorHandler) SkillNew(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	cfg, err := h.loadConfig(r.Context(), agentID)
+	versionID := r.PathValue("version_id")
+	_, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	cfg, err := h.loadConfig(r.Context(), agent.ID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
 	blank := types.Skill{Origin: "custom", Role: "read"}
 	renderTemplate(w, h.skillsTmpl, "skill_new_form", map[string]any{
-		"AgentID":      agentID,
+		"VersionID":    versionID,
 		"Skill":        blank,
 		"Capabilities": cfg.Capabilities,
 	})
@@ -611,9 +624,10 @@ func (h *ConfiguratorHandler) WorkflowUpdate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	agentID := r.PathValue("id")
+	versionID := r.PathValue("version_id")
 	flowID := r.PathValue("flowId")
-	if err := h.requireEditable(r.Context(), agentID); err != nil {
+	agentID, err := h.requireEditable(r.Context(), versionID)
+	if err != nil {
 		Error(w, err)
 		return
 	}
@@ -738,8 +752,8 @@ func tplWorkflowState(wf types.Workflow) (template.JS, error) {
 // in /agents/ui only appears for non-INITIALIZING agents). Returns 404 if
 // the agent doesn't exist or has no config persisted yet.
 func (h *ConfiguratorHandler) DownloadYAML(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	agent, err := h.repo.GetByID(r.Context(), agentID)
+	versionID := r.PathValue("version_id")
+	_, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			http.NotFound(w, r)
@@ -748,7 +762,7 @@ func (h *ConfiguratorHandler) DownloadYAML(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	cfg, err := h.loadConfig(r.Context(), agentID)
+	cfg, err := h.loadConfig(r.Context(), agent.ID)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			http.NotFound(w, r)
@@ -850,10 +864,10 @@ func sanitiseFilename(name string) string {
 
 // FinalizeConfirm renders the small confirmation page shown when the user
 // clicks "Finalize →" in the configurator. Submitting the page's form
-// POSTs to /agents/{id}/finalize.
+// POSTs to /agent_versions/{version_id}/finalize.
 func (h *ConfiguratorHandler) FinalizeConfirm(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	agent, err := h.repo.GetByID(r.Context(), agentID)
+	versionID := r.PathValue("version_id")
+	_, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			http.NotFound(w, r)
@@ -862,14 +876,15 @@ func (h *ConfiguratorHandler) FinalizeConfirm(w http.ResponseWriter, r *http.Req
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	cfgBytes, parseErr, err := h.repo.GetFlowMapConfig(r.Context(), agentID)
+	cfgBytes, parseErr, err := h.repo.GetFlowMapConfig(r.Context(), agent.ID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	data := configPageData{
 		Active:     "agents",
-		AgentID:    agentID,
+		VersionID:  versionID,
+		AgentID:    agent.ID,
 		AgentName:  agent.Name,
 		Tab:        "finalize",
 		ParseError: parseErr,
@@ -880,11 +895,11 @@ func (h *ConfiguratorHandler) FinalizeConfirm(w http.ResponseWriter, r *http.Req
 	renderTemplate(w, h.finalizeTmpl, "layout", data)
 }
 
-// Finalize flips status INITIALIZING → DRAFT and redirects to /agents/ui.
-// 409 (ErrInvalidAgentStatus) if the agent isn't in INITIALIZING.
+// Finalize flips the version's status INITIALIZING → DRAFT and redirects to
+// /agents/ui. 409 (ErrInvalidAgentStatus) if the version isn't in INITIALIZING.
 func (h *ConfiguratorHandler) Finalize(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("id")
-	if err := h.repo.UpdateStatus(r.Context(), agentID, "INITIALIZING", "DRAFT"); err != nil {
+	versionID := r.PathValue("version_id")
+	if err := h.repo.UpdateStatus(r.Context(), versionID, "INITIALIZING", "DRAFT"); err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			http.NotFound(w, r)
 			return
@@ -901,9 +916,10 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
-	agentID := r.PathValue("id")
+	versionID := r.PathValue("version_id")
 	skillID := r.PathValue("skillId")
-	if err := h.requireEditable(r.Context(), agentID); err != nil {
+	agentID, err := h.requireEditable(r.Context(), versionID)
+	if err != nil {
 		Error(w, err)
 		return
 	}
@@ -953,7 +969,7 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 
 	// Re-render skill_detail so the htmx swap shows the saved state.
 	renderTemplate(w, h.skillsTmpl, "skill_detail", map[string]any{
-		"AgentID":      agentID,
+		"VersionID":    versionID,
 		"Skill":        *cur,
 		"Capabilities": cfg.Capabilities,
 	})
