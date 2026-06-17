@@ -36,7 +36,6 @@ type bundleShape struct {
 		Method      string `json:"method"`
 		Path        string `json:"path"`
 		Auth        string `json:"auth"`
-		Capability  string `json:"capability"`
 	} `json:"tools"`
 }
 
