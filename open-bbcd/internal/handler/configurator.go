@@ -143,7 +143,6 @@ type configPageData struct {
 	SubTab            string // architecture sub-tab: "flows" | "skills" | "capabilities" (empty for other primary tabs)
 	Config            types.FlowMapConfig
 	ParseError        string
-	DiscoveryFilePath string
 	WizardFields      []wizardFieldView // populated for the Inputs tab
 	SelectedFlow      *types.Flow
 	SelectedSkill     *types.Skill
@@ -186,7 +185,6 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 		HasBundle:         len(version.Bundle) > 0,
 		Config:            cfg,
 		ParseError:        parseErr,
-		DiscoveryFilePath: agent.DiscoveryFilePath,
 	}, nil
 }
 
