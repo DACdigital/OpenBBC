@@ -1,5 +1,5 @@
 ---
-schema_version: 1
+schema_version: 2
 framework:
   name: next
   version: "15.0.0"
