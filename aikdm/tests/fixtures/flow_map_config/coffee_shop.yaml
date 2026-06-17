@@ -1,62 +1,79 @@
-schema_version: 1
+schema_version: 2
 name: coffee_shop_agent
 scope: "Help customers order coffee and track loyalty rewards."
 should_do: "Take orders, modify orders, look up rewards balance."
 should_not_do: "Process refunds, share other customers' data."
 business_domain: "Independent coffee shop with mobile ordering."
 source:
-  compiler_schema_version: 1
+  compiler_schema_version: 2
   generated_from_sha: "abc123"
   app_name: "coffeeshop-web"
   stack:
     framework: "next"
     language: "typescript"
-capabilities:
-  - name: "order_create"
-    summary: "Create a new coffee order."
-    tools:
-      - name: "createOrder"
-        method: "POST"
-        path: "/api/orders"
-    prose_md: "Creates a new order with line items and customer ref."
-  - name: "rewards_lookup"
-    summary: "Look up rewards balance for a customer."
-    tools:
-      - name: "getRewards"
-        method: "GET"
-        path: "/api/rewards/{customer_id}"
-    prose_md: "Returns the current points balance and tier."
+endpoints:
+  - id: orders.create
+    proposed: true
+    method: POST
+    path: "/api/orders"
+    body_shape: "{ items: Array<...> }"
+    response_shape: "Order"
+    auth: bearer
+    source: "src/api/orders.ts:14"
+    used_by_skills: ["place_order"]
+    confidence: high
+    prose_md: "Create a new order with a list of line items."
+  - id: rewards.get
+    proposed: true
+    method: GET
+    path: "/api/rewards/{customer_id}"
+    path_params:
+      - name: customer_id
+        type: string
+        required: true
+    response_shape: "{ points: number, tier: string }"
+    auth: bearer
+    source: "src/api/rewards.ts:8"
+    used_by_skills: ["check_rewards"]
+    confidence: high
+    prose_md: "Return the current loyalty points balance and tier for a customer."
 skills:
   - id: place_order
     origin: discovered
     name: "Place an order"
     description: "Guide the user through choosing items and placing an order."
+    domain: "Ordering"
     user_phrases: ["I want a latte", "place an order"]
-    role: write
-    capability_ref: "order_create"
+    suggested_endpoints:
+      - endpoint: orders.create
+        role: write
+        when: "Customer confirms their selection"
     external: false
-    proposed_tool: "place_order"
-    prose_md: "Internal skill that wraps order_create."
+    confidence: high
+    prose_md: "Internal skill that wraps the order create endpoint."
   - id: check_rewards
     origin: discovered
     name: "Check rewards"
     description: "Tell the user their rewards balance."
+    domain: "Loyalty"
     user_phrases: ["how many points do I have", "check my rewards"]
-    role: read
-    capability_ref: "rewards_lookup"
+    suggested_endpoints:
+      - endpoint: rewards.get
+        role: read
+        when: "Customer asks about their points or tier"
     external: false
-    proposed_tool: "check_rewards"
+    confidence: high
     prose_md: "Internal read skill."
   - id: file_complaint
     origin: custom
     name: "File a complaint"
     description: "Direct the user to file complaints in the customer portal."
+    domain: ""
     user_phrases: ["I want to complain"]
-    role: write
-    capability_ref: ""
+    suggested_endpoints: []
     external: true
     external_note: "Customers file complaints in the support portal at support.example.com."
-    proposed_tool: ""
+    confidence: medium
     prose_md: ""
 flows:
   - id: order_flow
