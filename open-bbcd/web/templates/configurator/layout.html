@@ -17,26 +17,47 @@
           style="opacity:0.4;cursor:not-allowed"
           title="No bundle generated for this version yet">Run</button>
       {{end}}
+      {{if eq .AgentStatus "READY"}}
+        <button class="btn-primary"
+                hx-get="/agents/{{.AgentID}}/deploy/confirm?version_id={{.VersionID}}"
+                hx-target="body" hx-swap="beforeend">Deploy</button>
+      {{else if eq .AgentStatus "DEPLOYED"}}
+        <button class="btn-secondary btn-danger"
+                hx-get="/agents/{{.AgentID}}/undeploy/confirm"
+                hx-target="body" hx-swap="beforeend">Undeploy</button>
+      {{end}}
     </div>
     {{end}}
   </div>
 
   <nav class="config-tabs">
-    <a href="/agent_versions/{{.VersionID}}/configure/flows"
-       class="config-tab {{if eq .Tab "flows"}}active{{end}}">Flows</a>
-    <a href="/agent_versions/{{.VersionID}}/configure/skills"
-       class="config-tab {{if eq .Tab "skills"}}active{{end}}">Skills</a>
-    <a href="/agent_versions/{{.VersionID}}/configure/capabilities"
-       class="config-tab {{if eq .Tab "capabilities"}}active{{end}}">Capabilities</a>
     {{if .ReadOnly}}
     <a href="/agent_versions/{{.VersionID}}/configure/inputs"
        class="config-tab {{if eq .Tab "inputs"}}active{{end}}">Inputs</a>
-    {{else}}
+    {{end}}
+    <a href="/agent_versions/{{.VersionID}}/configure/architecture/flows"
+       class="config-tab {{if eq .Tab "architecture"}}active{{end}}">Architecture</a>
+    {{if .ReadOnly}}
+    <a href="/agent_versions/{{.VersionID}}/configure/prompts"
+       class="config-tab {{if eq .Tab "prompts"}}active{{end}}">Prompts</a>
+    {{end}}
+    {{if not .ReadOnly}}
     <span class="config-spacer"></span>
     <a href="/agent_versions/{{.VersionID}}/configure/finalize"
        class="config-tab {{if eq .Tab "finalize"}}active{{end}}">Finalize →</a>
     {{end}}
   </nav>
+
+  {{if eq .Tab "architecture"}}
+  <nav class="config-subtabs">
+    <a href="/agent_versions/{{.VersionID}}/configure/architecture/flows"
+       class="config-subtab {{if eq .SubTab "flows"}}active{{end}}">Flows</a>
+    <a href="/agent_versions/{{.VersionID}}/configure/architecture/skills"
+       class="config-subtab {{if eq .SubTab "skills"}}active{{end}}">Skills</a>
+    <a href="/agent_versions/{{.VersionID}}/configure/architecture/capabilities"
+       class="config-subtab {{if eq .SubTab "capabilities"}}active{{end}}">Capabilities</a>
+  </nav>
+  {{end}}
 
   {{if .ReadOnly}}
   <div class="config-banner config-banner-readonly">

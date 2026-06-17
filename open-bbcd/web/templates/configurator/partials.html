@@ -3,13 +3,13 @@
   <input type="checkbox" class="config-list-row-toggle"
          {{if .Flow.Included}}checked{{end}}
          {{if .ReadOnly}}disabled{{else}}
-         hx-post="/agent_versions/{{.VersionID}}/configure/flows/{{.Flow.ID}}/included"
+         hx-post="/agent_versions/{{.VersionID}}/configure/architecture/flows/{{.Flow.ID}}/included"
          hx-trigger="change"
          hx-vals='js:{included: event.target.checked}'
          hx-target="#flow-row-{{.Flow.ID}}"
          hx-swap="outerHTML"
          {{end}}>
-  <a href="/agent_versions/{{.VersionID}}/configure/flows/{{.Flow.ID}}" class="config-list-row-link">
+  <a href="/agent_versions/{{.VersionID}}/configure/architecture/flows/{{.Flow.ID}}" class="config-list-row-link">
     <span class="config-list-row-name">{{.Flow.ID}}</span>
     <span class="config-list-row-meta">{{workflowNodeCount .Flow.Workflow}} nodes</span>
   </a>
@@ -73,7 +73,7 @@
 
 {{define "skill_row"}}
 <div id="skill-row-{{.Skill.ID}}">
-  <a href="/agent_versions/{{.VersionID}}/configure/skills/{{.Skill.ID}}"
+  <a href="/agent_versions/{{.VersionID}}/configure/architecture/skills/{{.Skill.ID}}"
      class="config-list-row {{if and .SelectedID (eq .SelectedID .Skill.ID)}}selected{{end}}">
     <span class="config-list-row-name">{{.Skill.ID}}</span>
     <span class="config-list-row-meta">
@@ -145,7 +145,7 @@
 
   <form class="config-form {{if .ReadOnly}}config-form-readonly{{end}}"
         {{if not .ReadOnly}}
-        hx-post="/agent_versions/{{.VersionID}}/configure/skills/{{.Skill.ID}}"
+        hx-post="/agent_versions/{{.VersionID}}/configure/architecture/skills/{{.Skill.ID}}"
         hx-target="closest .config-detail"
         hx-swap="outerHTML"
         hx-indicator=".config-form-saved"
@@ -163,7 +163,7 @@
       {{if eq .Skill.Origin "custom"}}
       <button type="button"
               class="btn-secondary danger-button"
-              hx-delete="/agent_versions/{{.VersionID}}/configure/skills/{{.Skill.ID}}"
+              hx-delete="/agent_versions/{{.VersionID}}/configure/architecture/skills/{{.Skill.ID}}"
               hx-target="#skill-row-{{.Skill.ID}}"
               hx-swap="delete"
               hx-confirm="Delete this custom skill?">Delete</button>
@@ -188,7 +188,7 @@
   <p class="config-detail-id">A new id will be generated from the name.</p>
 
   <form class="config-form"
-        hx-post="/agent_versions/{{.VersionID}}/configure/skills"
+        hx-post="/agent_versions/{{.VersionID}}/configure/architecture/skills"
         hx-target="#skill-list-rows"
         hx-swap="beforeend"
         hx-indicator=".config-form-saved">
@@ -206,7 +206,7 @@
 {{end}}
 
 {{define "capability_row"}}
-<a href="/agent_versions/{{.VersionID}}/configure/capabilities/{{.Cap.Name}}"
+<a href="/agent_versions/{{.VersionID}}/configure/architecture/capabilities/{{.Cap.Name}}"
    class="config-list-row {{if and .SelectedID (eq .SelectedID .Cap.Name)}}selected{{end}}">
   <span class="config-list-row-name">{{.Cap.Name}}</span>
   <span class="config-list-row-meta"><span class="muted">{{len .Cap.Tools}} tools</span></span>

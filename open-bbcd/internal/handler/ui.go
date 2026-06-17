@@ -3,13 +3,17 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"html/template"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -21,6 +25,7 @@ type GroupedAgentRepository interface {
 type UIHandler struct {
 	agentRepo         GroupedAgentRepository
 	versions          DeployVersionRepository
+	storage           storage.Storage
 	schema            *types.WizardSchema
 	logger            *slog.Logger
 	agentsTmpl        *template.Template
@@ -46,7 +51,7 @@ func statusClass(status string) string {
 	}
 }
 
-func NewUIHandler(agentRepo GroupedAgentRepository, versions DeployVersionRepository, schema *types.WizardSchema, webFS fs.FS, logger *slog.Logger) (*UIHandler, error) {
+func NewUIHandler(agentRepo GroupedAgentRepository, versions DeployVersionRepository, store storage.Storage, schema *types.WizardSchema, webFS fs.FS, logger *slog.Logger) (*UIHandler, error) {
 	funcs := template.FuncMap{
 		"statusClass": statusClass,
 		"add":         func(a, b int) int { return a + b },
@@ -101,6 +106,7 @@ func NewUIHandler(agentRepo GroupedAgentRepository, versions DeployVersionReposi
 	return &UIHandler{
 		agentRepo:         agentRepo,
 		versions:          versions,
+		storage:           store,
 		schema:            schema,
 		logger:            logger,
 		agentsTmpl:        agentsTmpl,
@@ -141,18 +147,41 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if agentID := r.URL.Query().Get("agent"); agentID != "" {
-		for _, group := range groups {
-			if group.AgentID == agentID {
-				renderTemplate(w, h.agentVersionsTmpl, "layout", agentVersionsPageData{
-					Active:   "agents",
-					AgentID:  group.AgentID,
-					Name:     group.Name,
-					Versions: group.Versions,
-				})
-				return
+		var group *types.AgentGroup
+		for i := range groups {
+			if groups[i].AgentID == agentID {
+				group = &groups[i]
+				break
 			}
 		}
-		http.NotFound(w, r)
+		if group == nil {
+			http.NotFound(w, r)
+			return
+		}
+		agent, err := h.agentRepo.GetByID(r.Context(), agentID)
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		data := agentVersionsPageData{
+			Active:            "agents",
+			AgentID:           group.AgentID,
+			Name:              group.Name,
+			Description:       agent.Description,
+			DiscoveryFilePath: agent.DiscoveryFilePath,
+			CreatedAt:         agent.CreatedAt,
+			Versions:          group.Versions,
+		}
+		// Versions are returned newest-first by ListGrouped; at most one is DEPLOYED
+		// at a time (enforced by DB partial unique index), so first match wins.
+		for _, v := range group.Versions {
+			if v.Version != nil && v.Version.Status == "DEPLOYED" {
+				data.CurrentDeployedVersionNum = v.VersionNum
+				data.CurrentDeployedVersionID = v.Version.ID
+				break
+			}
+		}
+		renderTemplate(w, h.agentVersionsTmpl, "layout", data)
 		return
 	}
 
@@ -160,10 +189,15 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 type agentVersionsPageData struct {
-	Active   string
-	AgentID  string
-	Name     string
-	Versions []types.AgentVersionListItem
+	Active                    string
+	AgentID                   string
+	Name                      string
+	Description               string
+	DiscoveryFilePath         string
+	CreatedAt                 time.Time
+	CurrentDeployedVersionNum int    // 0 if no version is deployed
+	CurrentDeployedVersionID  string // empty if none
+	Versions                  []types.AgentVersionListItem
 }
 
 type wizardPageData struct {
@@ -281,4 +315,47 @@ func (u *UIHandler) UndeployConfirm(w http.ResponseWriter, r *http.Request) {
 		AgentID string
 		Version *types.AgentVersion
 	}{agentID, cur})
+}
+
+// DiscoveryDownload streams the discovery zip referenced by the agent's
+// discovery_file_path. Returns 404 when the agent does not exist, has no
+// discovery_file_path, or the underlying blob is missing.
+func (h *UIHandler) DiscoveryDownload(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	agent, err := h.agentRepo.GetByID(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	if agent.DiscoveryFilePath == "" {
+		http.NotFound(w, r)
+		return
+	}
+	rc, err := h.storage.Open(r.Context(), agent.DiscoveryFilePath)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			h.logger.Info("discovery file missing on disk",
+				slog.String("agent_id", agentID),
+				slog.String("key", agent.DiscoveryFilePath),
+			)
+			http.NotFound(w, r)
+			return
+		}
+		h.logger.Error("storage.Open", slog.Any("error", err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("Content-Type", "application/zip")
+	// Filename derives from agent.ID (always a UUID) rather than the
+	// discovery_file_path column — keeps header-injection-safe even if the
+	// path column ever holds untrusted strings.
+	w.Header().Set("Content-Disposition", `attachment; filename="`+agent.ID+`.zip"`)
+	if _, err := io.Copy(w, rc); err != nil {
+		h.logger.Warn("discovery download copy failed", slog.Any("error", err))
+	}
 }

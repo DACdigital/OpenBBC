@@ -1,9 +1,11 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,6 +18,70 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestConfiguratorRouter_OldFlowsRedirectsToArchitecture(t *testing.T) {
+	mux := http.NewServeMux()
+	handler.RegisterConfiguratorRedirects(mux)
+	versionID := "11111111-1111-1111-1111-111111111111"
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/flows", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301", w.Code)
+	}
+	want := "/agent_versions/" + versionID + "/configure/architecture/flows"
+	if got := w.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+func TestConfiguratorRouter_OldSkillsRedirectsToArchitecture(t *testing.T) {
+	mux := http.NewServeMux()
+	handler.RegisterConfiguratorRedirects(mux)
+	versionID := "22222222-2222-2222-2222-222222222222"
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/skills", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301", w.Code)
+	}
+	want := "/agent_versions/" + versionID + "/configure/architecture/skills"
+	if got := w.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+func TestConfiguratorRouter_OldCapabilitiesRedirectsToArchitecture(t *testing.T) {
+	mux := http.NewServeMux()
+	handler.RegisterConfiguratorRedirects(mux)
+	versionID := "33333333-3333-3333-3333-333333333333"
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/capabilities", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301", w.Code)
+	}
+	want := "/agent_versions/" + versionID + "/configure/architecture/capabilities"
+	if got := w.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+func TestConfiguratorRouter_ArchitectureIndexRedirectsToFlows(t *testing.T) {
+	mux := http.NewServeMux()
+	handler.RegisterConfiguratorRedirects(mux)
+	versionID := "44444444-4444-4444-4444-444444444444"
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/architecture", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusFound && w.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301 or 302", w.Code)
+	}
+	want := "/agent_versions/" + versionID + "/configure/architecture/flows"
+	if got := w.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
 type stubConfigStore struct {
 	cfg           types.FlowMapConfig
 	getErr        error
@@ -24,6 +90,7 @@ type stubConfigStore struct {
 	updateFn      func(cfg []byte) error
 	statusFn      func(versionID, expectedFrom, to string) error
 	currentStatus string // optional override; defaults to "INITIALIZING"
+	bundle        []byte // optional compiled bundle; rendered by the Prompts tab
 }
 
 func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
@@ -42,7 +109,7 @@ func (s *stubConfigStore) GetWithAgent(ctx context.Context, versionID string) (*
 	// The stub uses the URL's version_id for both ids — there's only one
 	// config in this fake, and per-version calls (GetFlowMapConfig /
 	// UpdateFlowMapConfig) ignore the id anyway.
-	version := &types.AgentVersion{ID: versionID, AgentID: versionID, Status: status}
+	version := &types.AgentVersion{ID: versionID, AgentID: versionID, Status: status, Bundle: s.bundle}
 	agent := &types.Agent{ID: versionID, Name: s.cfg.Name}
 	return version, agent, nil
 }
@@ -173,10 +240,12 @@ func TestConfigurator_CapabilitiesTab_IsReadOnly(t *testing.T) {
 
 func TestConfigurator_ParseError_ShowsErrorBanner(t *testing.T) {
 	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig(), parseErr: "missing tools-proposed.json"})
-	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure", nil)
+	// Index now 302s to /configure/architecture/flows; assert the banner on the
+	// landing handler (Flows) which is where the redirect ends up rendering.
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure/architecture/flows", nil)
 	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
-	h.Index(w, req)
+	h.Flows(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
@@ -821,5 +890,223 @@ func TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans(t *testing.T) {
 	if len(clean.Skills) != len(cfg.Skills) {
 		t.Errorf("clean export should not touch skills, got %d (want %d)",
 			len(clean.Skills), len(cfg.Skills))
+	}
+}
+
+// configFixture is the minimum field-set the configurator's layout.html
+// reads. It mirrors the shape of (unexported) configPageData; the template
+// engine is duck-typed so a local struct works fine for header-rendering
+// tests that don't exercise tab content.
+type configFixture struct {
+	Active      string
+	Tab         string
+	SubTab      string
+	ReadOnly    bool
+	HasBundle   bool
+	AgentID     string
+	AgentName   string
+	AgentStatus string
+	VersionID   string
+	ParseError  string
+}
+
+// renderConfigLayoutFixture parses the real layout.html + a stub tab_content
+// block and returns the rendered HTML. It registers only the FuncMap entries
+// layout.html actually references (statusClass on the status pill); the
+// configurator's other helpers belong to per-tab templates that the stub
+// replaces.
+func renderConfigLayoutFixture(t *testing.T, f configFixture) string {
+	t.Helper()
+	statusClass := func(status string) string {
+		switch status {
+		case "DEPLOYED":
+			return "deployed"
+		case "READY":
+			return "ready"
+		case "TRAINING":
+			return "training"
+		case "INITIALIZING":
+			return "initializing"
+		default:
+			return "draft"
+		}
+	}
+	tmpl := template.Must(template.New("").Funcs(template.FuncMap{
+		"statusClass": statusClass,
+	}).ParseFiles(
+		"../../web/templates/layout.html",
+		"../../web/templates/configurator/layout.html",
+	))
+	// Stub tab_content so layout.html's {{template "tab_content" .}} works
+	// without parsing the per-tab templates (which pull in other funcs).
+	template.Must(tmpl.Parse(`{{define "tab_content"}}<div></div>{{end}}`))
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, "layout", f); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	return buf.String()
+}
+
+func TestConfiguratorLayout_DeployButton_VisibleWhenReady(t *testing.T) {
+	body := renderConfigLayoutFixture(t, configFixture{
+		Tab: "architecture", SubTab: "flows",
+		ReadOnly: true, AgentStatus: "READY",
+		AgentID: "a1", VersionID: "v1", AgentName: "Bot",
+	})
+	if !strings.Contains(body, `hx-get="/agents/a1/deploy/confirm?version_id=v1"`) {
+		t.Errorf("expected Deploy button hx-get; body:\n%s", body)
+	}
+}
+
+func TestConfiguratorLayout_UndeployButton_VisibleWhenDeployed(t *testing.T) {
+	body := renderConfigLayoutFixture(t, configFixture{
+		Tab: "architecture", SubTab: "flows",
+		ReadOnly: true, AgentStatus: "DEPLOYED",
+		AgentID: "a1", VersionID: "v1", AgentName: "Bot",
+	})
+	if !strings.Contains(body, `hx-get="/agents/a1/undeploy/confirm"`) {
+		t.Errorf("expected Undeploy button hx-get; body:\n%s", body)
+	}
+	if strings.Contains(body, `/agents/a1/deploy/confirm`) {
+		t.Errorf("Deploy button must not render for DEPLOYED; body:\n%s", body)
+	}
+}
+
+func TestConfiguratorLayout_DeployAndUndeploy_HiddenWhenDraft(t *testing.T) {
+	body := renderConfigLayoutFixture(t, configFixture{
+		Tab: "architecture", SubTab: "flows",
+		ReadOnly: true, AgentStatus: "DRAFT",
+		AgentID: "a1", VersionID: "v1", AgentName: "Bot",
+	})
+	if strings.Contains(body, `/agents/a1/deploy/confirm`) {
+		t.Errorf("Deploy button must not render for DRAFT; body:\n%s", body)
+	}
+	if strings.Contains(body, `/agents/a1/undeploy/confirm`) {
+		t.Errorf("Undeploy button must not render for DRAFT; body:\n%s", body)
+	}
+}
+
+// TestConfigurator_InputsTab_OmitsAgentLevelFields verifies that the Inputs
+// tab renders only the 4 per-version wizard fields (scope, should_do,
+// should_not_do, business_domain). The agent-level fields `name` and
+// `discovery_file` live on the agent row and are rendered on the agent
+// detail header — showing them per-version would be misleading because a
+// version cannot diverge from its agent on those fields.
+func TestConfigurator_InputsTab_OmitsAgentLevelFields(t *testing.T) {
+	cfg := sampleConfig()
+	cfg.Scope = "in-scope text"
+	cfg.ShouldDo = "should-do text"
+	cfg.ShouldNotDo = "should-not-do text"
+	cfg.BusinessDomain = "business-domain text"
+	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/agent_versions/abc/configure/inputs", nil)
+	req.SetPathValue("version_id", "abc")
+	w := httptest.NewRecorder()
+	h.Inputs(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	// Per-version labels (from web/schemas/wizard-v1.yaml) must be present.
+	perVersionLabels := []string{
+		"Describe the scope of your agent",
+		"What should your agent do?",
+		"What should your agent never do?",
+		"Describe your platform business domain",
+	}
+	for _, label := range perVersionLabels {
+		if !strings.Contains(body, label) {
+			t.Errorf("Inputs tab missing per-version label %q", label)
+		}
+	}
+
+	// Agent-level labels must NOT appear in the Inputs tab.
+	agentLevelLabels := []string{
+		"Agent name",
+		"Upload discovery zip",
+	}
+	for _, label := range agentLevelLabels {
+		if strings.Contains(body, label) {
+			t.Errorf("Inputs tab should NOT contain agent-level label %q "+
+				"(it belongs on the agent detail header)", label)
+		}
+	}
+
+	// And the count of <dt> rows (one per WizardFields entry) must be 4.
+	if got := strings.Count(body, `class="inputs-label"`); got != 4 {
+		t.Errorf("expected 4 inputs-label rows, got %d", got)
+	}
+}
+
+// makePromptsConfigStore returns a stubConfigStore wired for the Prompts tab:
+// a non-INITIALIZING status (so ReadOnly is true in the layout) and an
+// optional bundle payload exposed via GetWithAgent.
+func makePromptsConfigStore(status string, bundle []byte) *stubConfigStore {
+	return &stubConfigStore{
+		cfg:           sampleConfig(),
+		currentStatus: status,
+		bundle:        bundle,
+	}
+}
+
+func TestConfigurator_Prompts_RendersMainAndSkillPrompts(t *testing.T) {
+	versionID := "11111111-1111-1111-1111-111111111111"
+	bundle := []byte(`{
+		"main_prompt": "<role>Coffee bot</role>",
+		"skills": [
+			{"name":"place_order","description":"Place an order","prompt":"<role>order</role>"},
+			{"name":"check_rewards","description":"Check rewards","prompt":"<role>rewards</role>"}
+		]
+	}`)
+	h := newConfigHandler(t, makePromptsConfigStore("READY", bundle))
+
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/prompts", nil)
+	req.SetPathValue("version_id", versionID)
+	w := httptest.NewRecorder()
+	h.Prompts(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		"&lt;role&gt;Coffee bot&lt;/role&gt;",
+		"place_order",
+		"&lt;role&gt;order&lt;/role&gt;",
+		"check_rewards",
+		"&lt;role&gt;rewards&lt;/role&gt;",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
+func TestConfigurator_Prompts_EmptyStateWhenBundleNull(t *testing.T) {
+	versionID := "22222222-2222-2222-2222-222222222222"
+	h := newConfigHandler(t, makePromptsConfigStore("DRAFT", nil))
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/prompts", nil)
+	req.SetPathValue("version_id", versionID)
+	w := httptest.NewRecorder()
+	h.Prompts(w, req)
+	if !strings.Contains(w.Body.String(), "No bundle has been generated") {
+		t.Errorf("expected empty-state copy; body:\n%s", w.Body.String())
+	}
+}
+
+func TestConfigurator_Prompts_EmptyStateOnMalformedBundle(t *testing.T) {
+	versionID := "33333333-3333-3333-3333-333333333333"
+	h := newConfigHandler(t, makePromptsConfigStore("READY", []byte("not json")))
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/prompts", nil)
+	req.SetPathValue("version_id", versionID)
+	w := httptest.NewRecorder()
+	h.Prompts(w, req)
+	if !strings.Contains(w.Body.String(), "No bundle has been generated") {
+		t.Errorf("expected empty-state copy on malformed bundle; body:\n%s", w.Body.String())
 	}
 }

@@ -1,0 +1,25 @@
+{{define "tab_content"}}
+<div class="prompts-tab">
+  {{if or .MainPrompt .SkillPrompts}}
+    {{if .MainPrompt}}
+    <section class="prompt-block">
+      <h2>Main prompt</h2>
+      <pre class="prompt-pre">{{.MainPrompt}}</pre>
+    </section>
+    {{end}}
+    {{if .SkillPrompts}}
+    <section class="prompt-skills">
+      <h2>Skill prompts</h2>
+      {{range .SkillPrompts}}
+      <details class="prompt-skill">
+        <summary><strong>{{.Name}}</strong>{{if .Description}} — {{.Description}}{{end}}</summary>
+        <pre class="prompt-pre">{{.Prompt}}</pre>
+      </details>
+      {{end}}
+    </section>
+    {{end}}
+  {{else}}
+    <p class="empty-state">No bundle has been generated for this version yet.</p>
+  {{end}}
+</div>
+{{end}}

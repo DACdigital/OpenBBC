@@ -61,6 +61,29 @@
 
 .config-spacer { flex: 1; }
 
+.config-subtabs {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 16px 0;
+  border-bottom: 1px solid #30363d;
+}
+
+.config-subtab {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #c9d1d9;
+  border-bottom: 2px solid transparent;
+  text-decoration: none;
+  margin-bottom: -1px;
+}
+
+.config-subtab.active {
+  color: #58a6ff;
+  border-bottom-color: #58a6ff;
+}
+
+.config-subtab:hover { color: #f0f6fc; }
+
 .config-actions { display: flex; gap: 8px; align-items: center; }
 .config-actions .btn-primary,
 .config-actions .btn-secondary { padding: 6px 14px; font-size: 13px; }
@@ -117,6 +140,45 @@
 .inputs-value.is-textarea { white-space: pre-wrap; line-height: 1.5; }
 .inputs-value.is-file code { color: #79c0ff; background: transparent; padding: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .inputs-empty { color: #6e7681; font-style: italic; }
+
+/* Prompts tab — read-only display of the compiled bundle's main_prompt and
+   per-skill prompts. Tools/external_actions are intentionally not rendered
+   here; they live under Architecture. */
+.prompts-tab { max-width: 980px; padding: 8px 4px 24px; }
+.prompts-tab .empty-state { color: #8b949e; font-style: italic; }
+.prompt-block { margin-bottom: 24px; }
+.prompt-block h2,
+.prompt-skills h2 {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #8b949e;
+  font-weight: 600;
+}
+.prompt-pre {
+  background: #0d1117;
+  padding: 12px 14px;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: #e6edf3;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 0;
+}
+.prompt-skills { display: flex; flex-direction: column; gap: 6px; }
+.prompt-skill {
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: #161b22;
+}
+.prompt-skill summary { cursor: pointer; color: #e6edf3; }
+.prompt-skill[open] { background: #1c2230; }
+.prompt-skill[open] summary { margin-bottom: 8px; }
 
 /* Read-only preview tweaks. */
 .config-readonly .config-list-row-toggle { cursor: not-allowed; opacity: .5; }

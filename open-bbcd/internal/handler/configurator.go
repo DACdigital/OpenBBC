@@ -32,9 +32,9 @@ type ConfigStore interface {
 }
 
 type ConfiguratorHandler struct {
-	repo                                                              ConfigStore
-	schema                                                            *types.WizardSchema
-	flowsTmpl, skillsTmpl, capabilitiesTmpl, finalizeTmpl, inputsTmpl *template.Template
+	repo                                                                            ConfigStore
+	schema                                                                          *types.WizardSchema
+	flowsTmpl, skillsTmpl, capabilitiesTmpl, finalizeTmpl, inputsTmpl, promptsTmpl *template.Template
 }
 
 func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS fs.FS) (*ConfiguratorHandler, error) {
@@ -94,6 +94,10 @@ func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS 
 	if err != nil {
 		return nil, err
 	}
+	promptsTmpl, err := parse("prompts")
+	if err != nil {
+		return nil, err
+	}
 	return &ConfiguratorHandler{
 		repo:             repo,
 		schema:           schema,
@@ -102,6 +106,7 @@ func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS 
 		capabilitiesTmpl: capabilitiesTmpl,
 		finalizeTmpl:     finalizeTmpl,
 		inputsTmpl:       inputsTmpl,
+		promptsTmpl:      promptsTmpl,
 	}, nil
 }
 
@@ -113,14 +118,15 @@ var proseRelLink = regexp.MustCompile(`\.\./(skills|capabilities|flows)/([^)\s]+
 // renderMarkdown converts a prose markdown blob (from the discovery
 // skill) to HTML. Relative links into the .flow-map directory layout
 // are rewritten to the configurator routes (scoped by version_id) so
-// they actually navigate. Trusted input — prose is generated, not
+// they actually navigate. Flows / skills / capabilities live under the
+// Architecture primary tab. Trusted input — prose is generated, not
 // user-typed.
 func renderMarkdown(versionID, md string) template.HTML {
 	if md == "" {
 		return ""
 	}
 	if versionID != "" {
-		base := "/agent_versions/" + versionID + "/configure/"
+		base := "/agent_versions/" + versionID + "/configure/architecture/"
 		md = proseRelLink.ReplaceAllString(md, base+"$1/$2")
 	}
 	var buf bytes.Buffer
@@ -138,10 +144,11 @@ type configPageData struct {
 	AgentStatus       string // version's status (lives on AgentVersion now)
 	ReadOnly          bool   // true for non-INITIALIZING versions (DRAFT, TRAINING, READY, DEPLOYED)
 	HasBundle         bool   // true when this version has a generated bundle (Run is enabled)
-	Tab               string // "flows" | "skills" | "capabilities" | "inputs"
+	Tab               string // primary tab: "inputs" | "architecture" | "prompts" | "finalize"
+	SubTab            string // architecture sub-tab: "flows" | "skills" | "capabilities" (empty for other primary tabs)
 	Config            types.FlowMapConfig
 	ParseError        string
-	DiscoveryFilePath string
+	Bundle            json.RawMessage   // raw bundle bytes; len()>0 ↔ HasBundle
 	WizardFields      []wizardFieldView // populated for the Inputs tab
 	SelectedFlow      *types.Flow
 	SelectedSkill     *types.Skill
@@ -184,7 +191,7 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 		HasBundle:         len(version.Bundle) > 0,
 		Config:            cfg,
 		ParseError:        parseErr,
-		DiscoveryFilePath: agent.DiscoveryFilePath,
+		Bundle:            version.Bundle,
 	}, nil
 }
 
@@ -203,27 +210,39 @@ func (h *ConfiguratorHandler) Inputs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.Tab = "inputs"
-	data.WizardFields = h.buildWizardFieldViews(data.Config, data.DiscoveryFilePath)
+	data.WizardFields = h.buildWizardFieldViews(data.Config)
 	renderTemplate(w, h.inputsTmpl, "layout", data)
 }
 
-// buildWizardFieldViews maps each schema field to its current value pulled
-// from the FlowMapConfig (for text/textarea) or the agent row (for file).
+// agentLevelWizardKeys are wizard fields whose values are stored on the Agent
+// row (immutable per-agent) and therefore not shown on the per-version Inputs
+// tab — they appear on the agent detail header instead. A version cannot
+// diverge from its agent on these fields, so rendering them per-version would
+// be misleading.
+var agentLevelWizardKeys = map[string]bool{
+	"name":           true,
+	"discovery_file": true,
+}
+
+// buildWizardFieldViews maps each per-version schema field to its current
+// value pulled from the FlowMapConfig. Agent-level fields (name,
+// discovery_file) are skipped — they're rendered on the agent detail page.
 // Field order follows the schema's `order` so the layout matches the wizard.
-func (h *ConfiguratorHandler) buildWizardFieldViews(cfg types.FlowMapConfig, discoveryFilePath string) []wizardFieldView {
+func (h *ConfiguratorHandler) buildWizardFieldViews(cfg types.FlowMapConfig) []wizardFieldView {
 	if h.schema == nil {
 		return nil
 	}
 	wizardValues := map[string]string{
-		"name":            cfg.Name,
 		"scope":           cfg.Scope,
 		"should_do":       cfg.ShouldDo,
 		"should_not_do":   cfg.ShouldNotDo,
 		"business_domain": cfg.BusinessDomain,
-		"discovery_file":  discoveryFilePath,
 	}
 	out := make([]wizardFieldView, 0, len(h.schema.Wizard))
 	for _, of := range h.schema.OrderedFields() {
+		if agentLevelWizardKeys[of.Key] {
+			continue
+		}
 		out = append(out, wizardFieldView{
 			Key:   of.Key,
 			Label: of.Field.Label,
@@ -234,9 +253,60 @@ func (h *ConfiguratorHandler) buildWizardFieldViews(cfg types.FlowMapConfig, dis
 	return out
 }
 
-// Index redirects /agents/{id}/configure to the default Flows tab content.
+// skillPromptView is the projection of a bundle skill rendered in the Prompts
+// tab. JSON tags match the bundle schema produced by aikdm.
+type skillPromptView struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Prompt      string `json:"prompt"`
+}
+
+// promptsPageData embeds configPageData and adds the prompt-specific fields.
+// Renders as an empty state when MainPrompt and SkillPrompts are both empty
+// (NULL bundle or unmarshal failure both land here).
+type promptsPageData struct {
+	configPageData
+	MainPrompt   string
+	SkillPrompts []skillPromptView
+}
+
+// Prompts renders a read-only view of the version's compiled bundle:
+// main_prompt + each skill's prompt. Malformed or NULL bundle → empty state.
+// Tools and external_actions are not shown here; they live under the
+// Architecture tab.
+func (h *ConfiguratorHandler) Prompts(w http.ResponseWriter, r *http.Request) {
+	data, err := h.load(r)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	data.Tab = "prompts"
+
+	page := promptsPageData{configPageData: data}
+	if len(data.Bundle) > 0 {
+		var raw struct {
+			MainPrompt string            `json:"main_prompt"`
+			Skills     []skillPromptView `json:"skills"`
+		}
+		if err := json.Unmarshal(data.Bundle, &raw); err == nil {
+			page.MainPrompt = raw.MainPrompt
+			page.SkillPrompts = raw.Skills
+		}
+		// Malformed JSON falls through with both fields empty — template
+		// renders empty state.
+	}
+
+	renderTemplate(w, h.promptsTmpl, "layout", page)
+}
+
+// Index redirects /configure to the default Architecture > Flows sub-tab.
 func (h *ConfiguratorHandler) Index(w http.ResponseWriter, r *http.Request) {
-	h.Flows(w, r)
+	versionID := r.PathValue("version_id")
+	http.Redirect(w, r, "/agent_versions/"+versionID+"/configure/architecture/flows", http.StatusFound)
 }
 
 func (h *ConfiguratorHandler) Flows(w http.ResponseWriter, r *http.Request) {
@@ -249,7 +319,8 @@ func (h *ConfiguratorHandler) Flows(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	data.Tab = "flows"
+	data.Tab = "architecture"
+	data.SubTab = "flows"
 	if flowID := r.PathValue("flowId"); flowID != "" {
 		for i := range data.Config.Flows {
 			if data.Config.Flows[i].ID == flowID {
@@ -275,7 +346,8 @@ func (h *ConfiguratorHandler) Skills(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	data.Tab = "skills"
+	data.Tab = "architecture"
+	data.SubTab = "skills"
 	if skillID := r.PathValue("skillId"); skillID != "" {
 		for i := range data.Config.Skills {
 			if data.Config.Skills[i].ID == skillID {
@@ -301,7 +373,8 @@ func (h *ConfiguratorHandler) Capabilities(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	data.Tab = "capabilities"
+	data.Tab = "architecture"
+	data.SubTab = "capabilities"
 	if capName := r.PathValue("capName"); capName != "" {
 		for i := range data.Config.Capabilities {
 			if data.Config.Capabilities[i].Name == capName {
@@ -971,5 +1044,24 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 		"VersionID":    versionID,
 		"Skill":        *cur,
 		"Capabilities": cfg.Capabilities,
+	})
+}
+
+// RegisterConfiguratorRedirects mounts 301s for the pre-redesign tab URLs.
+// Bookmarks against /configure/{flows,skills,capabilities} survive; the bare
+// /configure/architecture path lands on the default Flows sub-tab.
+func RegisterConfiguratorRedirects(mux *http.ServeMux) {
+	for _, sub := range []string{"flows", "skills", "capabilities"} {
+		sub := sub
+		mux.HandleFunc("GET /agent_versions/{version_id}/configure/"+sub, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r,
+				"/agent_versions/"+r.PathValue("version_id")+"/configure/architecture/"+sub,
+				http.StatusMovedPermanently)
+		})
+	}
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r,
+			"/agent_versions/"+r.PathValue("version_id")+"/configure/architecture/flows",
+			http.StatusMovedPermanently)
 	})
 }
