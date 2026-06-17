@@ -1,18 +1,19 @@
 ---
-schema_version: 1
+schema_version: 2
 ---
 
 # Glossary
 
-One row per agent skill — a thin pivot table linking each skill to
-its capability and proposed tool. The per-skill body lives in
-[`skills/<id>.md`](skills/).
+One row per agent skill — a thin pivot table linking each skill to its
+suggested endpoints and the flows that surface it. The per-skill body
+(domain vocabulary, endpoint selection guide, failure modes) lives in
+[`skills/<id>.md`](skills/). Glossary is the catalog only.
 
 ## Lookup table
 
-| Skill | User phrases | Capability | Proposed tool |
+| Skill | User phrases | Suggested endpoints | Flows |
 |---|---|---|---|
-| [`list-ping`](skills/list-ping.md) | TODO | [`ping-list`](capabilities/ping.md#ping-list) | `ping.list` |
+| [`health`](skills/health.md) | "is the backend up", "ping the server", "show me the ping log" | [`ping.list`](endpoints/ping.list.md) | [view-home](flows/view-home.md) |
 
 <!-- HUMAN id="glossary-additions" -->
 <!-- /HUMAN -->
