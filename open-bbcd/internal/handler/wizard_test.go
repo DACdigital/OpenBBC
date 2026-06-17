@@ -63,6 +63,12 @@ func (m *mockStorage) Put(ctx context.Context, key string, r io.Reader) error {
 	return nil
 }
 
+// Open is unused in wizard tests; included so mockStorage satisfies the
+// storage.Storage interface.
+func (m *mockStorage) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	return nil, errors.New("mockStorage.Open: not implemented")
+}
+
 var _ storage.Storage = (*mockStorage)(nil)
 
 const testMaxUploadBytes = 50 << 20 // 50 MB

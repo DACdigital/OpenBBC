@@ -3,8 +3,11 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -69,5 +72,54 @@ func TestLocalDisk_PutAtomic_NoTmpVisibleAtFinalKey(t *testing.T) {
 	// No leftover .tmp at the final key.
 	if _, err := os.Stat(final + ".tmp"); !os.IsNotExist(err) {
 		t.Errorf(".tmp file should not remain: %v", err)
+	}
+}
+
+func TestLocalDisk_OpenReturnsContents(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewLocalDisk(dir)
+	if err != nil {
+		t.Fatalf("NewLocalDisk: %v", err)
+	}
+	if err := s.Put(t.Context(), "abc.zip", strings.NewReader("hello")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	rc, err := s.Open(t.Context(), "abc.zip")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer rc.Close()
+	b, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(b) != "hello" {
+		t.Errorf("contents = %q, want %q", string(b), "hello")
+	}
+}
+
+func TestLocalDisk_OpenMissingKeyReturnsErrNotFound(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewLocalDisk(dir)
+	if err != nil {
+		t.Fatalf("NewLocalDisk: %v", err)
+	}
+	_, err = s.Open(t.Context(), "missing.zip")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestLocalDisk_OpenRejectsPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewLocalDisk(dir)
+	if err != nil {
+		t.Fatalf("NewLocalDisk: %v", err)
+	}
+	for _, bad := range []string{"../escape", "sub/dir/key", "/abs/path", ""} {
+		_, err := s.Open(t.Context(), bad)
+		if !errors.Is(err, ErrInvalidKey) {
+			t.Errorf("key %q: err = %v, want ErrInvalidKey", bad, err)
+		}
 	}
 }
