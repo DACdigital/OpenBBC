@@ -29,14 +29,6 @@ wizard:
     order: 2
 `
 
-type mockGroupedAgentRepo struct {
-	listGroupedFn func(ctx context.Context) ([]types.AgentGroup, error)
-}
-
-func (m *mockGroupedAgentRepo) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
-	return m.listGroupedFn(ctx)
-}
-
 func mustParseStepTmpl(t *testing.T) *template.Template {
 	t.Helper()
 	const src = `{{define "step"}}{{range $k,$v := .Values}}<input name="{{$k}}" value="{{$v}}">{{end}}{{.Field.Field.Label}}{{end}}`
@@ -87,15 +79,15 @@ func TestUIHandler_WizardStep_AccumulatesValues(t *testing.T) {
 	}
 }
 
-type mockGroupedAgentRepo2 struct {
+type mockGroupedAgentRepo struct {
 	listGrouped func(ctx context.Context) ([]types.AgentGroup, error)
 	getByID     func(ctx context.Context, id string) (*types.Agent, error)
 }
 
-func (m *mockGroupedAgentRepo2) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
+func (m *mockGroupedAgentRepo) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
 	return m.listGrouped(ctx)
 }
-func (m *mockGroupedAgentRepo2) GetByID(ctx context.Context, id string) (*types.Agent, error) {
+func (m *mockGroupedAgentRepo) GetByID(ctx context.Context, id string) (*types.Agent, error) {
 	return m.getByID(ctx, id)
 }
 
@@ -133,7 +125,7 @@ func TestUIHandler_AgentDetail_PopulatesHeader(t *testing.T) {
 		},
 	}}
 	h := &UIHandler{
-		agentRepo: &mockGroupedAgentRepo2{
+		agentRepo: &mockGroupedAgentRepo{
 			listGrouped: func(ctx context.Context) ([]types.AgentGroup, error) { return groups, nil },
 			getByID:     func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
 		},
@@ -172,7 +164,7 @@ func TestUIHandler_AgentDetail_NoneDeployed(t *testing.T) {
 		},
 	}}
 	h := &UIHandler{
-		agentRepo: &mockGroupedAgentRepo2{
+		agentRepo: &mockGroupedAgentRepo{
 			listGrouped: func(ctx context.Context) ([]types.AgentGroup, error) { return groups, nil },
 			getByID:     func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
 		},

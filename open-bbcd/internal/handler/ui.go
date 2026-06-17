@@ -167,6 +167,8 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:         agent.CreatedAt,
 			Versions:          group.Versions,
 		}
+		// Versions are returned newest-first by ListGrouped; at most one is DEPLOYED
+		// at a time (enforced by DB partial unique index), so first match wins.
 		for _, v := range group.Versions {
 			if v.Version != nil && v.Version.Status == "DEPLOYED" {
 				data.CurrentDeployedVersionNum = v.VersionNum
