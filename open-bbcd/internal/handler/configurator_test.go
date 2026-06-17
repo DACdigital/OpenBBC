@@ -90,6 +90,7 @@ type stubConfigStore struct {
 	updateFn      func(cfg []byte) error
 	statusFn      func(versionID, expectedFrom, to string) error
 	currentStatus string // optional override; defaults to "INITIALIZING"
+	bundle        []byte // optional compiled bundle; rendered by the Prompts tab
 }
 
 func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
@@ -108,7 +109,7 @@ func (s *stubConfigStore) GetWithAgent(ctx context.Context, versionID string) (*
 	// The stub uses the URL's version_id for both ids — there's only one
 	// config in this fake, and per-version calls (GetFlowMapConfig /
 	// UpdateFlowMapConfig) ignore the id anyway.
-	version := &types.AgentVersion{ID: versionID, AgentID: versionID, Status: status}
+	version := &types.AgentVersion{ID: versionID, AgentID: versionID, Status: status, Bundle: s.bundle}
 	agent := &types.Agent{ID: versionID, Name: s.cfg.Name}
 	return version, agent, nil
 }
@@ -1033,5 +1034,73 @@ func TestConfigurator_InputsTab_OmitsAgentLevelFields(t *testing.T) {
 	// And the count of <dt> rows (one per WizardFields entry) must be 4.
 	if got := strings.Count(body, `class="inputs-label"`); got != 4 {
 		t.Errorf("expected 4 inputs-label rows, got %d", got)
+	}
+}
+
+// makePromptsConfigStore returns a stubConfigStore wired for the Prompts tab:
+// a non-INITIALIZING status (so ReadOnly is true in the layout) and an
+// optional bundle payload exposed via GetWithAgent.
+func makePromptsConfigStore(status string, bundle []byte) *stubConfigStore {
+	return &stubConfigStore{
+		cfg:           sampleConfig(),
+		currentStatus: status,
+		bundle:        bundle,
+	}
+}
+
+func TestConfigurator_Prompts_RendersMainAndSkillPrompts(t *testing.T) {
+	versionID := "11111111-1111-1111-1111-111111111111"
+	bundle := []byte(`{
+		"main_prompt": "<role>Coffee bot</role>",
+		"skills": [
+			{"name":"place_order","description":"Place an order","prompt":"<role>order</role>"},
+			{"name":"check_rewards","description":"Check rewards","prompt":"<role>rewards</role>"}
+		]
+	}`)
+	h := newConfigHandler(t, makePromptsConfigStore("READY", bundle))
+
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/prompts", nil)
+	req.SetPathValue("version_id", versionID)
+	w := httptest.NewRecorder()
+	h.Prompts(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		"&lt;role&gt;Coffee bot&lt;/role&gt;",
+		"place_order",
+		"&lt;role&gt;order&lt;/role&gt;",
+		"check_rewards",
+		"&lt;role&gt;rewards&lt;/role&gt;",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
+func TestConfigurator_Prompts_EmptyStateWhenBundleNull(t *testing.T) {
+	versionID := "22222222-2222-2222-2222-222222222222"
+	h := newConfigHandler(t, makePromptsConfigStore("DRAFT", nil))
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/prompts", nil)
+	req.SetPathValue("version_id", versionID)
+	w := httptest.NewRecorder()
+	h.Prompts(w, req)
+	if !strings.Contains(w.Body.String(), "No bundle has been generated") {
+		t.Errorf("expected empty-state copy; body:\n%s", w.Body.String())
+	}
+}
+
+func TestConfigurator_Prompts_EmptyStateOnMalformedBundle(t *testing.T) {
+	versionID := "33333333-3333-3333-3333-333333333333"
+	h := newConfigHandler(t, makePromptsConfigStore("READY", []byte("not json")))
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/prompts", nil)
+	req.SetPathValue("version_id", versionID)
+	w := httptest.NewRecorder()
+	h.Prompts(w, req)
+	if !strings.Contains(w.Body.String(), "No bundle has been generated") {
+		t.Errorf("expected empty-state copy on malformed bundle; body:\n%s", w.Body.String())
 	}
 }

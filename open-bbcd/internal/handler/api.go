@@ -151,6 +151,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/capabilities", configuratorHandler.Capabilities)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/capabilities/{capName}", configuratorHandler.Capabilities)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/inputs", configuratorHandler.Inputs)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/prompts", configuratorHandler.Prompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/new", configuratorHandler.SkillNew)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/skills", configuratorHandler.SkillCreate)

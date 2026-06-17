@@ -33,6 +33,10 @@
     {{end}}
     <a href="/agent_versions/{{.VersionID}}/configure/architecture/flows"
        class="config-tab {{if eq .Tab "architecture"}}active{{end}}">Architecture</a>
+    {{if .ReadOnly}}
+    <a href="/agent_versions/{{.VersionID}}/configure/prompts"
+       class="config-tab {{if eq .Tab "prompts"}}active{{end}}">Prompts</a>
+    {{end}}
     {{if not .ReadOnly}}
     <span class="config-spacer"></span>
     <a href="/agent_versions/{{.VersionID}}/configure/finalize"

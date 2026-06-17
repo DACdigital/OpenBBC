@@ -32,9 +32,9 @@ type ConfigStore interface {
 }
 
 type ConfiguratorHandler struct {
-	repo                                                              ConfigStore
-	schema                                                            *types.WizardSchema
-	flowsTmpl, skillsTmpl, capabilitiesTmpl, finalizeTmpl, inputsTmpl *template.Template
+	repo                                                                            ConfigStore
+	schema                                                                          *types.WizardSchema
+	flowsTmpl, skillsTmpl, capabilitiesTmpl, finalizeTmpl, inputsTmpl, promptsTmpl *template.Template
 }
 
 func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS fs.FS) (*ConfiguratorHandler, error) {
@@ -94,6 +94,10 @@ func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS 
 	if err != nil {
 		return nil, err
 	}
+	promptsTmpl, err := parse("prompts")
+	if err != nil {
+		return nil, err
+	}
 	return &ConfiguratorHandler{
 		repo:             repo,
 		schema:           schema,
@@ -102,6 +106,7 @@ func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS 
 		capabilitiesTmpl: capabilitiesTmpl,
 		finalizeTmpl:     finalizeTmpl,
 		inputsTmpl:       inputsTmpl,
+		promptsTmpl:      promptsTmpl,
 	}, nil
 }
 
@@ -244,6 +249,60 @@ func (h *ConfiguratorHandler) buildWizardFieldViews(cfg types.FlowMapConfig) []w
 		})
 	}
 	return out
+}
+
+// skillPromptView is the projection of a bundle skill rendered in the Prompts
+// tab. JSON tags match the bundle schema produced by aikdm.
+type skillPromptView struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Prompt      string `json:"prompt"`
+}
+
+// promptsPageData embeds configPageData and adds the prompt-specific fields.
+// Renders as an empty state when MainPrompt and SkillPrompts are both empty
+// (NULL bundle or unmarshal failure both land here).
+type promptsPageData struct {
+	configPageData
+	MainPrompt   string
+	SkillPrompts []skillPromptView
+}
+
+// Prompts renders a read-only view of the version's compiled bundle:
+// main_prompt + each skill's prompt. Malformed or NULL bundle → empty state.
+// Tools and external_actions are not shown here; they live under the
+// Architecture tab.
+func (h *ConfiguratorHandler) Prompts(w http.ResponseWriter, r *http.Request) {
+	data, err := h.load(r)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	data.Tab = "prompts"
+
+	page := promptsPageData{configPageData: data}
+	versionID := r.PathValue("version_id")
+	// Re-fetch the version row to access Bundle (load() drops the bytes,
+	// keeping only HasBundle).
+	version, _, gerr := h.repo.GetWithAgent(r.Context(), versionID)
+	if gerr == nil && len(version.Bundle) > 0 {
+		var raw struct {
+			MainPrompt string            `json:"main_prompt"`
+			Skills     []skillPromptView `json:"skills"`
+		}
+		if err := json.Unmarshal(version.Bundle, &raw); err == nil {
+			page.MainPrompt = raw.MainPrompt
+			page.SkillPrompts = raw.Skills
+		}
+		// Malformed JSON falls through with both fields empty — template
+		// renders empty state.
+	}
+
+	renderTemplate(w, h.promptsTmpl, "layout", page)
 }
 
 // Index redirects /configure to the default Architecture > Flows sub-tab.
