@@ -61,6 +61,29 @@
 
 .config-spacer { flex: 1; }
 
+.config-subtabs {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 16px 0;
+  border-bottom: 1px solid #30363d;
+}
+
+.config-subtab {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #c9d1d9;
+  border-bottom: 2px solid transparent;
+  text-decoration: none;
+  margin-bottom: -1px;
+}
+
+.config-subtab.active {
+  color: #58a6ff;
+  border-bottom-color: #58a6ff;
+}
+
+.config-subtab:hover { color: #f0f6fc; }
+
 .config-actions { display: flex; gap: 8px; align-items: center; }
 .config-actions .btn-primary,
 .config-actions .btn-secondary { padding: 6px 14px; font-size: 13px; }
