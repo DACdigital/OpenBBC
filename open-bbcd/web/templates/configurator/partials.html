@@ -78,8 +78,8 @@
     <span class="config-list-row-name">{{.Skill.ID}}</span>
     <span class="config-list-row-meta">
       <span class="badge badge-{{.Skill.Origin}}">{{.Skill.Origin}}</span>
-      {{if .Skill.External}}<span class="badge">external</span>{{else}}<span class="muted">{{.Skill.CapabilityRef}}</span>{{end}}
-      <code>{{.Skill.ProposedTool}}</code>
+      {{if .Skill.External}}<span class="badge">external</span>{{else if .Skill.Domain}}<span class="muted">{{.Skill.Domain}}</span>{{end}}
+      <span class="muted">{{len .Skill.SuggestedEndpoints}} endpoints</span>
     </span>
   </a>
 </div>
@@ -96,17 +96,9 @@
   <textarea name="description" rows="2">{{.Skill.Description}}</textarea>
 </label>
 
-<div class="form-row">
-  <label>Role
-    <select name="role">
-      <option value="read"  {{if eq .Skill.Role "read"}}selected{{end}}>read</option>
-      <option value="write" {{if eq .Skill.Role "write"}}selected{{end}}>write</option>
-    </select>
-  </label>
-  <label>Proposed tool
-    <input type="text" name="proposed_tool" value="{{.Skill.ProposedTool}}" placeholder="e.g. orders.create">
-  </label>
-</div>
+<label>Domain
+  <input type="text" name="domain" value="{{.Skill.Domain}}" placeholder="e.g. order processing, user profile">
+</label>
 
 <label>User phrases
   <div class="chip-input"
@@ -115,25 +107,29 @@
        data-value="{{range $i, $p := .Skill.UserPhrases}}{{if $i}},{{end}}{{$p}}{{end}}"></div>
 </label>
 
-<label>Capability
-  <select name="capability"
-          hx-on:change="
-            const isExt = this.value === '__external__';
-            this.form.querySelector('[name=external]').value = isExt ? 'true' : 'false';
-            this.form.querySelector('.external-note-row').style.display = isExt ? '' : 'none';
-          ">
-    {{range .Capabilities}}
-    <option value="{{.Name}}" {{if and (not $.Skill.External) (eq .Name $.Skill.CapabilityRef)}}selected{{end}}>{{.Name}}</option>
-    {{end}}
-    <option value="__external__" {{if .Skill.External}}selected{{end}}>External (no discovered capability)</option>
-  </select>
+<label>External
+  <input type="checkbox" name="external" value="true" {{if .Skill.External}}checked{{end}}
+         hx-on:change="
+           const isExt = this.checked;
+           this.form.querySelector('.external-note-row').style.display = isExt ? '' : 'none';
+           this.form.querySelector('.suggested-endpoints-row').style.display = isExt ? 'none' : '';
+         ">
 </label>
 
-<input type="hidden" name="external" value="{{if .Skill.External}}true{{else}}false{{end}}">
+<div class="suggested-endpoints-row" style="{{if .Skill.External}}display:none{{end}}">
+  <label>Suggested endpoints
+    <select name="suggested_endpoints" multiple size="6">
+      {{range .Endpoints}}
+      <option value="{{.ID}}" {{if skillSuggestsEndpoint $.Skill .ID}}selected{{end}}>{{.ID}} — {{.Method}} {{.Path}}</option>
+      {{end}}
+    </select>
+  </label>
+  <p class="hint">Hold ⌘/Ctrl to toggle multiple endpoints. Per-entry role and "when" annotations aren't edited in this UI yet — leave to direct YAML edit if needed.</p>
+</div>
 
 <div class="external-note-row" style="{{if not .Skill.External}}display:none{{end}}">
   <label>External note
-    <textarea name="external_note" rows="2" placeholder="why this skill has no discovered capability">{{.Skill.ExternalNote}}</textarea>
+    <textarea name="external_note" rows="2" placeholder="why this skill has no discovered endpoint">{{.Skill.ExternalNote}}</textarea>
   </label>
 </div>
 {{end}}
@@ -152,9 +148,9 @@
         {{end}}>
     <fieldset {{if .ReadOnly}}disabled{{end}} style="border:none;padding:0;margin:0;display:contents">
     {{template "skill_form_fields" (dict
-      "VersionID"   .VersionID
-      "Skill"       .Skill
-      "Capabilities" .Capabilities)}}
+      "VersionID" .VersionID
+      "Skill"     .Skill
+      "Endpoints" .Endpoints)}}
     </fieldset>
 
     {{if not .ReadOnly}}
@@ -193,9 +189,9 @@
         hx-swap="beforeend"
         hx-indicator=".config-form-saved">
     {{template "skill_form_fields" (dict
-      "VersionID"   .VersionID
-      "Skill"       .Skill
-      "Capabilities" .Capabilities)}}
+      "VersionID" .VersionID
+      "Skill"     .Skill
+      "Endpoints" .Endpoints)}}
 
     <div class="form-actions">
       <button type="submit" class="btn-primary">Create</button>
@@ -205,40 +201,45 @@
 </div>
 {{end}}
 
-{{define "capability_row"}}
-<a href="/agent_versions/{{.VersionID}}/configure/architecture/capabilities/{{.Cap.Name}}"
-   class="config-list-row {{if and .SelectedID (eq .SelectedID .Cap.Name)}}selected{{end}}">
-  <span class="config-list-row-name">{{.Cap.Name}}</span>
-  <span class="config-list-row-meta"><span class="muted">{{len .Cap.Tools}} tools</span></span>
+{{define "endpoint_row"}}
+<a href="/agent_versions/{{.VersionID}}/configure/architecture/endpoints/{{.Endpoint.ID}}"
+   class="config-list-row {{if and .SelectedID (eq .SelectedID .Endpoint.ID)}}selected{{end}}">
+  <span class="config-list-row-name">{{.Endpoint.ID}}</span>
+  <span class="config-list-row-meta"><span class="muted">{{.Endpoint.Method}} {{.Endpoint.Path}}</span></span>
 </a>
 {{end}}
 
-{{define "capability_detail"}}
+{{define "endpoint_detail"}}
 <div class="config-detail">
-  <h2>{{.Cap.Name}}</h2>
-  <p>{{.Cap.Summary}}</p>
+  <h2>{{.Endpoint.ID}}</h2>
+  <p><code>{{.Endpoint.Method}} {{.Endpoint.Path}}</code></p>
 
   <div class="config-section">
-    <h3>Tools</h3>
-    <table class="data-table">
-      <thead><tr><th>Tool</th><th>Method</th><th>Path</th><th>Auth</th></tr></thead>
-      <tbody>
-        {{range .Cap.Tools}}
-        <tr>
-          <td><code>{{index . "tool"}}</code></td>
-          <td>{{index . "method"}}</td>
-          <td><code>{{index . "path"}}</code></td>
-          <td>{{index . "auth"}}</td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
+    <h3>Request</h3>
+    <dl class="config-meta">
+      <dt>Method</dt> <dd>{{.Endpoint.Method}}</dd>
+      <dt>Path</dt>   <dd><code>{{.Endpoint.Path}}</code></dd>
+      <dt>Auth</dt>   <dd>{{.Endpoint.Auth}}</dd>
+      {{if .Endpoint.Source}}<dt>Source</dt> <dd><code>{{.Endpoint.Source}}</code></dd>{{end}}
+      {{if .Endpoint.Confidence}}<dt>Confidence</dt> <dd>{{.Endpoint.Confidence}}</dd>{{end}}
+    </dl>
   </div>
 
-  {{if .Cap.ProseMD}}
+  <div class="config-section">
+    <h3>Used by skills</h3>
+    {{if .Endpoint.UsedBySkills}}
+      <ul>
+        {{range .Endpoint.UsedBySkills}}<li><a href="../skills/{{.}}">{{.}}</a></li>{{end}}
+      </ul>
+    {{else}}
+      <p class="muted">— (general-purpose tool; not bound to a specific skill)</p>
+    {{end}}
+  </div>
+
+  {{if .Endpoint.ProseMD}}
   <div class="config-section">
     <h3>Documentation (from discovery)</h3>
-    <div class="prose">{{renderMarkdown .VersionID .Cap.ProseMD}}</div>
+    <div class="prose">{{renderMarkdown .VersionID .Endpoint.ProseMD}}</div>
   </div>
   {{end}}
 </div>

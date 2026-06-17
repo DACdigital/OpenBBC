@@ -18,7 +18,7 @@
   </aside>
   <main class="config-detail-pane">
     {{if .SelectedSkill}}
-      {{template "skill_detail" (dict "VersionID" .VersionID "Skill" .SelectedSkill "Capabilities" .Config.Capabilities "ReadOnly" .ReadOnly)}}
+      {{template "skill_detail" (dict "VersionID" .VersionID "Skill" .SelectedSkill "Endpoints" .Config.Endpoints "ReadOnly" .ReadOnly)}}
     {{else}}
       <p class="config-detail-empty">{{if .ReadOnly}}Select a skill on the left to preview.{{else}}Select a skill on the left or click + Add skill.{{end}}</p>
     {{end}}
