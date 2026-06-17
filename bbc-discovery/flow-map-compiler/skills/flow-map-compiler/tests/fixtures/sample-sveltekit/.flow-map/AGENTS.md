@@ -8,7 +8,7 @@ stack:
   framework: sveltekit
   version: "^2.0.0"
   router: filesystem
-  language: ts
+  language: js
 counts:
   skills: 1
   flows: 1
