@@ -1,5 +1,5 @@
 ---
-schema_version: 1
+schema_version: 2
 id: update-profile
 name: Update profile
 description: "Use when the user wants to change their account name or email"
@@ -15,9 +15,8 @@ preconditions:
   - User is signed in (a bearer token is present in client-side storage)
   - The form has at least one changed field
 skills_used:
-  - skill: update-user-record
-    role: write
-    skill_ref: ../skills/update-user-record.md
+  - skill: account
+    skill_ref: ../skills/account.md
 postconditions:
   - The user's profile reflects the submitted values
   - Subsequent reads of the user record return the new values
@@ -26,8 +25,8 @@ related_flows: []
 confidence: high
 workflow: |
   flowchart TD
-    start([start]) --> s_update_user_record[update-user-record]
-    s_update_user_record --> e([end])
+    start([start]) --> s_account[account]
+    s_account --> e([end])
 ---
 
 # Update profile
@@ -44,7 +43,7 @@ The user opens their profile page, edits one or both of name and email, and subm
 
 1. Confirm the user is signed in. If not, ask them to sign in first and stop.
 2. Confirm which field(s) the user wants to change and the new value(s).
-3. Perform [update user record](../skills/update-user-record.md) with the user's id and the changed fields.
+3. Perform [account](../skills/account.md) with the user's id and the changed fields.
 4. On success, summarise what was changed back to the user.
 5. On failure, show the error returned by the tool and offer to retry once.
 
@@ -63,7 +62,7 @@ sequenceDiagram
   participant T as MCP tools
 
   User->>Agent: "change my name"
-  Agent->>T: update user record
+  Agent->>T: account (users.update)
   T-->>Agent: result
   Agent->>User: confirms outcome
 ```
@@ -79,7 +78,7 @@ sequenceDiagram
 
 ## Skills used
 
-- [update user record](../skills/update-user-record.md) — write
+- [account](../skills/account.md)
 
 <!-- HUMAN id="extra" -->
 <!-- /HUMAN -->

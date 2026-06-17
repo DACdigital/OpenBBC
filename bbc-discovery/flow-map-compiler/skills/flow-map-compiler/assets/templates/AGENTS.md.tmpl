@@ -1,5 +1,5 @@
 ---
-schema_version: 1
+schema_version: 2
 generated_by: flow-map-compiler
 generated_at: {{generated_at_iso}}
 generated_from_sha: {{generated_from_sha}}
@@ -12,8 +12,7 @@ stack:
 counts:
   skills: {{counts_skills}}
   flows: {{counts_flows}}
-  capabilities: {{counts_capabilities}}
-  proposed_tools: {{counts_proposed_tools}}
+  endpoints: {{counts_endpoints}}
 freshness:
   last_verified: {{generated_at_iso}}
   staleness_check: weekly
@@ -22,8 +21,7 @@ files:
   glossary: glossary.md
   skills_dir: skills/
   flows_dir: flows/
-  capabilities_dir: capabilities/
-  proposed_tools: tools-proposed.json
+  endpoints_dir: endpoints/
 ---
 
 # {{app_name}} — flow map
@@ -34,15 +32,11 @@ files:
 
 ## Reading order for agents
 
-An *agent skill* below is one navigable file describing a tool the
-agent can invoke — not the same as a Claude Code SKILL.md plugin.
-
 1. Load APP.md once per session.
-2. For "I want to do X" → load `skills/<id>.md` (primary read).
+2. For "I want to do X" → load `skills/<id>.md` (primary read — domain context).
 3. For "what triggered this UI" → load `flows/<id>.md`.
-4. For "how do I implement the MCP server for resource Y" →
-   load `capabilities/<name>.md`.
-5. `glossary.md` is the one-page index, not a primary read.
+4. For "what's the HTTP shape of call Y" → load `endpoints/<id>.md`.
+5. `glossary.md` is the one-page pivot, not a primary read.
 
 ## Overview
 
@@ -53,10 +47,10 @@ flowchart LR
 
 ## Skills
 
-| skill | file | proposed tool |
+| skill | file | suggests N endpoints |
 |---|---|---|
 {{#each skills}}
-| {{this.id}} | [skills/{{this.id}}.md](skills/{{this.id}}.md) | `{{this.proposed_tool}}` |
+| {{this.id}} | [skills/{{this.id}}.md](skills/{{this.id}}.md) | {{this.suggested_count}} |
 {{/each}}
 
 ## Flows
@@ -67,25 +61,20 @@ flowchart LR
 | {{this.id}} | [flows/{{this.id}}.md](flows/{{this.id}}.md) | {{this.summary}} |
 {{/each}}
 
-## Capabilities
+## Endpoints
 
-| name | file | proposed tools |
-|---|---|---|
-{{#each capabilities}}
-| {{this.name}} | [capabilities/{{this.name}}.md](capabilities/{{this.name}}.md) | {{this.tool_count}} |
+| id | method | path | used by skills |
+|---|---|---|---|
+{{#each endpoints}}
+| `{{this.id}}` | {{this.method}} | `{{this.path}}` | {{this.used_by_skills_csv_or_dash}} |
 {{/each}}
 
-## Note on tool names
+## Note on endpoint and tool naming
 
-Tool names referenced anywhere in this wiki are *proposed* — derived
-from frontend call sites. The actual MCP server does not exist yet. See
-[`tools-proposed.json`](tools-proposed.json) for the full machine-readable
-list intended for whoever wires up the MCP server.
-
-Flow files do not name proposed tools at all; they link to skills under
-[`skills/`](skills/). Each skill's `proposed_tool` frontmatter field is
-the indirection layer — when tools are renamed, only those frontmatter
-fields update; flow bodies stay byte-identical.
+Endpoint ids referenced throughout this wiki are **proposed** — derived from
+frontend call sites. They become MCP tool names downstream; the bundle and the
+runtime agent refer to them as *tools*. Inside `.flow-map/`, they are always
+*endpoints*.
 
 ## Unresolved
 

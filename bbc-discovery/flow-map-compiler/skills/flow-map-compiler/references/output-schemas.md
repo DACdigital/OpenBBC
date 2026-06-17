@@ -1,28 +1,30 @@
 # Output schemas
 
-Exact shapes for every file the skill produces. Treat as a contract: the
+Exact shapes for every file the skill produces in v2. Treat as a contract: the
 templates in `assets/templates/` and the lint rules in
 `references/lint-contract.md` enforce these schemas.
+
+Schema version: `2`. v1 layouts (with `capabilities/` and `tools-proposed.json`)
+are no longer produced.
 
 ## `AGENTS.md`
 
 ````markdown
 ---
-schema_version: 1
+schema_version: 2
 generated_by: flow-map-compiler
 generated_at: <ISO8601>
 generated_from_sha: <git-sha>
 app_name: <name>
-stack: { framework: <framework-id>, version: "<v>", router: app|pages|both|none, language: ts|js }
-counts: { skills: <n>, flows: <n>, capabilities: <n>, proposed_tools: <n> }
+stack: { framework: <framework-id>, version: "<v>", router: app|pages|both|none|filesystem|none, language: ts|js }
+counts: { skills: <n>, flows: <n>, endpoints: <n> }
 freshness: { last_verified: <ISO8601>, staleness_check: weekly }
 files:
   app_context: APP.md
   glossary: glossary.md
   skills_dir: skills/
   flows_dir: flows/
-  capabilities_dir: capabilities/
-  proposed_tools: tools-proposed.json
+  endpoints_dir: endpoints/
 ---
 
 # <App name> — flow map
@@ -31,17 +33,11 @@ files:
 
 ## Reading order for agents
 
-An *agent skill* here is a navigable file describing one tool the
-agent can invoke — not the same as a Claude Code SKILL.md plugin.
-
 1. Load APP.md once per session.
-2. For "I want to do X" → load skills/<id>.md (the primary
-   reading unit).
-3. For "what triggered this UI" / behavior questions → load
-   flows/<id>.md.
-4. For "how do I implement the MCP server for resource Y" →
-   load capabilities/<name>.md.
-5. glossary.md is the one-page index, not a primary read.
+2. For "I want to do X" → load `skills/<id>.md` (primary read — domain context).
+3. For "what triggered this UI" / behavior questions → load `flows/<id>.md`.
+4. For "what HTTP call is this and what's its shape" → load `endpoints/<id>.md`.
+5. `glossary.md` is the one-page pivot, not a primary read.
 
 ## Overview
 
@@ -52,7 +48,7 @@ flowchart LR
 
 ## Skills
 
-| skill | file | proposed tool |
+| skill | file | suggests N endpoints |
 |---|---|---|
 
 ## Flows
@@ -60,16 +56,17 @@ flowchart LR
 | id | file | what it does |
 |---|---|---|
 
-## Capabilities
+## Endpoints
 
-| name | file | proposed tools |
-|---|---|---|
+| id | method | path | used by skills |
+|---|---|---|---|
 
-## Note on tool names
+## Note on endpoint and tool naming
 
-Tool names referenced throughout this wiki are *proposed* — derived from
-frontend call sites. The actual MCP server does not exist yet. See
-`tools-proposed.json` for the full machine-readable list.
+Endpoint ids referenced throughout this wiki are **proposed** — derived from
+frontend call sites. They become MCP tool names downstream; the bundle and the
+runtime agent refer to them as *tools*. Inside `.flow-map/`, they are always
+*endpoints*.
 
 ## Unresolved
 
@@ -80,7 +77,7 @@ frontend call sites. The actual MCP server does not exist yet. See
 
 ````markdown
 ---
-schema_version: 1
+schema_version: 2
 framework: { name: <framework-id>, version: "<v>", router: app|pages|both|none }
 api_clients: [<list>]
 api_base_url: { source: env|hardcoded, name: <ENV_VAR>, default: "<url>" }
@@ -118,13 +115,9 @@ providers: [<name>, <scope>]
 
 ## `glossary.md`
 
-A thin one-page pivot table that lists every skill alongside its
-capability and proposed tool. Per-skill body lives in
-`skills/<id>.md`; glossary is the catalog only.
-
 ````markdown
 ---
-schema_version: 1
+schema_version: 2
 ---
 
 # Glossary
@@ -132,9 +125,9 @@ schema_version: 1
 One row per agent skill. For per-skill body (preconditions, examples,
 failure modes), open the skills file linked in the first column.
 
-| Skill | User phrases | Capability | Proposed tool |
+| Skill | User phrases | Suggested endpoints | Flows |
 |---|---|---|---|
-| [<kebab-case-id>](skills/<id>.md) | "<phrase>", "<phrase>" | [<name>#<anchor>](capabilities/<name>.md#<anchor>) | `<tool.name>` |
+| [<kebab-case-id>](skills/<id>.md) | "<phrase>", "<phrase>" | [`<endpoint.id>`](endpoints/<endpoint-id>.md), ... | [<flow-id>](flows/<flow-id>.md), ... |
 
 <!-- HUMAN id="glossary-additions" -->
 <!-- /HUMAN -->
@@ -142,30 +135,25 @@ failure modes), open the skills file linked in the first column.
 
 ## `skills/<id>.md`
 
-Skills are the **primary reading unit for the runtime agent**. Each
-file describes one tool the agent can invoke: when to reach for it,
-its trigger phrases, the capability it executes, and which flows
-surface it. The frontmatter `proposed_tool` field is the indirection
-layer — when the MCP server lands and tools get renamed, only this
-field changes; flow files stay byte-identical because flows link to
-`skills/<id>.md`, not to the tool name.
-
-> Note: an *agent skill* (this file) is not the same as a Claude
-> Code SKILL.md plugin. Different concept, same word. Context
-> disambiguates inside generated content.
+A v2 skill is a **business-domain specialty** of the agent — coarser than a
+single backend endpoint. Each skill suggests a set of endpoints (advisory; aikdm
+makes the final decision on tool wiring downstream). The runtime agent loads
+this file via the `Skill` meta-tool when its current intent matches the domain.
 
 ````markdown
 ---
-schema_version: 1
-id: <kebab-case>                            # e.g. write-user-profile
-name: <human-readable>                      # "Update user profile"
+schema_version: 2
+id: <kebab-case>                          # e.g. shopping
+name: <human-readable>                    # "Shopping"
+domain: "<one-line domain summary>"
 description: "Use when <trigger condition>"
 user_phrases:
   - "<verbatim phrase a user might say>"
   - "..."
-role: load|read|write|side-effect
-capability_ref: capabilities/<name>.md#<anchor>
-proposed_tool: <tool.name>
+suggested_endpoints:
+  - endpoint: <endpoint-id>               # e.g. products.list
+    role: read|write|side-effect
+    when: "<one-line trigger>"
 flows_using_this: [<flow-id>, ...]
 confidence: high|medium|low
 ---
@@ -173,46 +161,54 @@ confidence: high|medium|low
 # <Skill name>
 
 <!-- AGENT id="overview" -->
-<2–3 sentences: what this skill does for the agent>
+<2–3 sentences: what business domain this skill owns and when the agent reaches for it>
 <!-- /AGENT -->
 
 ## When to use
 
-<trigger phrases + plain-language description of the situation
-that should make the agent reach for this skill>
+<trigger phrases + plain-language description of the situation that should make
+the agent load this skill>
 
-## Preconditions
+## Domain vocabulary
 
-1. <numbered list — system state that must be true before invoking>
+<2–6 bullets defining domain concepts the agent must understand to choose
+between the suggested endpoints — e.g. for `shopping`: "order is owned by one
+user", "cart is local-only until placed", etc.>
 
-## Flows that surface this skill
+## Endpoint selection guide
 
-- [<flow-id>](../flows/<flow-id>.md) — <one-line context>
+<paragraph or numbered list mapping user intent to a specific suggested
+endpoint. Endpoint ids appear as inline-code references; never include HTTP
+detail (method, path, params). For full detail, link to `endpoints/<id>.md`.>
 
 ## Failure modes
 
 | Result | Meaning | What to do |
 |---|---|---|
 
-## Examples
+## Flows that surface this skill
 
-<2–3 worked invocations: user phrase → expected tool-call shape.
-The tool name appears here as a *proposed* name; do not commit to
-the exact arguments until the MCP server is live.>
+- [<flow-id>](../flows/<flow-id>.md) — <one-line context>
 
 <!-- HUMAN id="notes" -->
 <!-- /HUMAN -->
 ````
 
+Hard constraints carried by the schema:
+
+- **No HTTP detail in skill files.** Method, path, params live only in `endpoints/<id>.md`.
+- **The runtime word `tool` never appears in skill files** (prose or frontmatter).
+- **`suggested_endpoints[]` is advisory** — aikdm may add, drop, or re-annotate when wiring tools downstream.
+
 ## `flows/<id>.md`
 
-Flow files are tool-name-free. They reference **skills** by id. The
-skill's `proposed_tool` frontmatter field is the indirection — when
-tools get renamed, flows do not change.
+Flow files are endpoint-reference-free. They reference **skills** by id. The
+skill's `suggested_endpoints[]` frontmatter field is the indirection layer —
+when endpoint ids change, flows do not change.
 
 ````markdown
 ---
-schema_version: 1
+schema_version: 2
 id: <kebab-case>
 name: <human-readable>
 description: "Use when <trigger condition>"
@@ -226,7 +222,6 @@ preconditions:
   - <numbered system state requirement>
 skills_used:
   - skill: <kebab-case-skill-id>
-    role: load|read|write|side-effect
     skill_ref: ../skills/<skill-id>.md
 postconditions:
   - <what's true after>
@@ -279,8 +274,7 @@ sequenceDiagram
 |---|---|---|
 
 ## Skills used
-<bullet list of skill ids, each linking to
- skills/<id>.md>
+- [<label>](skills/<id>.md)
 
 <!-- HUMAN id="extra" -->
 <!-- /HUMAN -->
@@ -328,101 +322,55 @@ flowchart TD
   s_<a> --> s_<b> --> s_<c>
 ```
 
-## `capabilities/<name>.md`
+## `endpoints/<id>.md`
+
+The complete inventory of backend HTTP calls discovered in the source repo. One
+file per `(method, path)`. May be referenced by skills via `suggested_endpoints[]`
+or may stand alone (`used_by_skills: []`).
 
 ````markdown
 ---
-schema_version: 1
-capability: <name>
-summary: "<one sentence>"
-tools:
-  - tool: <tool.name>
-    proposed: true
-    does: "<one-line semantic description>"
-    method: GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS
-    path: "<path with {params}>"
-    auth: bearer|cookie|none
-    confidence: high|medium|low
-    source: <relative source file>:<line>
-flows_using_this: [<flow-id>, ...]
+schema_version: 2
+id: <endpoint-id>                          # e.g. products.list (dotted-lower-camel, stable across regenerations)
+proposed: true                             # always true; v2 never emits proposed: false
+method: GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS
+path: "<path with {params}>"
+path_params: [{ name: <p>, type: <t>, required: true|false }, ...]
+query_params: [{ name: <q>, type: <t>, required: true|false }, ...]
+body_shape: <typed shape or null>
+response_shape: <typed shape or "unknown">
+auth: bearer|cookie|none
+source: <relative source file>:<line>
+used_by_skills: [<skill-id>, ...]          # may be empty
+confidence: high|medium|low
+openapi_operation_id: <string or null>
 ---
 
-# <Capability name>
+# <endpoint-id>
 
 <!-- AGENT id="overview" -->
-<what this resource represents in the domain; constraints and invariants>
+<1–2 sentences: what this endpoint does in business terms>
 <!-- /AGENT -->
 
-## Concepts the agent must know
-<bullets>
-
-## When to reach for which tool
-
-- "<user intent phrase>" → `<tool.name>`
-
----
-
-## <tool.name>  {#<anchor>}
-
-**Proposed tool name:** `<tool.name>` (proposed — no MCP server yet)
+## Request
 **HTTP:** `METHOD /path/with/{params}`
 **Auth:** bearer|cookie|none
-**Confidence:** high|medium|low
-**Source:** `<file>:<line>`
-
 **Path params:** <list or none>
 **Query params:** <list or none>
-**Body shape:** <typed shape or `unknown`>
+**Body shape:** <typed shape or `null`>
+
+## Response
 **Response shape:** <typed shape or `unknown`>
 
-**When to call it:** <2–3 user intent phrases>
-
-**Used by flows:** <links to flow files>
-
----
-
-## Things this capability cannot do
-<bullets>
+## Notes
+<2–4 sentences: observed call sites, sample call, edge cases, common failure modes>
 
 <!-- HUMAN id="notes" -->
 <!-- /HUMAN -->
 ````
 
-## `tools-proposed.json`
+Hard constraints:
 
-````json
-{
-  "schema_version": 1,
-  "generated_by": "flow-map-compiler",
-  "generated_at": "<ISO8601>",
-  "generated_from_sha": "<git-sha>",
-  "naming_convention": "dotted-lower-camel",
-  "tools": [
-    {
-      "proposed_name": "users.update",
-      "method": "PATCH",
-      "path": "/api/users/{id}",
-      "path_params": [{ "name": "id", "type": "string", "required": true }],
-      "query_params": [],
-      "body_shape": { "name": "string", "email": "string" },
-      "response_shape": "User",
-      "auth": "bearer",
-      "capability_file": "capabilities/users.md",
-      "anchor": "users-update",
-      "source": [
-        { "file": "lib/api/users.ts", "line": 17 }
-      ],
-      "used_by_flows": ["update-profile"],
-      "confidence": "high",
-      "openapi_operation_id": "updateUser"
-    }
-  ],
-  "unresolved": [
-    {
-      "where": "components/Search.tsx:88",
-      "snippet": "fetch(`/api/search?q=${query}&type=${type}`)",
-      "reason": "type variable not statically resolvable"
-    }
-  ]
-}
-````
+- **`endpoints/` is the complete inventory.** Every discovered backend call appears here whether or not a skill suggests it.
+- **`used_by_skills: []` is valid.** Endpoint-only entries are still callable by the runtime agent directly.
+- **No `tool:` field anywhere in `.flow-map/`.** The endpoint id is the canonical reference; downstream calls it a tool.

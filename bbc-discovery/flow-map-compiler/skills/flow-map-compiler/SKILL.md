@@ -65,32 +65,23 @@ skill.
 <repo>/.flow-map/
 ├── AGENTS.md                 # entry point + retrieval indices
 ├── APP.md                    # app-wide invariants, conventions, boundaries
-├── glossary.md               # one-page pivot table (skill → capability → tool)
-├── skills/<id>.md            # one per agent skill — primary read for runtime agent
-├── flows/<id>.md             # one playbook per user journey (intent, no HTTP)
-├── capabilities/<name>.md    # one per resource group (HTTP detail lives here)
-└── tools-proposed.json       # machine-readable handoff for MCP-server author
+├── glossary.md               # one-page pivot table (skill → user phrases → endpoints → flows)
+├── skills/<id>.md            # one per business-domain specialty — primary read for runtime agent
+├── flows/<id>.md             # one playbook per user journey (intent, no HTTP detail)
+└── endpoints/<id>.md         # one per discovered backend call — HTTP detail lives here
 ```
 
-> "Agent skill" here means one file describing one tool the runtime
-> agent can invoke — not the same as the parent Claude Code SKILL.md
-> plugin. Same word, different concept. In docs and conversation
-> referring to both, prefer "agent skill" for the output artifact and
-> "this skill" / "the flow-map-compiler skill" for the producer plugin.
-
-Schema version: `1`. Every generated file's frontmatter (and
-`tools-proposed.json`) carries `schema_version: 1`. Tool names are
-*proposed* — derived from frontend call sites, never validated against any
-external registry. Every tool reference carries `proposed: true`.
+Schema version: `2`. Every generated file's frontmatter carries `schema_version: 2`.
+Endpoint ids are *proposed* — derived from frontend call sites, never validated
+against any external registry. Every endpoint entry carries `proposed: true`.
 
 ## Reading order
 
 When invoked, work through these in order:
 
 1. **`references/output-schemas.md`** — exact schemas for all generated
-   files (AGENTS.md, APP.md, glossary, flow, capability, tools-proposed.json).
-   Treat as a contract.
-2. **`references/lint-contract.md`** — the 16 rules. In this version
+   files (AGENTS.md, APP.md, glossary, flow, skill, endpoint). Treat as a contract.
+2. **`references/lint-contract.md`** — the 15 rules. In this version
    there is no `lint.mjs`; you walk these rules yourself before declaring
    the run done. Output that fails any rule must not ship.
 3. **`assets/templates/*.tmpl`** — the structural skeletons you fill.
@@ -105,35 +96,34 @@ When invoked, work through these in order:
 These do not change without explicit user approval. If something feels
 wrong, stop and ask.
 
-- **Flows are tool-name-free.** Flow files refer to **skills** by id
-  (kebab-case verb-noun, e.g. `write-user-profile`) and link to
-  `skills/<id>.md`. They never name a proposed MCP tool, never show
-  HTTP method or URL path. Each skill's `proposed_tool` frontmatter
-  field is the indirection layer — when the MCP server lands and tools
-  get renamed, only those frontmatter fields update; flow files don't
-  churn.
-- **No HTTP detail in flow files.** No `GET `, `POST `, `fetch(`,
-  `axios.`, or `/api/` paths in `flows/*.md`.
-- **Capabilities own HTTP detail and proposed tool names.** Each
-  capability subsection has method, path, params, response shape, auth,
-  source coordinates, and the proposed tool name. Proposed names appear
-  *only* in capability files, skill frontmatter (`proposed_tool`),
-  glossary rows, and `tools-proposed.json` — never in flow bodies.
-- **One skill = one intent = one capability tool.** Do not bundle
-  unrelated tools into a single skill (mega-skill anti-pattern). If
-  two flows surface the same skill, they both link to the same
-  `skills/<id>.md`.
-- **`tools-proposed.json` is a separate handoff artifact.** Not loaded into
-  the runtime agent's context. Bidirectionally consistent with capability
-  frontmatter (lint rule 14).
-- **`<!-- HUMAN id="..." -->` blocks survive regeneration verbatim.**
-  `<!-- AGENT id="..." -->` blocks are regenerated. Anything outside any
-  block is structural and always regenerated.
-- **Output confined to `.flow-map/`**. The skill never modifies a source
-  file in the target repo.
+- **One skill = one business domain.** A skill aggregates endpoints that
+  share a domain vocabulary and invariants — e.g. `shopping` (catalog
+  reads + order writes) or `account` (user profile reads + writes). Do
+  not produce a skill per endpoint (the v1 anti-pattern). If a domain
+  has only one endpoint, the skill still exists at the domain level.
+- **No HTTP detail outside `endpoints/`.** Method, path, params,
+  response shape, auth, source — only in endpoint frontmatter. Skill
+  and flow files never carry HTTP detail.
+- **The runtime word "tool" must not appear inside `.flow-map/`.**
+  Endpoint frontmatter uses `endpoint`/`endpoint-id`, skills use
+  `suggested_endpoints`, flows reference skills. Downstream (aikdm,
+  bundle, runtime agent) calls these things tools — that mapping is
+  intentional and happens outside the discovery layer.
+- **Endpoints are the complete inventory.** Every backend call surfaced
+  by call-site discovery is emitted as `endpoints/<id>.md`, even when
+  no skill suggests it. `used_by_skills[]` may be `[]`.
+- **`suggested_endpoints[]` is advisory.** Discovery proposes which
+  endpoints belong to a domain; aikdm may add, drop, or re-annotate
+  when wiring tools downstream. Discovery is a proposer, not the final
+  authority.
+- **`<!-- HUMAN id="..." -->` blocks survive regeneration verbatim** on
+  flows, skills, and endpoints. `<!-- AGENT id="..." -->` blocks are
+  regenerated. Material outside any block is structural.
+- **Output confined to `.flow-map/`**. The skill never modifies source
+  files outside that directory.
 - **Anti-goals:** never generate MCP server code, runtime agent prompts,
-  or call any registry API. Never run target-repo code (no `npm run dev`,
-  no tests). Never assume an MCP server exists.
+  or call any registry API. Never run target-repo code (no
+  `npm run dev`, no tests). Never assume an MCP server exists.
 
 ## How to run (you, the agent)
 
@@ -210,46 +200,58 @@ with a one-line reason.
 
 ### 3. Resolve & group
 
-- Deduplicate the call-site list by `(method, path)`.
+- Deduplicate the call-site list by `(method, path)`. Assign each unique
+  call site an endpoint id (`<resource>.<verb>` dotted-lower-camel — see
+  step 4 for naming).
 - Group call sites by entry file → one **flow** per entry. Filter out
   entries with zero calls.
-- For each unique endpoint, group by first path segment (or by OpenAPI
-  tag if a spec exists) → one **capability** per group. Pick a stable
-  short name (e.g. `users`, `orders`, `auth`).
+- **Cluster endpoints into business-domain skills.** This is the v2 job
+  the LLM (you) must do. Group endpoints into the smallest set of
+  business-domain skills such that:
+    - Endpoints in one skill share domain vocabulary and invariants.
+    - A skill's `suggested_endpoints[]` is small enough (typically 1–6)
+      to fit a focused domain prompt.
+    - Single-endpoint domains are fine when a domain genuinely has one
+      action (e.g. a public health-check `ping`).
+    - Resource-shaped clustering (one domain per backend resource) is a
+      reasonable default but not required. Two resources that always
+      appear together (e.g. `cart` + `orders` in a checkout-focused app)
+      may be one skill.
 - Compute the unresolved rate. **If it exceeds 25 %, stop and report.**
   Do not proceed to render.
 
-### 4. Propose tools
+### 4. Propose endpoint ids
 
 - Default naming convention is `<resource>.<verb>` dotted-lower-camel
   (e.g. `users.update`). On first run for a given repo, check whether
-  the user has an existing convention or tool registry — if so, ask
-  before generating.
-- Generate one unique `proposed_name` per `(method, path)`.
+  the user has an existing convention — if so, ask before generating.
+- Generate one unique endpoint id per `(method, path)`.
 - Mark every entry `proposed: true`. The skill must never emit
-  `proposed: false`.
+  `proposed: false`. Downstream consumers (aikdm) decide if an endpoint
+  becomes a wired MCP tool; discovery only proposes the id.
 
 ### 5. Render
 
 Read each template under `assets/templates/` and produce the
 corresponding wiki file. Write under `<repo>/.flow-map/`:
 
-- `AGENTS.md` — index, retrieval table, mermaid overview, Skills
-  table, Flows table, Capabilities table. Frontmatter includes
+- `AGENTS.md` — index, retrieval table, mermaid overview, Skills,
+  Flows, and Endpoints tables. Frontmatter includes
   `generated_from_sha` (current HEAD).
 - `APP.md` — stack, invariants, auth model, conventions, boundaries.
 - `glossary.md` — thin one-page pivot: skill → user phrases →
-  capability anchor → proposed tool. Each row links to the
-  per-skill body in `skills/<id>.md`.
-- `skills/<id>.md` — one per agent skill. Frontmatter carries the
-  `proposed_tool` (the indirection layer). Body sections: When to
-  use, Preconditions, Flows that surface this skill, Failure modes,
-  Examples.
-- `flows/<id>.md` — one per user journey. Tool-name-free. Steps
-  reference skills as markdown links to `skills/<id>.md`.
-- `capabilities/<name>.md` — one per capability group. HTTP detail,
-  proposed tool name, source coordinates per tool subsection.
-- `tools-proposed.json` — bidirectional with capability frontmatter.
+  suggested endpoints → flows that surface this skill.
+- `skills/<id>.md` — one per business-domain specialty. Frontmatter
+  carries `suggested_endpoints[]` (advisory). Body sections: When to
+  use, Domain vocabulary, Endpoint selection guide, Failure modes,
+  Flows that surface this skill.
+- `flows/<id>.md` — one per user journey. Tool-name-free, HTTP-free.
+  Steps reference skills as markdown links to `skills/<id>.md`.
+  `skills_used[]` entries carry only `skill:` and `skill_ref:` (no role).
+- `endpoints/<id>.md` — one per discovered backend call. Frontmatter
+  carries `proposed: true`, method, path, params, response shape, auth,
+  source coordinates, `used_by_skills[]`. Body: 1–2-sentence overview,
+  request/response detail, notes.
 
 **Deriving the `workflow:` field on each flow:** read the entry file
 plus its near transitive imports for control-flow signal. Translate
@@ -294,27 +296,26 @@ will check that every skill node's label is a declared
 `skills_used[].skill`.
 
 Match `references/output-schemas.md` exactly: every required
-frontmatter key, every section heading, every block marker. Tool names
-never appear in flow bodies or frontmatter; flows link to
-`skills/<id>.md`; skills carry `capability_ref` to a capability anchor.
+frontmatter key, every section heading, every block marker. Endpoint
+ids never appear in flow bodies and never carry HTTP detail outside
+`endpoints/*.md`. Skills carry `suggested_endpoints[]` (advisory)
+referencing endpoint ids; flows reference skills.
 
 ### 6. Self-check
 
 Walk every rule in `references/lint-contract.md` against the rendered
-output. All 16 must pass. The most common slips:
+output. All 15 must pass. The most common slips:
 
 - Rule 5 — flow `description` must start with `Use when`.
 - Rule 9 — no HTTP methods, `fetch(`, `axios.`, or `/api/` strings in
-  flow bodies.
-- Rule 13 — every `skills/<id>.md` link from a flow must resolve;
-  every `capability_ref` anchor from a skill must exist in the
-  linked capability file.
-- Rule 14 — `tools-proposed.json` and capability `tools:` frontmatter
-  must enumerate the same set of tool names.
-- Rule 15 — every `proposed: true` flag is present where required.
-- Rule 16 — every skill's `proposed_tool` matches a tool in its
-  referenced capability, and `flows_using_this:` round-trips between
-  skill and capability.
+  flow or skill bodies. HTTP detail lives only in `endpoints/`.
+- Rule 13 — every skill link from a flow must resolve; every endpoint
+  id from a skill's `suggested_endpoints[]` must resolve to a file in
+  `endpoints/`.
+- Rule 14 — `suggested_endpoints[]` and endpoints' `used_by_skills[]`
+  must round-trip in both directions.
+- Rule 15 — every flow's `workflow:` mermaid block must reference only
+  skill ids declared in that flow's `skills_used[]`.
 
 If any rule fails, fix the offending file (or fix the upstream
 recon/trace data and re-render). Do not ship a lint-failing wiki.
@@ -349,8 +350,8 @@ This version of the skill is intentionally minimal:
   source has not changed since `AGENTS.md`'s `generated_from_sha`,
   prefer to skip the run rather than churn prose.
 - **No targeted regen flags.** `--only flow:<id>`, `--only
-  capability:<name>`, `--only changed` are not supported in this
-  version. If asked to refresh just one flow or capability, do it by
+  endpoint:<id>`, `--only changed` are not supported in this
+  version. If asked to refresh just one flow or endpoint, do it by
   reading and rewriting that file alone, applying the same procedure to
   the affected subset.
 
@@ -361,12 +362,12 @@ script can be reintroduced in a later revision.
 
 Three reference fixtures ship with the skill:
 
-- `tests/fixtures/sample-nextjs/` — Next.js App Router. `update-profile`
-  flow, `users` capability.
-- `tests/fixtures/sample-react/` — Vite + react-router. Same flow and
-  capability as nextjs (proves the wiki is framework-invariant).
-- `tests/fixtures/sample-sveltekit/` — SvelteKit. Single `home` flow
-  hitting `/api/ping`.
+- `tests/fixtures/sample-nextjs/` — Next.js App Router. One `update-profile`
+  flow, one `account` domain skill, one endpoint backing the profile write.
+- `tests/fixtures/sample-react/` — Vite + react-router. Same flow/skill/endpoint
+  shape as nextjs (proves the wiki is framework-invariant).
+- `tests/fixtures/sample-sveltekit/` — SvelteKit. Single home flow, one `health`
+  domain skill, one `ping`-style endpoint.
 
 Each fixture carries a hand-curated `.flow-map/` directory as the
 canonical reference output.
@@ -377,10 +378,9 @@ To verify the skill end-to-end on a fixture:
    `.flow-map.gold/`).
 2. Run the procedure above against the fixture from scratch.
 3. Diff the regenerated `.flow-map/` against `.flow-map.gold/`. Schema,
-   frontmatter keys, file IDs, skill ids, capability names, and
-   proposed tool names should match. Prose may differ — that is
-   acceptable.
-4. Walk the lint contract; all 16 rules must pass.
+   frontmatter keys, file IDs, skill ids, endpoint ids, and domain skill
+   names should match. Prose may differ — that is acceptable.
+4. Walk the lint contract; all 15 rules must pass.
 5. Restore the canonical directory.
 
 For HUMAN-block preservation, insert a hand-edited

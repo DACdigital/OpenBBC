@@ -1,0 +1,41 @@
+---
+schema_version: 2
+id: {{id}}
+proposed: true
+method: {{method}}
+path: "{{path}}"
+path_params: [{{path_params_inline_json_or_empty}}]
+query_params: [{{query_params_inline_json_or_empty}}]
+body_shape: {{body_shape_inline_or_null}}
+response_shape: {{response_shape_inline_or_unknown}}
+auth: {{auth}}
+source: {{source_file_line}}
+used_by_skills: [{{used_by_skills_csv}}]
+confidence: {{confidence}}
+openapi_operation_id: {{openapi_operation_id_or_null}}
+---
+
+# {{id}}
+
+<!-- AGENT id="overview" -->
+{{overview_1_to_2_sentences}}
+<!-- /AGENT -->
+
+## Request
+
+**HTTP:** `{{method}} {{path}}`
+**Auth:** {{auth}}
+**Path params:** {{path_params_human_or_none}}
+**Query params:** {{query_params_human_or_none}}
+**Body shape:** {{body_shape_human_or_none}}
+
+## Response
+
+**Response shape:** {{response_shape_human_or_unknown}}
+
+## Notes
+
+{{notes_2_to_4_sentences}}
+
+<!-- HUMAN id="notes" -->
+<!-- /HUMAN -->

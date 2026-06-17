@@ -1,5 +1,5 @@
 ---
-schema_version: 1
+schema_version: 2
 id: view-home
 name: View Home
 description: "Use when this flow's preconditions hold (TODO: refine wording)."
@@ -12,9 +12,8 @@ trigger: TODO
 preconditions:
   - TODO: precondition
 skills_used:
-  - skill: list-ping
-    role: read
-    skill_ref: ../skills/list-ping.md
+  - skill: health
+    skill_ref: ../skills/health.md
 postconditions:
   - TODO: postcondition
 side_effects: []
@@ -22,7 +21,7 @@ related_flows: []
 confidence: medium
 workflow: |
   flowchart TD
-    start([start]) --> s_list_ping[list-ping] --> e([end])
+    start([start]) --> s_health[health] --> e([end])
 ---
 
 # View Home
@@ -37,7 +36,7 @@ TODO: 2-4 sentence summary of this flow's purpose, agent behaviour, and any idem
 
 ## How the agent handles this
 
-1. Perform [list ping](../skills/list-ping.md).
+1. Perform [health](../skills/health.md).
 
 ## Decision points
 
@@ -52,7 +51,7 @@ sequenceDiagram
   participant T as MCP tools
 
   User->>Agent: "TODO: phrase 1"
-  Agent->>T: list ping
+  Agent->>T: health
   T-->>Agent: result
   Agent->>User: confirms outcome
 ```
@@ -66,7 +65,7 @@ sequenceDiagram
 
 ## Skills used
 
-- [list ping](../skills/list-ping.md) — read
+- [health](../skills/health.md)
 
 <!-- HUMAN id="extra" -->
 <!-- /HUMAN -->

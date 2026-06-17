@@ -1,5 +1,5 @@
 ---
-schema_version: 1
+schema_version: 2
 id: {{id}}
 name: {{name}}
 description: "Use when {{trigger_condition}}"
@@ -17,7 +17,6 @@ preconditions:
 skills_used:
 {{#each skills_used}}
   - skill: {{this.skill}}
-    role: {{this.role}}
     skill_ref: {{this.skill_ref}}
 {{/each}}
 postconditions:
@@ -75,7 +74,7 @@ sequenceDiagram
 ## Skills used
 
 {{#each skills_used}}
-- [{{this.label}}]({{this.skill_ref}}) — {{this.role}}
+- [{{this.label}}]({{this.skill_ref}})
 {{/each}}
 
 <!-- HUMAN id="extra" -->
