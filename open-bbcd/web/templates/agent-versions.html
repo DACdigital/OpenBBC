@@ -1,37 +1,46 @@
 {{define "content"}}
 <a href="/agents/ui" class="wizard-back">← Back to Agents</a>
 
-<section class="agent-header-card">
-  <header class="agent-header-top">
-    <h1>{{.Name}}</h1>
-    <div class="agent-header-actions">
-      {{if .DiscoveryFilePath}}
-        <a href="/agents/{{.AgentID}}/discovery"
-           class="btn-secondary">Download discovery</a>
-      {{end}}
+<div class="page-header">
+  <h1>{{.Name}}</h1>
+  <div class="page-header-actions">
+    {{if .DiscoveryFilePath}}
+      <a href="/agents/{{.AgentID}}/discovery" class="btn-secondary">Download discovery</a>
+    {{end}}
+    {{if .CurrentDeployedVersionID}}
+      <button class="btn-secondary btn-danger"
+              hx-get="/agents/{{.AgentID}}/undeploy/confirm"
+              hx-target="body" hx-swap="beforeend">Undeploy</button>
+    {{end}}
+  </div>
+</div>
+
+{{if .Description}}
+<p class="agent-subtitle">{{.Description}}</p>
+{{end}}
+
+<dl class="agent-meta">
+  <div class="agent-meta-item">
+    <dt>Created</dt>
+    <dd>{{.CreatedAt.Format "Jan 2, 2006"}}</dd>
+  </div>
+  {{if .DiscoveryFilePath}}
+  <div class="agent-meta-item">
+    <dt>Discovery file</dt>
+    <dd><code>{{.DiscoveryFilePath}}</code></dd>
+  </div>
+  {{end}}
+  <div class="agent-meta-item">
+    <dt>Currently deployed</dt>
+    <dd>
       {{if .CurrentDeployedVersionID}}
-        <button class="btn-secondary btn-danger"
-                hx-get="/agents/{{.AgentID}}/undeploy/confirm"
-                hx-target="body" hx-swap="beforeend">Undeploy</button>
+        <a href="/agent_versions/{{.CurrentDeployedVersionID}}/configure">v{{.CurrentDeployedVersionNum}}</a>
+      {{else}}
+        —
       {{end}}
-    </div>
-  </header>
-  {{if .Description}}<p class="agent-header-desc">{{.Description}}</p>{{end}}
-  <dl class="agent-header-meta">
-    <div><dt>Created</dt><dd>{{.CreatedAt.Format "Jan 2, 2006"}}</dd></div>
-    {{if .DiscoveryFilePath}}<div><dt>Discovery file</dt><dd><code>{{.DiscoveryFilePath}}</code></dd></div>{{end}}
-    <div>
-      <dt>Currently deployed</dt>
-      <dd>
-        {{if .CurrentDeployedVersionID}}
-          <a href="/agent_versions/{{.CurrentDeployedVersionID}}/configure">v{{.CurrentDeployedVersionNum}}</a>
-        {{else}}
-          —
-        {{end}}
-      </dd>
-    </div>
-  </dl>
-</section>
+    </dd>
+  </div>
+</dl>
 
 <h2 class="section-title">Versions</h2>
 <table class="data-table">

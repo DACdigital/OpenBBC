@@ -190,7 +190,7 @@ func TestUIHandler_AgentDetail_RealTemplateRenders(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	for _, want := range []string{"agent-header-card", "Bot", "Desc", "bot.zip", `v1`} {
+	for _, want := range []string{"agent-meta", "Bot", "Desc", "bot.zip", `v1`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("real template missing %q", want)
 		}
