@@ -113,14 +113,15 @@ var proseRelLink = regexp.MustCompile(`\.\./(skills|capabilities|flows)/([^)\s]+
 // renderMarkdown converts a prose markdown blob (from the discovery
 // skill) to HTML. Relative links into the .flow-map directory layout
 // are rewritten to the configurator routes (scoped by version_id) so
-// they actually navigate. Trusted input — prose is generated, not
+// they actually navigate. Flows / skills / capabilities live under the
+// Architecture primary tab. Trusted input — prose is generated, not
 // user-typed.
 func renderMarkdown(versionID, md string) template.HTML {
 	if md == "" {
 		return ""
 	}
 	if versionID != "" {
-		base := "/agent_versions/" + versionID + "/configure/"
+		base := "/agent_versions/" + versionID + "/configure/architecture/"
 		md = proseRelLink.ReplaceAllString(md, base+"$1/$2")
 	}
 	var buf bytes.Buffer
@@ -138,7 +139,8 @@ type configPageData struct {
 	AgentStatus       string // version's status (lives on AgentVersion now)
 	ReadOnly          bool   // true for non-INITIALIZING versions (DRAFT, TRAINING, READY, DEPLOYED)
 	HasBundle         bool   // true when this version has a generated bundle (Run is enabled)
-	Tab               string // "flows" | "skills" | "capabilities" | "inputs"
+	Tab               string // primary tab: "inputs" | "architecture" | "prompts" | "finalize"
+	SubTab            string // architecture sub-tab: "flows" | "skills" | "capabilities" (empty for other primary tabs)
 	Config            types.FlowMapConfig
 	ParseError        string
 	DiscoveryFilePath string
@@ -234,9 +236,10 @@ func (h *ConfiguratorHandler) buildWizardFieldViews(cfg types.FlowMapConfig, dis
 	return out
 }
 
-// Index redirects /agents/{id}/configure to the default Flows tab content.
+// Index redirects /configure to the default Architecture > Flows sub-tab.
 func (h *ConfiguratorHandler) Index(w http.ResponseWriter, r *http.Request) {
-	h.Flows(w, r)
+	versionID := r.PathValue("version_id")
+	http.Redirect(w, r, "/agent_versions/"+versionID+"/configure/architecture/flows", http.StatusFound)
 }
 
 func (h *ConfiguratorHandler) Flows(w http.ResponseWriter, r *http.Request) {
@@ -249,7 +252,8 @@ func (h *ConfiguratorHandler) Flows(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	data.Tab = "flows"
+	data.Tab = "architecture"
+	data.SubTab = "flows"
 	if flowID := r.PathValue("flowId"); flowID != "" {
 		for i := range data.Config.Flows {
 			if data.Config.Flows[i].ID == flowID {
@@ -275,7 +279,8 @@ func (h *ConfiguratorHandler) Skills(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	data.Tab = "skills"
+	data.Tab = "architecture"
+	data.SubTab = "skills"
 	if skillID := r.PathValue("skillId"); skillID != "" {
 		for i := range data.Config.Skills {
 			if data.Config.Skills[i].ID == skillID {
@@ -301,7 +306,8 @@ func (h *ConfiguratorHandler) Capabilities(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	data.Tab = "capabilities"
+	data.Tab = "architecture"
+	data.SubTab = "capabilities"
 	if capName := r.PathValue("capName"); capName != "" {
 		for i := range data.Config.Capabilities {
 			if data.Config.Capabilities[i].Name == capName {
@@ -971,5 +977,24 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 		"VersionID":    versionID,
 		"Skill":        *cur,
 		"Capabilities": cfg.Capabilities,
+	})
+}
+
+// RegisterConfiguratorRedirects mounts 301s for the pre-redesign tab URLs.
+// Bookmarks against /configure/{flows,skills,capabilities} survive; the bare
+// /configure/architecture path lands on the default Flows sub-tab.
+func RegisterConfiguratorRedirects(mux *http.ServeMux) {
+	for _, sub := range []string{"flows", "skills", "capabilities"} {
+		sub := sub
+		mux.HandleFunc("GET /agent_versions/{version_id}/configure/"+sub, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r,
+				"/agent_versions/"+r.PathValue("version_id")+"/configure/architecture/"+sub,
+				http.StatusMovedPermanently)
+		})
+	}
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r,
+			"/agent_versions/"+r.PathValue("version_id")+"/configure/architecture/flows",
+			http.StatusMovedPermanently)
 	})
 }

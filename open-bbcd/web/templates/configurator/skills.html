@@ -11,7 +11,7 @@
     </div>
     {{if not .ReadOnly}}
     <button class="skill-add-trigger"
-            hx-get="/agent_versions/{{.VersionID}}/configure/skills/new"
+            hx-get="/agent_versions/{{.VersionID}}/configure/architecture/skills/new"
             hx-target=".config-detail-pane"
             hx-swap="innerHTML">+ Add skill</button>
     {{end}}

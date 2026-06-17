@@ -518,7 +518,7 @@
     async function doSave() {
       const next = currentWorkflow();
       const mermaid = OpenBBCFlow.serializeMermaid(next);
-      const url = `/agent_versions/${root.dataset.versionId}/configure/flows/${root.dataset.flowId}/workflow`;
+      const url = `/agent_versions/${root.dataset.versionId}/configure/architecture/flows/${root.dataset.flowId}/workflow`;
       try {
         const res = await fetch(url, {
           method: "POST",

@@ -139,24 +139,28 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agents/new/step/{n}", uiHandler.WizardStep)
 	mux.HandleFunc("POST /agents/wizard", wizardHandler.Submit)
 
-	// Per-version configurator
+	// Per-version configurator. Flows / Skills / Capabilities are nested under
+	// the Architecture primary tab; Inputs, Finalize, and the YAML download are
+	// siblings. RegisterConfiguratorRedirects below 301s the pre-redesign tab
+	// URLs to their /architecture/ equivalents.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure", configuratorHandler.Index)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/flows", configuratorHandler.Flows)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/flows/{flowId}", configuratorHandler.Flows)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/skills", configuratorHandler.Skills)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/skills/{skillId}", configuratorHandler.Skills)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/capabilities", configuratorHandler.Capabilities)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/capabilities/{capName}", configuratorHandler.Capabilities)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/flows", configuratorHandler.Flows)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/flows/{flowId}", configuratorHandler.Flows)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills", configuratorHandler.Skills)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/{skillId}", configuratorHandler.Skills)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/capabilities", configuratorHandler.Capabilities)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/capabilities/{capName}", configuratorHandler.Capabilities)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/inputs", configuratorHandler.Inputs)
-	mux.HandleFunc("POST /agent_versions/{version_id}/configure/flows/{flowId}/included", configuratorHandler.FlowIncluded)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/skills/new", configuratorHandler.SkillNew)
-	mux.HandleFunc("POST /agent_versions/{version_id}/configure/skills", configuratorHandler.SkillCreate)
-	mux.HandleFunc("POST /agent_versions/{version_id}/configure/skills/{skillId}", configuratorHandler.SkillUpdate)
-	mux.HandleFunc("DELETE /agent_versions/{version_id}/configure/skills/{skillId}", configuratorHandler.SkillDelete)
-	mux.HandleFunc("POST /agent_versions/{version_id}/configure/flows/{flowId}/workflow", configuratorHandler.WorkflowUpdate)
+	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/new", configuratorHandler.SkillNew)
+	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/skills", configuratorHandler.SkillCreate)
+	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/skills/{skillId}", configuratorHandler.SkillUpdate)
+	mux.HandleFunc("DELETE /agent_versions/{version_id}/configure/architecture/skills/{skillId}", configuratorHandler.SkillDelete)
+	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/workflow", configuratorHandler.WorkflowUpdate)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/finalize", configuratorHandler.FinalizeConfirm)
 	mux.HandleFunc("POST /agent_versions/{version_id}/finalize", configuratorHandler.Finalize)
 	mux.HandleFunc("GET /agent_versions/{version_id}/config.yaml", configuratorHandler.DownloadYAML)
+	RegisterConfiguratorRedirects(mux)
 
 	// Per-version BO chat
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/sessions", chatHandler.NewSession)

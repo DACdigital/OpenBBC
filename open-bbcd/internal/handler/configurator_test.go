@@ -16,6 +16,70 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestConfiguratorRouter_OldFlowsRedirectsToArchitecture(t *testing.T) {
+	mux := http.NewServeMux()
+	handler.RegisterConfiguratorRedirects(mux)
+	versionID := "11111111-1111-1111-1111-111111111111"
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/flows", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301", w.Code)
+	}
+	want := "/agent_versions/" + versionID + "/configure/architecture/flows"
+	if got := w.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+func TestConfiguratorRouter_OldSkillsRedirectsToArchitecture(t *testing.T) {
+	mux := http.NewServeMux()
+	handler.RegisterConfiguratorRedirects(mux)
+	versionID := "22222222-2222-2222-2222-222222222222"
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/skills", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301", w.Code)
+	}
+	want := "/agent_versions/" + versionID + "/configure/architecture/skills"
+	if got := w.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+func TestConfiguratorRouter_OldCapabilitiesRedirectsToArchitecture(t *testing.T) {
+	mux := http.NewServeMux()
+	handler.RegisterConfiguratorRedirects(mux)
+	versionID := "33333333-3333-3333-3333-333333333333"
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/capabilities", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301", w.Code)
+	}
+	want := "/agent_versions/" + versionID + "/configure/architecture/capabilities"
+	if got := w.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+func TestConfiguratorRouter_ArchitectureIndexRedirectsToFlows(t *testing.T) {
+	mux := http.NewServeMux()
+	handler.RegisterConfiguratorRedirects(mux)
+	versionID := "44444444-4444-4444-4444-444444444444"
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/architecture", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusFound && w.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301 or 302", w.Code)
+	}
+	want := "/agent_versions/" + versionID + "/configure/architecture/flows"
+	if got := w.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
 type stubConfigStore struct {
 	cfg           types.FlowMapConfig
 	getErr        error
@@ -173,10 +237,12 @@ func TestConfigurator_CapabilitiesTab_IsReadOnly(t *testing.T) {
 
 func TestConfigurator_ParseError_ShowsErrorBanner(t *testing.T) {
 	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig(), parseErr: "missing tools-proposed.json"})
-	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure", nil)
+	// Index now 302s to /configure/architecture/flows; assert the banner on the
+	// landing handler (Flows) which is where the redirect ends up rendering.
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure/architecture/flows", nil)
 	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
-	h.Index(w, req)
+	h.Flows(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
