@@ -60,11 +60,20 @@ func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS 
 			}
 			return e.ID
 		},
-		"skillSuggestsEndpoint": func(s *types.Skill, id string) bool {
-			if s == nil {
+		"skillSuggestsEndpoint": func(s any, id string) bool {
+			var refs []types.SkillEndpointRef
+			switch v := s.(type) {
+			case *types.Skill:
+				if v == nil {
+					return false
+				}
+				refs = v.SuggestedEndpoints
+			case types.Skill:
+				refs = v.SuggestedEndpoints
+			default:
 				return false
 			}
-			for _, ref := range s.SuggestedEndpoints {
+			for _, ref := range refs {
 				if ref.Endpoint == id {
 					return true
 				}
@@ -1038,7 +1047,7 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 	// Re-render skill_detail so the htmx swap shows the saved state.
 	renderTemplate(w, h.skillsTmpl, "skill_detail", map[string]any{
 		"VersionID": versionID,
-		"Skill":     *cur,
+		"Skill":     cur,
 		"Endpoints": cfg.Endpoints,
 	})
 }
