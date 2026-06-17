@@ -1,8 +1,8 @@
 # Lint contract
 
-The agent walks these 17 rules as a self-check after rendering and
+The agent walks these 15 rules as a self-check after rendering and
 must not ship a wiki that fails any of them. There is no `lint.mjs` in
-the v0 skill — the agent is the linter. Report failures naming the
+the v2 skill — the agent is the linter. Report failures naming the
 file and the rule number; do not stop on first failure, surface them
 all, fix them, and re-render.
 
@@ -13,27 +13,25 @@ all, fix them, and re-render.
 | 3  | Every `flows/*.md` between 60 and 400 lines |
 | 4  | Every flow file's frontmatter has non-empty `description`, `user_phrases`, `skills_used`, `preconditions` |
 | 5  | `description` field on every flow starts with `Use when` |
-| 6  | Every skill listed in a flow's `skills_used[]` resolves to a `skills/<id>.md` file whose `capability_ref` points at a real anchor in some `capabilities/*.md` `tools` list |
-| 7  | Every endpoint participant in any sequence diagram (when used) matches `^(GET\|POST\|PUT\|PATCH\|DELETE\|HEAD\|OPTIONS) /` OR is a logical tool name like `<word>.<word>`. One convention per file. |
+| 6  | Every skill listed in a flow's `skills_used[]` resolves to a `skills/<id>.md` file. Every endpoint listed in a skill's `suggested_endpoints[]` resolves to an `endpoints/<id>.md` file. |
+| 7  | Every endpoint participant in any sequence diagram (when used) matches `^(GET\|POST\|PUT\|PATCH\|DELETE\|HEAD\|OPTIONS) /` OR is a logical endpoint id like `<word>.<word>`. One convention per file. |
 | 8  | All Mermaid blocks parse |
-| 9  | No `flows/*.md` contains HTTP method strings at the start of a line (`GET `, `POST `, etc.); no `fetch(`, no `axios.`, no `/api/` paths. Tool names appear only inside `skills/*.md`, never in flow bodies. |
-| 10 | Every `<!-- HUMAN id="..." -->` block has a matching `<!-- /HUMAN -->`. Same for `<!-- AGENT id="..." -->` / `<!-- /AGENT -->` |
-| 11 | `AGENTS.md` Skills table covers every skill id present under `skills/`; AGENTS.md Flows table covers every flow id present under `flows/` |
-| 12 | `glossary.md` Skill column entries all resolve to a real `skills/<id>.md` file; Capability column entries all resolve to a real capability anchor |
-| 13 | Two-hop integrity: every `skills/<id>.md` link target referenced from a `flows/*.md` exists, **and** every capability anchor referenced from a `skills/*.md` `capability_ref` exists in the linked `capabilities/*.md` |
-| 14 | Every tool listed in `tools-proposed.json` is referenced by at least one capability file's `tools:` frontmatter, and vice versa |
-| 15 | Every `proposed: true` flag is present where required (every capability `tools[]` entry, every `tools-proposed.json` entry). The skill must never emit `proposed: false`. Flows do not carry tool entries — they reference skills only. |
-| 16 | Every `skills/<id>.md` `proposed_tool` matches a `tool:` entry in the capability file referenced by its `capability_ref`, and that capability also lists this skill's flow ids in `flows_using_this:` (transitive reachability) |
-| 17 | Every flow file's frontmatter has a `workflow:` field; it is a multiline mermaid `flowchart` block; every `id[<skill-id>]` skill node's label appears in `skills_used[].skill` on the same flow; every node id referenced in an edge appears in the node list; every flowchart parses. |
+| 9  | No `flows/*.md` or `skills/*.md` body contains HTTP method strings at line start (`GET `, `POST `, etc.), `fetch(`, `axios.`, or `/api/` paths. HTTP detail lives only in `endpoints/*.md`. |
+| 10 | Every `<!-- HUMAN id="..." -->` block has a matching `<!-- /HUMAN -->`. Same for `<!-- AGENT id="..." -->` / `<!-- /AGENT -->`. |
+| 11 | `AGENTS.md` Skills table covers every skill id under `skills/`; AGENTS.md Flows table covers every flow id under `flows/`; AGENTS.md Endpoints table covers every endpoint id under `endpoints/`. |
+| 12 | `glossary.md` Skill column entries all resolve to a real `skills/<id>.md` file; every Suggested endpoint cell entry resolves to a real `endpoints/<id>.md` file. |
+| 13 | Two-hop integrity: every `skills/<id>.md` link target referenced from a `flows/*.md` exists; every endpoint id referenced from a `skills/*.md` `suggested_endpoints[]` exists in `endpoints/`. |
+| 14 | Round-trip: every `endpoints/<id>.md` `used_by_skills[]` entry names a real `skills/<id>.md`, and that skill's `suggested_endpoints[]` includes this endpoint id. Conversely, every `suggested_endpoints[].endpoint` value appears in the named endpoint's `used_by_skills[]`. |
+| 15 | Every flow file's frontmatter has a `workflow:` field; it is a multiline mermaid `flowchart` block; every `id[<skill-id>]` skill node's label appears in `skills_used[].skill` on the same flow; every node id referenced in an edge appears in the node list; every flowchart parses. |
 
 ## Failure messages
 
 Format: `<file>: rule <N> — <short reason>`. Example:
 
 ```
-flows/update-profile.md: rule 5 — description must start with "Use when"
-flows/update-profile.md: rule 13 — link target skills/write-user-profile.md not found
-skills/write-user-profile.md: rule 13 — capability anchor #users-update not in capabilities/users.md
+flows/checkout.md: rule 5 — description must start with "Use when"
+flows/checkout.md: rule 13 — link target skills/shopping.md not found
+skills/shopping.md: rule 13 — endpoint id orders.create not present under endpoints/
 ```
 
 Surface every failure in the same pass; don't stop on the first one.
@@ -44,47 +42,40 @@ Surface every failure in the same pass; don't stop on the first one.
 link of the form `(.../skills/<id>.md)` and every `skills_used[].skill_ref`.
 The skills file must exist.
 
-**Hop 2 — skill → capability.** For each `skills/*.md`, read the
-`capability_ref` frontmatter field — a path of the form
-`capabilities/<name>.md#<anchor>`. The capability file must exist;
-the anchor must appear there.
+**Hop 2 — skill → endpoint.** For each `skills/*.md`, read the
+`suggested_endpoints[]` frontmatter list. Every `endpoint:` value must
+resolve to an existing `endpoints/<id>.md` file.
 
 A failure on either hop is reported with the file and rule:
 
 ```
-flows/update-profile.md: rule 13 - link skills/write-user-profile.md not found
-skills/write-user-profile.md: rule 13 - capability anchor #users-update not in capabilities/users.md
+flows/checkout.md: rule 13 — link skills/shopping.md not found
+skills/shopping.md: rule 13 — endpoint orders.create not present under endpoints/
 ```
 
-Anchor matching: `{#<id>}` explicit, or auto-generated slug from a heading
-(lowercase, strip non-`[a-z0-9\s-]`, spaces → hyphens). The skill always
-emits explicit anchors; the slug fallback covers hand-edited files.
+Anchor matching: not used in v2 (each endpoint is a whole file, not an anchor in
+a larger capability file). Skill→endpoint resolution is filename-only.
 
-## Bidirectional consistency (rule 14)
+## Skill ↔ endpoint round-trip (rule 14)
 
-Build a set `T_json` from `tools-proposed.json` (`tools[].proposed_name`).
-Build a set `T_caps` by union of every `capabilities/*.md` frontmatter
-`tools[].tool`. They must be equal. Report each direction separately:
+Build a set `E_used_by_skills` by union of every `endpoints/*.md` frontmatter
+`used_by_skills[]` value. Build a set `E_suggested` by union of every
+`skills/*.md` frontmatter `suggested_endpoints[].endpoint` value scoped to the
+declaring skill. The two must agree pair-wise:
 
-```
-tools-proposed.json: rule 14 — tool "users.delete" not present in any capability frontmatter
-capabilities/users.md: rule 14 — tool "users.archive" not present in tools-proposed.json
-```
+- For each `skills/<id>.md` whose `suggested_endpoints[]` includes endpoint
+  `E`, `endpoints/<E>.md` `used_by_skills[]` must include `<id>`.
+- For each `endpoints/<E>.md` whose `used_by_skills[]` includes `<id>`,
+  `skills/<id>.md` `suggested_endpoints[]` must include `E`.
 
-## Skill ↔ capability transitive reachability (rule 16)
-
-For each `skills/<id>.md`, the `proposed_tool` field must equal some
-`tool:` value inside the capability referenced by `capability_ref`. And
-the capability's `flows_using_this:` must include every flow id listed
-in the skill's `flows_using_this:`. This guarantees the three-way graph
-(flow → skill → capability) stays consistent on edits.
+Report each direction separately:
 
 ```
-skills/write-user-profile.md: rule 16 — proposed_tool "users.update" not in capabilities/users.md tools
-capabilities/users.md: rule 16 — flow "update-profile" used by skills/write-user-profile.md but not in flows_using_this
+endpoints/orders.create.md: rule 14 — used_by_skills includes "shopping" but skills/shopping.md does not list this endpoint
+skills/shopping.md: rule 14 — suggested_endpoints includes "products.list" but endpoints/products.list.md does not list this skill
 ```
 
-## Workflow well-formedness (rule 17)
+## Workflow well-formedness (rule 15)
 
 For each `flows/<id>.md`:
 
@@ -92,12 +83,12 @@ For each `flows/<id>.md`:
 2. The string starts with `flowchart TD` (or `flowchart LR`) followed by mermaid flowchart node and edge syntax.
 3. Every node declared with `id[<label>]` (rectangle = skill call) has its label exactly equal to some `skills_used[].skill` entry on the same flow. Mismatches mean either the skill list is wrong or the workflow references something that should be added.
 4. Every edge endpoint is a declared node id.
-5. The block parses (rule 8 covers all mermaid blocks; rule 17 narrows to skill-id correspondence).
+5. The block parses (rule 8 covers all mermaid blocks; rule 15 narrows to skill-id correspondence).
 
 Failure messages:
 
 ```
-flows/<id>.md: rule 17 — workflow node "s_foo[do-foo]" references skill "do-foo" not in skills_used[]
-flows/<id>.md: rule 17 — workflow edge from "s_a" to "s_b" but "s_b" is not declared
-flows/<id>.md: rule 17 — workflow field missing from frontmatter
+flows/<id>.md: rule 15 — workflow node "s_foo[do-foo]" references skill "do-foo" not in skills_used[]
+flows/<id>.md: rule 15 — workflow edge from "s_a" to "s_b" but "s_b" is not declared
+flows/<id>.md: rule 15 — workflow field missing from frontmatter
 ```
