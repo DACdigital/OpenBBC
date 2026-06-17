@@ -17,6 +17,11 @@
           style="opacity:0.4;cursor:not-allowed"
           title="No bundle generated for this version yet">Run</button>
       {{end}}
+      {{if eq .AgentStatus "READY"}}
+        <button class="btn-primary"
+                hx-get="/agents/{{.AgentID}}/deploy/confirm?version_id={{.VersionID}}"
+                hx-target="body" hx-swap="beforeend">Deploy</button>
+      {{end}}
     </div>
     {{end}}
   </div>

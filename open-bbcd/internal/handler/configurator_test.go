@@ -1,9 +1,11 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -887,5 +889,92 @@ func TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans(t *testing.T) {
 	if len(clean.Skills) != len(cfg.Skills) {
 		t.Errorf("clean export should not touch skills, got %d (want %d)",
 			len(clean.Skills), len(cfg.Skills))
+	}
+}
+
+// configFixture is the minimum field-set the configurator's layout.html
+// reads. It mirrors the shape of (unexported) configPageData; the template
+// engine is duck-typed so a local struct works fine for header-rendering
+// tests that don't exercise tab content.
+type configFixture struct {
+	Active      string
+	Tab         string
+	SubTab      string
+	ReadOnly    bool
+	HasBundle   bool
+	AgentID     string
+	AgentName   string
+	AgentStatus string
+	VersionID   string
+	ParseError  string
+}
+
+// renderConfigLayoutFixture parses the real layout.html + a stub tab_content
+// block and returns the rendered HTML. It registers only the FuncMap entries
+// layout.html actually references (statusClass on the status pill); the
+// configurator's other helpers belong to per-tab templates that the stub
+// replaces.
+func renderConfigLayoutFixture(t *testing.T, f configFixture) string {
+	t.Helper()
+	statusClass := func(status string) string {
+		switch status {
+		case "DEPLOYED":
+			return "deployed"
+		case "READY":
+			return "ready"
+		case "TRAINING":
+			return "training"
+		case "INITIALIZING":
+			return "initializing"
+		default:
+			return "draft"
+		}
+	}
+	tmpl := template.Must(template.New("").Funcs(template.FuncMap{
+		"statusClass": statusClass,
+	}).ParseFiles(
+		"../../web/templates/layout.html",
+		"../../web/templates/configurator/layout.html",
+	))
+	// Stub tab_content so layout.html's {{template "tab_content" .}} works
+	// without parsing the per-tab templates (which pull in other funcs).
+	template.Must(tmpl.Parse(`{{define "tab_content"}}<div></div>{{end}}`))
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, "layout", f); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	return buf.String()
+}
+
+func TestConfiguratorLayout_DeployButton_VisibleWhenReady(t *testing.T) {
+	body := renderConfigLayoutFixture(t, configFixture{
+		Tab: "architecture", SubTab: "flows",
+		ReadOnly: true, AgentStatus: "READY",
+		AgentID: "a1", VersionID: "v1", AgentName: "Bot",
+	})
+	if !strings.Contains(body, `hx-get="/agents/a1/deploy/confirm?version_id=v1"`) {
+		t.Errorf("expected Deploy button hx-get; body:\n%s", body)
+	}
+}
+
+func TestConfiguratorLayout_DeployButton_HiddenWhenDeployed(t *testing.T) {
+	body := renderConfigLayoutFixture(t, configFixture{
+		Tab: "architecture", SubTab: "flows",
+		ReadOnly: true, AgentStatus: "DEPLOYED",
+		AgentID: "a1", VersionID: "v1", AgentName: "Bot",
+	})
+	if strings.Contains(body, "deploy/confirm") {
+		t.Errorf("Deploy button must not render for DEPLOYED; body:\n%s", body)
+	}
+}
+
+func TestConfiguratorLayout_DeployButton_HiddenWhenDraft(t *testing.T) {
+	body := renderConfigLayoutFixture(t, configFixture{
+		Tab: "architecture", SubTab: "flows",
+		ReadOnly: true, AgentStatus: "DRAFT",
+		AgentID: "a1", VersionID: "v1", AgentName: "Bot",
+	})
+	if strings.Contains(body, "deploy/confirm") {
+		t.Errorf("Deploy button must not render for DRAFT; body:\n%s", body)
 	}
 }
