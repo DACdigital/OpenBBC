@@ -205,27 +205,39 @@ func (h *ConfiguratorHandler) Inputs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.Tab = "inputs"
-	data.WizardFields = h.buildWizardFieldViews(data.Config, data.DiscoveryFilePath)
+	data.WizardFields = h.buildWizardFieldViews(data.Config)
 	renderTemplate(w, h.inputsTmpl, "layout", data)
 }
 
-// buildWizardFieldViews maps each schema field to its current value pulled
-// from the FlowMapConfig (for text/textarea) or the agent row (for file).
+// agentLevelWizardKeys are wizard fields whose values are stored on the Agent
+// row (immutable per-agent) and therefore not shown on the per-version Inputs
+// tab — they appear on the agent detail header instead. A version cannot
+// diverge from its agent on these fields, so rendering them per-version would
+// be misleading.
+var agentLevelWizardKeys = map[string]bool{
+	"name":           true,
+	"discovery_file": true,
+}
+
+// buildWizardFieldViews maps each per-version schema field to its current
+// value pulled from the FlowMapConfig. Agent-level fields (name,
+// discovery_file) are skipped — they're rendered on the agent detail page.
 // Field order follows the schema's `order` so the layout matches the wizard.
-func (h *ConfiguratorHandler) buildWizardFieldViews(cfg types.FlowMapConfig, discoveryFilePath string) []wizardFieldView {
+func (h *ConfiguratorHandler) buildWizardFieldViews(cfg types.FlowMapConfig) []wizardFieldView {
 	if h.schema == nil {
 		return nil
 	}
 	wizardValues := map[string]string{
-		"name":            cfg.Name,
 		"scope":           cfg.Scope,
 		"should_do":       cfg.ShouldDo,
 		"should_not_do":   cfg.ShouldNotDo,
 		"business_domain": cfg.BusinessDomain,
-		"discovery_file":  discoveryFilePath,
 	}
 	out := make([]wizardFieldView, 0, len(h.schema.Wizard))
 	for _, of := range h.schema.OrderedFields() {
+		if agentLevelWizardKeys[of.Key] {
+			continue
+		}
 		out = append(out, wizardFieldView{
 			Key:   of.Key,
 			Label: of.Field.Label,

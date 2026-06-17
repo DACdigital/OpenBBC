@@ -978,3 +978,60 @@ func TestConfiguratorLayout_DeployButton_HiddenWhenDraft(t *testing.T) {
 		t.Errorf("Deploy button must not render for DRAFT; body:\n%s", body)
 	}
 }
+
+// TestConfigurator_InputsTab_OmitsAgentLevelFields verifies that the Inputs
+// tab renders only the 4 per-version wizard fields (scope, should_do,
+// should_not_do, business_domain). The agent-level fields `name` and
+// `discovery_file` live on the agent row and are rendered on the agent
+// detail header — showing them per-version would be misleading because a
+// version cannot diverge from its agent on those fields.
+func TestConfigurator_InputsTab_OmitsAgentLevelFields(t *testing.T) {
+	cfg := sampleConfig()
+	cfg.Scope = "in-scope text"
+	cfg.ShouldDo = "should-do text"
+	cfg.ShouldNotDo = "should-not-do text"
+	cfg.BusinessDomain = "business-domain text"
+	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
+	h := newConfigHandler(t, store)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/agent_versions/abc/configure/inputs", nil)
+	req.SetPathValue("version_id", "abc")
+	w := httptest.NewRecorder()
+	h.Inputs(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	// Per-version labels (from web/schemas/wizard-v1.yaml) must be present.
+	perVersionLabels := []string{
+		"Describe the scope of your agent",
+		"What should your agent do?",
+		"What should your agent never do?",
+		"Describe your platform business domain",
+	}
+	for _, label := range perVersionLabels {
+		if !strings.Contains(body, label) {
+			t.Errorf("Inputs tab missing per-version label %q", label)
+		}
+	}
+
+	// Agent-level labels must NOT appear in the Inputs tab.
+	agentLevelLabels := []string{
+		"Agent name",
+		"Upload discovery zip",
+	}
+	for _, label := range agentLevelLabels {
+		if strings.Contains(body, label) {
+			t.Errorf("Inputs tab should NOT contain agent-level label %q "+
+				"(it belongs on the agent detail header)", label)
+		}
+	}
+
+	// And the count of <dt> rows (one per WizardFields entry) must be 4.
+	if got := strings.Count(body, `class="inputs-label"`); got != 4 {
+		t.Errorf("expected 4 inputs-label rows, got %d", got)
+	}
+}
