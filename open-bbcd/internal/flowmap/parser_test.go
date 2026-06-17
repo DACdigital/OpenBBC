@@ -103,6 +103,9 @@ func TestParse_HappyPath(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 
+	if cfg.SchemaVersion != 2 {
+		t.Errorf("SchemaVersion = %d, want 2", cfg.SchemaVersion)
+	}
 	if cfg.Source.AppName != "sample-flowmap" {
 		t.Errorf("AppName = %q, want sample-flowmap", cfg.Source.AppName)
 	}
@@ -110,8 +113,8 @@ func TestParse_HappyPath(t *testing.T) {
 		t.Fatalf("Flows = %d, want 1", len(cfg.Flows))
 	}
 	flow := cfg.Flows[0]
-	if flow.ID != "place-order" {
-		t.Errorf("Flow.ID = %q, want place-order", flow.ID)
+	if flow.ID != "update-profile" {
+		t.Errorf("Flow.ID = %q, want update-profile", flow.ID)
 	}
 	if !flow.Included {
 		t.Error("Flow.Included should default to true")
@@ -123,47 +126,63 @@ func TestParse_HappyPath(t *testing.T) {
 		t.Errorf("Flow.Workflow.Mermaid does not start with flowchart TD: %q", flow.Workflow.Mermaid)
 	}
 	if !strings.Contains(flow.ProseMD, "How the agent handles this") {
-		t.Errorf("Flow.ProseMD should preserve the body: %q", flow.ProseMD[:80])
+		t.Errorf("Flow.ProseMD should preserve the body: %q", flow.ProseMD[:min(80, len(flow.ProseMD))])
 	}
 
-	if len(cfg.Skills) != 1 || cfg.Skills[0].ID != "place-order" {
+	if len(cfg.Skills) != 1 || cfg.Skills[0].ID != "account" {
 		t.Errorf("Skills = %+v", cfg.Skills)
 	}
-	if cfg.Skills[0].CapabilityRef != "orders" {
-		t.Errorf("Skill.CapabilityRef = %q, want orders (resolved from capabilities/orders.md#orders-create)", cfg.Skills[0].CapabilityRef)
+	if len(cfg.Skills[0].SuggestedEndpoints) != 1 {
+		t.Fatalf("Skill.SuggestedEndpoints = %d, want 1", len(cfg.Skills[0].SuggestedEndpoints))
+	}
+	if cfg.Skills[0].SuggestedEndpoints[0].Endpoint != "users.update" {
+		t.Errorf("Skill.SuggestedEndpoints[0].Endpoint = %q, want users.update",
+			cfg.Skills[0].SuggestedEndpoints[0].Endpoint)
+	}
+	if cfg.Skills[0].SuggestedEndpoints[0].Role != "write" {
+		t.Errorf("Skill.SuggestedEndpoints[0].Role = %q, want write",
+			cfg.Skills[0].SuggestedEndpoints[0].Role)
 	}
 
-	if len(cfg.Capabilities) != 1 || cfg.Capabilities[0].Name != "orders" {
-		t.Errorf("Capabilities = %+v", cfg.Capabilities)
+	if len(cfg.Endpoints) != 1 || cfg.Endpoints[0].ID != "users.update" {
+		t.Errorf("Endpoints = %+v", cfg.Endpoints)
+	}
+	if cfg.Endpoints[0].Method != "PATCH" {
+		t.Errorf("Endpoint.Method = %q, want PATCH", cfg.Endpoints[0].Method)
+	}
+	if cfg.Endpoints[0].Auth != "bearer" {
+		t.Errorf("Endpoint.Auth = %q, want bearer", cfg.Endpoints[0].Auth)
+	}
+	if len(cfg.Endpoints[0].UsedBySkills) != 1 || cfg.Endpoints[0].UsedBySkills[0] != "account" {
+		t.Errorf("Endpoint.UsedBySkills = %v, want [account]", cfg.Endpoints[0].UsedBySkills)
 	}
 }
 
 func TestParse_MissingWorkflowFallback(t *testing.T) {
 	r := zipDirOverride(t, "testdata/sample-flowmap", map[string]string{
-		"flows/place-order.md": `---
-schema_version: 1
-id: place-order
-name: Place order
-description: "Use when the user wants to check out"
-intent: "Submit the cart as an order"
+		"flows/update-profile.md": `---
+schema_version: 2
+id: update-profile
+name: Update profile
+description: "Use when the user wants to change their profile"
+intent: "Update the acting user's name or email"
 user_phrases:
-  - "check out"
-entry: src/pages/Cart.tsx
-trigger: user clicks Place order
+  - "update my name"
+entry: src/pages/Profile.tsx
+trigger: user clicks Save
 preconditions:
   - User is signed in
 skills_used:
-  - skill: place-order
-    role: write
-    skill_ref: ../skills/place-order.md
+  - skill: account
+    skill_ref: ../skills/account.md
 postconditions:
-  - The cart is persisted as an order
-side_effects: [audit-log-entry]
+  - The profile is persisted
+side_effects: []
 related_flows: []
 confidence: high
 ---
 
-# Place order
+# Update profile
 
 stub body
 `,
@@ -174,25 +193,24 @@ stub body
 		t.Fatalf("Parse: %v", err)
 	}
 	wf := cfg.Flows[0].Workflow.Mermaid
-	if !strings.Contains(wf, "s_place_order[place-order]") {
+	if !strings.Contains(wf, "s_account[account]") {
 		t.Errorf("Fallback workflow does not contain expected linear node:\n%s", wf)
 	}
 }
 
 func TestParse_InvalidSkillReference(t *testing.T) {
 	r := zipDirOverride(t, "testdata/sample-flowmap", map[string]string{
-		"flows/place-order.md": `---
-schema_version: 1
-id: place-order
-name: Place order
-description: "Use when the user wants to check out"
-intent: "Submit the cart as an order"
-user_phrases: ["check out"]
+		"flows/update-profile.md": `---
+schema_version: 2
+id: update-profile
+name: Update profile
+description: "Use when the user wants to change their profile"
+intent: "Update the acting user's name or email"
+user_phrases: ["update my name"]
 preconditions: []
 skills_used:
-  - skill: place-order
-    role: write
-    skill_ref: ../skills/place-order.md
+  - skill: account
+    skill_ref: ../skills/account.md
 postconditions: []
 side_effects: []
 related_flows: []
@@ -203,7 +221,7 @@ workflow: |
     s_x --> e([end])
 ---
 
-# Place order
+# Update profile
 
 stub
 `,
@@ -215,5 +233,51 @@ stub
 	}
 	if !errors.Is(err, types.ErrFlowMapInvalid) {
 		t.Errorf("err = %v, want errors.Is(types.ErrFlowMapInvalid)", err)
+	}
+}
+
+func TestParse_RejectsV1Schema(t *testing.T) {
+	r := zipDirOverride(t, "testdata/sample-flowmap", map[string]string{
+		"AGENTS.md": `---
+schema_version: 1
+generated_by: flow-map-compiler
+generated_at: 2026-01-01T00:00:00Z
+generated_from_sha: deadbeef
+app_name: sample-flowmap
+stack:
+  framework: react
+  version: "18.0.0"
+  router: react-router-dom
+  language: ts
+counts:
+  skills: 1
+  flows: 1
+  endpoints: 1
+freshness:
+  last_verified: 2026-01-01T00:00:00Z
+  staleness_check: weekly
+files:
+  app_context: APP.md
+  glossary: glossary.md
+  skills_dir: skills/
+  flows_dir: flows/
+  endpoints_dir: endpoints/
+---
+
+# sample-flowmap — flow map
+
+stub
+`,
+	})
+
+	_, err := flowmap.Parse(r)
+	if err == nil {
+		t.Fatal("Parse should reject schema_version 1 inputs")
+	}
+	if !errors.Is(err, types.ErrFlowMapInvalid) {
+		t.Errorf("err = %v, want errors.Is(types.ErrFlowMapInvalid)", err)
+	}
+	if !strings.Contains(err.Error(), "schema_version 1") {
+		t.Errorf("err = %v, want mention of schema_version 1", err)
 	}
 }
