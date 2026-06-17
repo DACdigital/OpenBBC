@@ -154,6 +154,46 @@ func TestUIHandler_AgentDetail_PopulatesHeader(t *testing.T) {
 	}
 }
 
+func TestUIHandler_AgentDetail_RealTemplateRenders(t *testing.T) {
+	agentID := "00000000-0000-0000-0000-000000000000"
+	agent := &types.Agent{ID: agentID, Name: "Bot", Description: "Desc", DiscoveryFilePath: "bot.zip", CreatedAt: time.Now()}
+	groups := []types.AgentGroup{{
+		AgentID: agentID, Name: "Bot",
+		Versions: []types.AgentVersionListItem{
+			{VersionNum: 1, Version: &types.AgentVersion{ID: "v1", Status: "READY", CreatedAt: time.Now()}},
+		},
+	}}
+	tmpl, err := template.New("").Funcs(template.FuncMap{
+		"statusClass": statusClass,
+		"add":         func(a, b int) int { return a + b },
+		"sub":         func(a, b int) int { return a - b },
+		"urlEncode":   func(s string) string { return s },
+	}).ParseFiles("../../web/templates/layout.html", "../../web/templates/agent-versions.html")
+	if err != nil {
+		t.Fatalf("ParseFiles: %v", err)
+	}
+	h := &UIHandler{
+		agentRepo: &mockGroupedAgentRepo{
+			listGrouped: func(ctx context.Context) ([]types.AgentGroup, error) { return groups, nil },
+			getByID:     func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
+		},
+		agentVersionsTmpl: tmpl,
+		logger:            slog.Default(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/agents/ui?agent="+agentID, nil)
+	w := httptest.NewRecorder()
+	h.AgentsPage(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{"agent-header-card", "Bot", "Desc", "bot.zip", `v1`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("real template missing %q", want)
+		}
+	}
+}
+
 func TestUIHandler_AgentDetail_NoneDeployed(t *testing.T) {
 	agentID := "22222222-2222-2222-2222-222222222222"
 	agent := &types.Agent{ID: agentID, Name: "X", DiscoveryFilePath: "x.zip"}
