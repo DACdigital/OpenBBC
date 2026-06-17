@@ -3,10 +3,12 @@ package handler
 import (
 	"context"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"gopkg.in/yaml.v3"
@@ -82,5 +84,105 @@ func TestUIHandler_WizardStep_AccumulatesValues(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, `name="name"`) || !strings.Contains(body, `value="TestAgent"`) {
 		t.Errorf("expected hidden input for name=TestAgent in body:\n%s", body)
+	}
+}
+
+type mockGroupedAgentRepo2 struct {
+	listGrouped func(ctx context.Context) ([]types.AgentGroup, error)
+	getByID     func(ctx context.Context, id string) (*types.Agent, error)
+}
+
+func (m *mockGroupedAgentRepo2) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
+	return m.listGrouped(ctx)
+}
+func (m *mockGroupedAgentRepo2) GetByID(ctx context.Context, id string) (*types.Agent, error) {
+	return m.getByID(ctx, id)
+}
+
+func mustParseAgentVersionsTmpl(t *testing.T) *template.Template {
+	t.Helper()
+	const layout = `{{define "layout"}}{{template "content" .}}{{end}}`
+	const content = `{{define "content"}}` +
+		`<h1>{{.Name}}</h1>` +
+		`<p class="desc">{{.Description}}</p>` +
+		`<p class="path">{{.DiscoveryFilePath}}</p>` +
+		`<p class="deployed">{{if .CurrentDeployedVersionNum}}v{{.CurrentDeployedVersionNum}}{{else}}—{{end}}</p>` +
+		`{{range .Versions}}<div class="v">v{{.VersionNum}}:{{.Version.Status}}</div>{{end}}` +
+		`{{end}}`
+	return template.Must(template.New("").Funcs(template.FuncMap{
+		"statusClass": statusClass,
+	}).Parse(layout + content))
+}
+
+func TestUIHandler_AgentDetail_PopulatesHeader(t *testing.T) {
+	createdAt := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	agentID := "11111111-1111-1111-1111-111111111111"
+	agent := &types.Agent{
+		ID:                agentID,
+		Name:              "Coffee Bot",
+		Description:       "Shop assistant",
+		DiscoveryFilePath: "coffee.zip",
+		CreatedAt:         createdAt,
+	}
+	groups := []types.AgentGroup{{
+		AgentID: agentID,
+		Name:    "Coffee Bot",
+		Versions: []types.AgentVersionListItem{
+			{VersionNum: 2, Version: &types.AgentVersion{ID: "v2", Status: "DEPLOYED"}},
+			{VersionNum: 1, Version: &types.AgentVersion{ID: "v1", Status: "READY"}},
+		},
+	}}
+	h := &UIHandler{
+		agentRepo: &mockGroupedAgentRepo2{
+			listGrouped: func(ctx context.Context) ([]types.AgentGroup, error) { return groups, nil },
+			getByID:     func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
+		},
+		agentVersionsTmpl: mustParseAgentVersionsTmpl(t),
+		logger:            slog.Default(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/agents/ui?agent="+agentID, nil)
+	w := httptest.NewRecorder()
+	h.AgentsPage(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		"Coffee Bot",
+		"Shop assistant",
+		"coffee.zip",
+		`<p class="deployed">v2</p>`,
+		`<div class="v">v2:DEPLOYED</div>`,
+		`<div class="v">v1:READY</div>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q\n--- body ---\n%s", want, body)
+		}
+	}
+}
+
+func TestUIHandler_AgentDetail_NoneDeployed(t *testing.T) {
+	agentID := "22222222-2222-2222-2222-222222222222"
+	agent := &types.Agent{ID: agentID, Name: "X", DiscoveryFilePath: "x.zip"}
+	groups := []types.AgentGroup{{
+		AgentID: agentID, Name: "X",
+		Versions: []types.AgentVersionListItem{
+			{VersionNum: 1, Version: &types.AgentVersion{ID: "v1", Status: "READY"}},
+		},
+	}}
+	h := &UIHandler{
+		agentRepo: &mockGroupedAgentRepo2{
+			listGrouped: func(ctx context.Context) ([]types.AgentGroup, error) { return groups, nil },
+			getByID:     func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
+		},
+		agentVersionsTmpl: mustParseAgentVersionsTmpl(t),
+		logger:            slog.Default(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/agents/ui?agent="+agentID, nil)
+	w := httptest.NewRecorder()
+	h.AgentsPage(w, req)
+	if !strings.Contains(w.Body.String(), `<p class="deployed">—</p>`) {
+		t.Errorf("expected em-dash for no-deploy:\n%s", w.Body.String())
 	}
 }

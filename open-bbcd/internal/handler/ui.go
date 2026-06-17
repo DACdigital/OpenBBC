@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -141,18 +142,39 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if agentID := r.URL.Query().Get("agent"); agentID != "" {
-		for _, group := range groups {
-			if group.AgentID == agentID {
-				renderTemplate(w, h.agentVersionsTmpl, "layout", agentVersionsPageData{
-					Active:   "agents",
-					AgentID:  group.AgentID,
-					Name:     group.Name,
-					Versions: group.Versions,
-				})
-				return
+		var group *types.AgentGroup
+		for i := range groups {
+			if groups[i].AgentID == agentID {
+				group = &groups[i]
+				break
 			}
 		}
-		http.NotFound(w, r)
+		if group == nil {
+			http.NotFound(w, r)
+			return
+		}
+		agent, err := h.agentRepo.GetByID(r.Context(), agentID)
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		data := agentVersionsPageData{
+			Active:            "agents",
+			AgentID:           group.AgentID,
+			Name:              group.Name,
+			Description:       agent.Description,
+			DiscoveryFilePath: agent.DiscoveryFilePath,
+			CreatedAt:         agent.CreatedAt,
+			Versions:          group.Versions,
+		}
+		for _, v := range group.Versions {
+			if v.Version != nil && v.Version.Status == "DEPLOYED" {
+				data.CurrentDeployedVersionNum = v.VersionNum
+				data.CurrentDeployedVersionID = v.Version.ID
+				break
+			}
+		}
+		renderTemplate(w, h.agentVersionsTmpl, "layout", data)
 		return
 	}
 
@@ -160,10 +182,15 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 type agentVersionsPageData struct {
-	Active   string
-	AgentID  string
-	Name     string
-	Versions []types.AgentVersionListItem
+	Active                    string
+	AgentID                   string
+	Name                      string
+	Description               string
+	DiscoveryFilePath         string
+	CreatedAt                 time.Time
+	CurrentDeployedVersionNum int    // 0 if no version is deployed
+	CurrentDeployedVersionID  string // empty if none
+	Versions                  []types.AgentVersionListItem
 }
 
 type wizardPageData struct {
