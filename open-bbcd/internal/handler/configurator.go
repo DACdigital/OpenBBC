@@ -34,7 +34,7 @@ type ConfigStore interface {
 type ConfiguratorHandler struct {
 	repo                                                                            ConfigStore
 	schema                                                                          *types.WizardSchema
-	flowsTmpl, skillsTmpl, capabilitiesTmpl, finalizeTmpl, inputsTmpl, promptsTmpl *template.Template
+	flowsTmpl, skillsTmpl, endpointsTmpl, finalizeTmpl, inputsTmpl, promptsTmpl *template.Template
 }
 
 func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS fs.FS) (*ConfiguratorHandler, error) {
@@ -54,11 +54,22 @@ func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS 
 			}
 			return s.ID
 		},
-		"selectedCapName": func(c *types.Capability) string {
-			if c == nil {
+		"selectedEndpointID": func(e *types.Endpoint) string {
+			if e == nil {
 				return ""
 			}
-			return c.Name
+			return e.ID
+		},
+		"skillSuggestsEndpoint": func(s *types.Skill, id string) bool {
+			if s == nil {
+				return false
+			}
+			for _, ref := range s.SuggestedEndpoints {
+				if ref.Endpoint == id {
+					return true
+				}
+			}
+			return false
 		},
 		"json":               tplJSON,
 		"skillIds":           tplSkillIDs,
@@ -82,7 +93,7 @@ func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS 
 	if err != nil {
 		return nil, err
 	}
-	capabilitiesTmpl, err := parse("capabilities")
+	endpointsTmpl, err := parse("endpoints")
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +114,7 @@ func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS 
 		schema:           schema,
 		flowsTmpl:        flowsTmpl,
 		skillsTmpl:       skillsTmpl,
-		capabilitiesTmpl: capabilitiesTmpl,
+		endpointsTmpl: endpointsTmpl,
 		finalizeTmpl:     finalizeTmpl,
 		inputsTmpl:       inputsTmpl,
 		promptsTmpl:      promptsTmpl,
@@ -113,12 +124,12 @@ func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS 
 // proseRelLink matches `../<section>/<id>.md` inside a markdown link
 // destination, where <section> is one of the .flow-map directory names
 // the discovery skill emits.
-var proseRelLink = regexp.MustCompile(`\.\./(skills|capabilities|flows)/([^)\s]+?)\.md`)
+var proseRelLink = regexp.MustCompile(`\.\./(skills|endpoints|flows)/([^)\s]+?)\.md`)
 
 // renderMarkdown converts a prose markdown blob (from the discovery
 // skill) to HTML. Relative links into the .flow-map directory layout
 // are rewritten to the configurator routes (scoped by version_id) so
-// they actually navigate. Flows / skills / capabilities live under the
+// they actually navigate. Flows / skills / endpoints live under the
 // Architecture primary tab. Trusted input — prose is generated, not
 // user-typed.
 func renderMarkdown(versionID, md string) template.HTML {
@@ -145,14 +156,14 @@ type configPageData struct {
 	ReadOnly          bool   // true for non-INITIALIZING versions (DRAFT, TRAINING, READY, DEPLOYED)
 	HasBundle         bool   // true when this version has a generated bundle (Run is enabled)
 	Tab               string // primary tab: "inputs" | "architecture" | "prompts" | "finalize"
-	SubTab            string // architecture sub-tab: "flows" | "skills" | "capabilities" (empty for other primary tabs)
+	SubTab            string // architecture sub-tab: "flows" | "skills" | "endpoints" (empty for other primary tabs)
 	Config            types.FlowMapConfig
 	ParseError        string
 	Bundle            json.RawMessage   // raw bundle bytes; len()>0 ↔ HasBundle
 	WizardFields      []wizardFieldView // populated for the Inputs tab
 	SelectedFlow      *types.Flow
 	SelectedSkill     *types.Skill
-	SelectedCap       *types.Capability
+	SelectedEndpoint  *types.Endpoint
 }
 
 // wizardFieldView is the read-only projection of a wizard answer for the
@@ -363,7 +374,7 @@ func (h *ConfiguratorHandler) Skills(w http.ResponseWriter, r *http.Request) {
 	renderTemplate(w, h.skillsTmpl, "layout", data)
 }
 
-func (h *ConfiguratorHandler) Capabilities(w http.ResponseWriter, r *http.Request) {
+func (h *ConfiguratorHandler) Endpoints(w http.ResponseWriter, r *http.Request) {
 	data, err := h.load(r)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
@@ -374,20 +385,20 @@ func (h *ConfiguratorHandler) Capabilities(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	data.Tab = "architecture"
-	data.SubTab = "capabilities"
-	if capName := r.PathValue("capName"); capName != "" {
-		for i := range data.Config.Capabilities {
-			if data.Config.Capabilities[i].Name == capName {
-				data.SelectedCap = &data.Config.Capabilities[i]
+	data.SubTab = "endpoints"
+	if epID := r.PathValue("endpointID"); epID != "" {
+		for i := range data.Config.Endpoints {
+			if data.Config.Endpoints[i].ID == epID {
+				data.SelectedEndpoint = &data.Config.Endpoints[i]
 				break
 			}
 		}
-		if data.SelectedCap == nil {
+		if data.SelectedEndpoint == nil {
 			http.NotFound(w, r)
 			return
 		}
 	}
-	renderTemplate(w, h.capabilitiesTmpl, "layout", data)
+	renderTemplate(w, h.endpointsTmpl, "layout", data)
 }
 
 // tplDict builds a map[string]any from alternating key/value template args.
@@ -504,32 +515,34 @@ func (h *ConfiguratorHandler) FlowIncluded(w http.ResponseWriter, r *http.Reques
 }
 
 // parseSkillForm reads form values shared by SkillUpdate and SkillCreate.
-// Validates role; clears capability_ref/external_note when external is the
-// other state. Splits user_phrases on newlines or commas.
-func parseSkillForm(r *http.Request, capabilities []types.Capability) (types.Skill, error) {
-	role := strings.TrimSpace(r.FormValue("role"))
-	if role != "read" && role != "write" {
-		return types.Skill{}, types.ErrInvalidSkillRole
-	}
+// Splits user_phrases on newlines or commas. For non-external skills, reads
+// suggested_endpoints multi-select values and validates each against the
+// agent's endpoint inventory.
+func parseSkillForm(r *http.Request, endpoints []types.Endpoint) (types.Skill, error) {
 	external := r.FormValue("external") == "true"
-	cap := strings.TrimSpace(r.FormValue("capability"))
 	note := strings.TrimSpace(r.FormValue("external_note"))
-	if external {
-		cap = ""
-	} else {
+
+	var suggested []types.SkillEndpointRef
+	if !external {
 		note = ""
-		if cap != "" {
-			ok := false
-			for _, c := range capabilities {
-				if c.Name == cap {
-					ok = true
-					break
-				}
+		known := make(map[string]struct{}, len(endpoints))
+		for _, e := range endpoints {
+			known[e.ID] = struct{}{}
+		}
+		for _, epID := range r.Form["suggested_endpoints"] {
+			epID = strings.TrimSpace(epID)
+			if epID == "" {
+				continue
 			}
-			if !ok {
-				return types.Skill{}, fmt.Errorf("%w: capability %q not present in this agent's discovery snapshot",
-					types.ErrFlowMapInvalid, cap)
+			if _, ok := known[epID]; !ok {
+				return types.Skill{}, fmt.Errorf("%w: endpoint %q not present in this agent's discovery snapshot",
+					types.ErrFlowMapInvalid, epID)
 			}
+			suggested = append(suggested, types.SkillEndpointRef{
+				Endpoint: epID,
+				Role:     "",
+				When:     "",
+			})
 		}
 	}
 
@@ -542,14 +555,13 @@ func parseSkillForm(r *http.Request, capabilities []types.Capability) (types.Ski
 	}
 
 	return types.Skill{
-		Name:          strings.TrimSpace(r.FormValue("name")),
-		Description:   strings.TrimSpace(r.FormValue("description")),
-		Role:          role,
-		CapabilityRef: cap,
-		External:      external,
-		ExternalNote:  note,
-		ProposedTool:  strings.TrimSpace(r.FormValue("proposed_tool")),
-		UserPhrases:   phrases,
+		Name:               strings.TrimSpace(r.FormValue("name")),
+		Description:        strings.TrimSpace(r.FormValue("description")),
+		Domain:             strings.TrimSpace(r.FormValue("domain")),
+		External:           external,
+		ExternalNote:       note,
+		SuggestedEndpoints: suggested,
+		UserPhrases:        phrases,
 	}, nil
 }
 
@@ -573,7 +585,7 @@ func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	parsed, err := parseSkillForm(r, cfg.Capabilities)
+	parsed, err := parseSkillForm(r, cfg.Endpoints)
 	if err != nil {
 		Error(w, err)
 		return
@@ -672,11 +684,11 @@ func (h *ConfiguratorHandler) SkillNew(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	blank := types.Skill{Origin: "custom", Role: "read"}
+	blank := types.Skill{Origin: "custom"}
 	renderTemplate(w, h.skillsTmpl, "skill_new_form", map[string]any{
-		"VersionID":    versionID,
-		"Skill":        blank,
-		"Capabilities": cfg.Capabilities,
+		"VersionID": versionID,
+		"Skill":     blank,
+		"Endpoints": cfg.Endpoints,
 	})
 }
 
@@ -816,9 +828,9 @@ func tplWorkflowState(wf types.Workflow) (template.JS, error) {
 // as a file attachment named "<agent-name>.yaml".
 //
 // Query parameter:
-//   - clean=true: emit a filtered view — flows with included=false dropped,
-//     and capabilities not referenced by any remaining skill dropped. The
-//     full view (default) preserves everything for audit and round-trip.
+//   - clean=true: emit a filtered view — flows with included=false dropped;
+//     in v2 endpoints are always preserved as the runtime tool inventory.
+//     The full view (default) preserves everything for audit and round-trip.
 //
 // Available for any agent (no status gate at the handler level — the link
 // in /agents/ui only appears for non-INITIALIZING agents). Returns 404 if
@@ -864,11 +876,11 @@ func (h *ConfiguratorHandler) DownloadYAML(w http.ResponseWriter, r *http.Reques
 
 // filterAgentConfig returns a copy of cfg with curation noise stripped:
 //   - flows where Included=false are dropped
-//   - capabilities not referenced by any remaining skill are dropped
 //
-// Skills are not filtered (external skills remain — the agent needs to
-// know about them to redirect users). The full config remains in the
-// database; this function only shapes the YAML for export.
+// In v2 the endpoint inventory is always preserved (endpoints are the
+// runtime tool catalog; skills only suggest a subset). Skills are not
+// filtered either. The full config remains in the database; this
+// function only shapes the YAML for export.
 func filterAgentConfig(cfg types.FlowMapConfig) types.FlowMapConfig {
 	keptFlows := make([]types.Flow, 0, len(cfg.Flows))
 	for _, f := range cfg.Flows {
@@ -876,22 +888,7 @@ func filterAgentConfig(cfg types.FlowMapConfig) types.FlowMapConfig {
 			keptFlows = append(keptFlows, f)
 		}
 	}
-
-	referenced := make(map[string]struct{}, len(cfg.Skills))
-	for _, s := range cfg.Skills {
-		if s.CapabilityRef != "" {
-			referenced[s.CapabilityRef] = struct{}{}
-		}
-	}
-	keptCaps := make([]types.Capability, 0, len(cfg.Capabilities))
-	for _, c := range cfg.Capabilities {
-		if _, ok := referenced[c.Name]; ok {
-			keptCaps = append(keptCaps, c)
-		}
-	}
-
 	cfg.Flows = keptFlows
-	cfg.Capabilities = keptCaps
 	return cfg
 }
 
@@ -1013,7 +1010,7 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	parsed, err := parseSkillForm(r, cfg.Capabilities)
+	parsed, err := parseSkillForm(r, cfg.Endpoints)
 	if err != nil {
 		Error(w, err)
 		return
@@ -1027,11 +1024,10 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 	cur := &cfg.Skills[idx]
 	cur.Name = parsed.Name
 	cur.Description = parsed.Description
-	cur.Role = parsed.Role
-	cur.CapabilityRef = parsed.CapabilityRef
+	cur.Domain = parsed.Domain
 	cur.External = parsed.External
 	cur.ExternalNote = parsed.ExternalNote
-	cur.ProposedTool = parsed.ProposedTool
+	cur.SuggestedEndpoints = parsed.SuggestedEndpoints
 	cur.UserPhrases = parsed.UserPhrases
 
 	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
@@ -1041,17 +1037,17 @@ func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request
 
 	// Re-render skill_detail so the htmx swap shows the saved state.
 	renderTemplate(w, h.skillsTmpl, "skill_detail", map[string]any{
-		"VersionID":    versionID,
-		"Skill":        *cur,
-		"Capabilities": cfg.Capabilities,
+		"VersionID": versionID,
+		"Skill":     *cur,
+		"Endpoints": cfg.Endpoints,
 	})
 }
 
 // RegisterConfiguratorRedirects mounts 301s for the pre-redesign tab URLs.
-// Bookmarks against /configure/{flows,skills,capabilities} survive; the bare
+// Bookmarks against /configure/{flows,skills,endpoints} survive; the bare
 // /configure/architecture path lands on the default Flows sub-tab.
 func RegisterConfiguratorRedirects(mux *http.ServeMux) {
-	for _, sub := range []string{"flows", "skills", "capabilities"} {
+	for _, sub := range []string{"flows", "skills", "endpoints"} {
 		sub := sub
 		mux.HandleFunc("GET /agent_versions/{version_id}/configure/"+sub, func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r,
