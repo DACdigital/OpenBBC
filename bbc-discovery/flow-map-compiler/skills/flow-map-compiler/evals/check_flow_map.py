@@ -68,76 +68,55 @@ def list_files(d: Path) -> list[Path]:
     return sorted(p for p in d.iterdir() if p.is_file() and p.suffix == ".md")
 
 
-def check_no_tool_leakage(flows_dir: Path, tool_names: list[str]) -> Check:
+def check_no_http_detail_leakage(flows_dir: Path, skills_dir: Path) -> Check:
     leaks: list[str] = []
-    for flow in list_files(flows_dir):
-        body = flow.read_text()
-        # Ignore frontmatter; flows are allowed `skills_used`/`skill_ref`.
-        _, body_only = split_frontmatter(flow)
-        for tool in tool_names:
-            if tool and tool in body_only:
-                leaks.append(f"{flow.name}: tool name `{tool}` present")
-        for verb in HTTP_VERBS:
-            if re.search(rf"(?<![A-Za-z]){verb}(?![A-Za-z])", body_only):
-                leaks.append(f"{flow.name}: HTTP verb `{verb}` present")
-        if "fetch(" in body_only or "axios." in body_only:
-            leaks.append(f"{flow.name}: client call (`fetch(`/`axios.`) present")
-        if re.search(r"/api/[A-Za-z]", body_only):
-            leaks.append(f"{flow.name}: `/api/` path present")
+    for d in (flows_dir, skills_dir):
+        for f in list_files(d):
+            _, body = split_frontmatter(f)
+            for verb in HTTP_VERBS:
+                if re.search(rf"(?<![A-Za-z]){verb}(?![A-Za-z]) /", body):
+                    leaks.append(f"{f.relative_to(f.parent.parent)}: HTTP `{verb} /` present")
+            if "fetch(" in body or "axios." in body:
+                leaks.append(f"{f.relative_to(f.parent.parent)}: client call (`fetch(`/`axios.`) present")
+            if re.search(r"/api/[A-Za-z]", body):
+                leaks.append(f"{f.relative_to(f.parent.parent)}: `/api/` path present")
     return Check(
-        "flow bodies are tool-name-free and HTTP-detail-free",
+        "flow & skill bodies are HTTP-detail-free",
         not leaks,
         "; ".join(leaks) if leaks else "no leakage detected",
     )
 
 
-def round_trip_skill_capability(
-    skills_dir: Path, capabilities_dir: Path
+def round_trip_skill_endpoint(
+    skills_dir: Path, endpoints_dir: Path
 ) -> Check:
+    """Assert every suggested_endpoints[].endpoint resolves to an endpoints/<id>.md
+    file whose used_by_skills[] back-references the skill."""
     issues: list[str] = []
     for skill in list_files(skills_dir):
         fm, _ = split_frontmatter(skill)
-        cap_ref = fm.get("capability_ref", "")
-        if not cap_ref or "#" not in cap_ref:
-            issues.append(f"{skill.name}: missing/invalid capability_ref")
-            continue
-        cap_path_rel, anchor = cap_ref.split("#", 1)
-        flow_map_root = skill.parent.parent
-        candidates = [
-            (flow_map_root / cap_path_rel).resolve(),
-            (skill.parent / cap_path_rel).resolve(),
-        ]
-        cap_path = next((c for c in candidates if c.exists()), None)
-        if cap_path is None:
-            issues.append(
-                f"{skill.name}: capability_ref `{cap_ref}` resolves to none of {candidates}"
-            )
-            continue
-        cap_fm, cap_body = split_frontmatter(cap_path)
-        if f"{{#{anchor}}}" not in cap_body and f"id=\"{anchor}\"" not in cap_body:
-            # Anchor may be implicit from a heading slug; relax to substring match.
-            if anchor not in cap_body:
+        skill_id = fm.get("id", skill.stem)
+        suggested = fm.get("suggested_endpoints") or []
+        for entry in suggested:
+            ep_id = (entry or {}).get("endpoint", "")
+            if not ep_id:
+                issues.append(f"{skill.name}: suggested_endpoints entry missing 'endpoint'")
+                continue
+            ep_path = endpoints_dir / f"{ep_id}.md"
+            if not ep_path.exists():
+                issues.append(f"{skill.name}: endpoint {ep_id} missing under endpoints/")
+                continue
+            ep_fm, _ = split_frontmatter(ep_path)
+            used = ep_fm.get("used_by_skills") or []
+            if skill_id not in used:
                 issues.append(
-                    f"{skill.name}: anchor `{anchor}` not found in {cap_path.name}"
+                    f"{ep_path.name}: used_by_skills missing skill {skill_id} "
+                    f"(skills/{skill.name} lists this endpoint in suggested_endpoints)"
                 )
-        proposed = fm.get("proposed_tool", "")
-        cap_tools = [t.get("tool", "") for t in cap_fm.get("tools", [])]
-        if proposed and proposed not in cap_tools:
-            issues.append(
-                f"{skill.name}: proposed_tool `{proposed}` not in "
-                f"{cap_path.name} tools{cap_tools}"
-            )
-        skill_flows = set(fm.get("flows_using_this", []) or [])
-        cap_flows = set(cap_fm.get("flows_using_this", []) or [])
-        if skill_flows != cap_flows:
-            issues.append(
-                f"{skill.name}: flows_using_this {sorted(skill_flows)} != "
-                f"capability {sorted(cap_flows)}"
-            )
     return Check(
-        "skill ↔ capability transitive integrity",
+        "skill ↔ endpoint round-trip",
         not issues,
-        "; ".join(issues) if issues else "all skills round-trip cleanly",
+        "; ".join(issues) if issues else "all skill/endpoint references round-trip",
     )
 
 
@@ -148,8 +127,8 @@ def check_glossary_thin(glossary_path: Path) -> Check:
     bad = []
     if "## Intent anchors" in body or "### Intent" in body:
         bad.append("contains old `Intent anchors` section")
-    if not re.search(r"\| Skill .*\| User phrases .*\| Capability .*\| Proposed tool", body):
-        bad.append("missing the canonical pivot-table header")
+    if not re.search(r"\| Skill .*\| User phrases .*\|.*Suggested endpoints.*\|.*Flows", body):
+        bad.append("missing the canonical v2 pivot-table header (Skill | User phrases | Suggested endpoints | Flows)")
     return Check(
         "glossary.md is the thin pivot table",
         not bad,
@@ -161,37 +140,29 @@ EXPECTATIONS_BY_EVAL = {
     "nextjs-update-profile": dict(
         framework=("nextjs", "next.js", "next"),
         language="ts",
-        expected_skill_role={"write"},
-        skill_id_substrings=("user", "profile", "record"),
-        proposed_tool_substrings=("users.",),
-        capability_filename="users.md",
+        skill_id_substrings=("user", "profile", "record", "account"),
+        endpoint_methods={"PUT", "POST", "PATCH"},
+        endpoint_path_substring="users",
         flow_entry_substring="app/profile/page.tsx",
-        cap_methods={"PUT", "POST", "PATCH"},
-        cap_path_substring="users",
     ),
     "react-update-profile": dict(
         framework=("react",),
         language="ts",
-        expected_skill_role={"write"},
-        skill_id_substrings=("user", "profile", "record"),
-        proposed_tool_substrings=("users.",),
-        capability_filename="users.md",
+        skill_id_substrings=("user", "profile", "record", "account"),
+        endpoint_methods={"PUT", "POST", "PATCH"},
+        endpoint_path_substring="users",
         flow_entry_substring="src/pages/Profile.tsx",
-        cap_methods={"PUT", "POST", "PATCH"},
-        cap_path_substring="users",
     ),
     "sveltekit-view-home": dict(
         framework=("sveltekit",),
         language=None,
-        expected_skill_role={"read", "load"},
-        skill_id_substrings=("ping",),
-        proposed_tool_substrings=("ping.",),
-        capability_filename="ping.md",
+        skill_id_substrings=("ping", "health"),
+        endpoint_methods={"GET"},
+        endpoint_path_substring="ping",
+        endpoint_path_exact="/api/ping",
+        endpoint_auth_expected="none",
+        endpoint_auth_allowed={"bearer", "cookie", "none"},
         flow_entry_substring="src/routes/+page.svelte",
-        cap_methods={"GET"},
-        cap_path_substring="ping",
-        cap_auth_allowed={"bearer", "cookie", "none"},
-        cap_auth_expected="none",
     ),
 }
 
@@ -200,20 +171,21 @@ def run_checks(flow_map: Path, eval_name: str) -> list[Check]:
     spec = EXPECTATIONS_BY_EVAL[eval_name]
     checks: list[Check] = []
 
+    # --- AGENTS.md counts ---
     agents_path = flow_map / "AGENTS.md"
     fm_agents, _ = split_frontmatter(agents_path)
     counts = fm_agents.get("counts", {}) if isinstance(fm_agents.get("counts"), dict) else {}
     checks.append(
         Check(
-            "AGENTS.md counts = {skills:1, flows:1, capabilities:1, proposed_tools:1}",
+            "AGENTS.md counts = {skills:1, flows:1, endpoints:1}",
             counts.get("skills") == 1
             and counts.get("flows") == 1
-            and counts.get("capabilities") == 1
-            and counts.get("proposed_tools") == 1,
+            and counts.get("endpoints") == 1,
             f"counts={counts}",
         )
     )
 
+    # --- AGENTS.md stack ---
     stack = fm_agents.get("stack", {}) if isinstance(fm_agents.get("stack"), dict) else {}
     framework_ok = any(
         f.lower() in str(stack.get("framework", "")).lower() for f in spec["framework"]
@@ -234,6 +206,7 @@ def run_checks(flow_map: Path, eval_name: str) -> list[Check]:
             )
         )
 
+    # --- skills/ ---
     skills = list_files(flow_map / "skills")
     checks.append(
         Check("skills/ has exactly one file", len(skills) == 1, f"found {[s.name for s in skills]}")
@@ -250,23 +223,42 @@ def run_checks(flow_map: Path, eval_name: str) -> list[Check]:
                 f"id={sid!r}",
             )
         )
-        role = str(skill_fm.get("role", ""))
+        # skill must NOT have proposed_tool or capability_ref
         checks.append(
             Check(
-                f"skill role ∈ {spec['expected_skill_role']}",
-                role in spec["expected_skill_role"],
-                f"role={role!r}",
+                "skill frontmatter has no `proposed_tool` field",
+                "proposed_tool" not in skill_fm,
+                f"proposed_tool={skill_fm.get('proposed_tool')!r}" if "proposed_tool" in skill_fm else "absent (good)",
             )
         )
-        proposed = str(skill_fm.get("proposed_tool", ""))
         checks.append(
             Check(
-                f"skill proposed_tool starts with one of {spec['proposed_tool_substrings']}",
-                any(proposed.startswith(p) for p in spec["proposed_tool_substrings"]),
-                f"proposed_tool={proposed!r}",
+                "skill frontmatter has no `capability_ref` field",
+                "capability_ref" not in skill_fm,
+                f"capability_ref={skill_fm.get('capability_ref')!r}" if "capability_ref" in skill_fm else "absent (good)",
             )
         )
+        # suggested_endpoints[] must have at least one entry
+        suggested = skill_fm.get("suggested_endpoints") or []
+        checks.append(
+            Check(
+                "skill has at least one suggested_endpoints[] entry",
+                len(suggested) >= 1,
+                f"suggested_endpoints={suggested!r}",
+            )
+        )
+        # sveltekit: check role: read on suggested_endpoints entry
+        if eval_name == "sveltekit-view-home":
+            roles = [e.get("role", "") for e in suggested if isinstance(e, dict)]
+            checks.append(
+                Check(
+                    "skill suggested_endpoints[] has entry with role: read",
+                    "read" in roles,
+                    f"roles found={roles!r}",
+                )
+            )
 
+    # --- flows/ ---
     flows = list_files(flow_map / "flows")
     checks.append(
         Check("flows/ has exactly one file", len(flows) == 1, f"found {[f.name for f in flows]}")
@@ -282,13 +274,13 @@ def run_checks(flow_map: Path, eval_name: str) -> list[Check]:
             )
         )
         used = flow_fm.get("skills_used", []) or []
-        used_skill_ids = {str(u.get("skill", "")) for u in used if isinstance(u, dict)}
-        skill_id = str(skill_fm.get("id", "")) if skill_fm else ""
+        # v2: skills_used[] entries must NOT have a role field
+        roles_in_skills_used = [u.get("role") for u in used if isinstance(u, dict) and "role" in u]
         checks.append(
             Check(
-                "flow.skills_used[] references the single skill",
-                bool(skill_id) and skill_id in used_skill_ids,
-                f"skills_used skill ids={used_skill_ids}, skill.id={skill_id!r}",
+                "flow.skills_used[] entries have no `role` field",
+                len(roles_in_skills_used) == 0,
+                f"entries with role={roles_in_skills_used!r}" if roles_in_skills_used else "no role fields (good)",
             )
         )
         skill_refs_ok = all(
@@ -305,85 +297,92 @@ def run_checks(flow_map: Path, eval_name: str) -> list[Check]:
             )
         )
 
-    caps = list_files(flow_map / "capabilities")
+    # --- endpoints/ ---
+    endpoints = list_files(flow_map / "endpoints")
     checks.append(
         Check(
-            f"capabilities/ has exactly one file named `{spec['capability_filename']}`",
-            len(caps) == 1 and caps[0].name == spec["capability_filename"],
-            f"found {[c.name for c in caps]}",
+            "endpoints/ has exactly one file",
+            len(endpoints) == 1,
+            f"found {[e.name for e in endpoints]}",
         )
     )
-    if caps and caps[0].name == spec["capability_filename"]:
-        cap_fm, _ = split_frontmatter(caps[0])
-        tools = cap_fm.get("tools", []) or []
-        tool_names = [str(t.get("tool", "")) for t in tools]
+    if endpoints:
+        ep_fm, _ = split_frontmatter(endpoints[0])
+        method = str(ep_fm.get("method", ""))
+        path = str(ep_fm.get("path", ""))
         checks.append(
             Check(
-                "capability has exactly one tool entry",
-                len(tools) == 1,
-                f"tools={tool_names}",
+                f"endpoint method ∈ {spec['endpoint_methods']}",
+                method in spec["endpoint_methods"],
+                f"method={method!r}",
             )
         )
-        if tools:
-            t = tools[0]
-            method = str(t.get("method", ""))
-            path = str(t.get("path", ""))
-            checks.append(
-                Check(
-                    f"capability tool method ∈ {spec['cap_methods']}",
-                    method in spec["cap_methods"],
-                    f"method={method!r}",
-                )
+        checks.append(
+            Check(
+                f"endpoint path contains `{spec['endpoint_path_substring']}`",
+                spec["endpoint_path_substring"] in path,
+                f"path={path!r}",
             )
+        )
+        if "endpoint_path_exact" in spec:
             checks.append(
                 Check(
-                    f"capability tool path contains `{spec['cap_path_substring']}`",
-                    spec["cap_path_substring"] in path,
+                    f"endpoint path == `{spec['endpoint_path_exact']}`",
+                    path == spec["endpoint_path_exact"],
                     f"path={path!r}",
                 )
             )
-            auth = str(t.get("auth", ""))
-            allowed = spec.get("cap_auth_allowed") or {"bearer", "cookie", "none"}
+        if "endpoint_auth_expected" in spec:
+            auth = str(ep_fm.get("auth", ""))
+            allowed = spec.get("endpoint_auth_allowed") or {"bearer", "cookie", "none"}
             checks.append(
                 Check(
-                    f"capability tool auth ∈ {sorted(allowed)}",
+                    f"endpoint auth ∈ {sorted(allowed)}",
                     auth in allowed,
                     f"auth={auth!r}",
                 )
             )
-            if "cap_auth_expected" in spec:
-                checks.append(
-                    Check(
-                        f"capability tool auth == `{spec['cap_auth_expected']}`",
-                        auth == spec["cap_auth_expected"],
-                        f"auth={auth!r}",
-                    )
-                )
-
-    proposed_path = flow_map / "tools-proposed.json"
-    if proposed_path.exists():
-        try:
-            data = json.loads(proposed_path.read_text())
-            entries = data if isinstance(data, list) else data.get("tools", [])
             checks.append(
                 Check(
-                    "tools-proposed.json has exactly one tool entry",
-                    isinstance(entries, list) and len(entries) == 1,
-                    f"entries={entries!r}",
+                    f"endpoint auth == `{spec['endpoint_auth_expected']}`",
+                    auth == spec["endpoint_auth_expected"],
+                    f"auth={auth!r}",
                 )
             )
-        except json.JSONDecodeError as e:
-            checks.append(Check("tools-proposed.json is valid JSON", False, str(e)))
-    else:
-        checks.append(Check("tools-proposed.json exists", False, "missing file"))
+        # used_by_skills[] must have at least one entry
+        used_by = ep_fm.get("used_by_skills") or []
+        checks.append(
+            Check(
+                "endpoint has at least one used_by_skills[] entry",
+                len(used_by) >= 1,
+                f"used_by_skills={used_by!r}",
+            )
+        )
 
+    # --- absence of v1 artefacts ---
+    checks.append(
+        Check(
+            "no `capabilities/` directory",
+            not (flow_map / "capabilities").is_dir(),
+            "capabilities/ absent (good)" if not (flow_map / "capabilities").is_dir() else "capabilities/ directory exists",
+        )
+    )
+    checks.append(
+        Check(
+            "no `tools-proposed.json` file",
+            not (flow_map / "tools-proposed.json").exists(),
+            "tools-proposed.json absent (good)" if not (flow_map / "tools-proposed.json").exists() else "tools-proposed.json exists",
+        )
+    )
+
+    # --- glossary ---
     checks.append(check_glossary_thin(flow_map / "glossary.md"))
-    checks.append(round_trip_skill_capability(flow_map / "skills", flow_map / "capabilities"))
 
-    leak_tools: list[str] = []
-    if skill_fm:
-        leak_tools.append(str(skill_fm.get("proposed_tool", "")))
-    checks.append(check_no_tool_leakage(flow_map / "flows", leak_tools))
+    # --- round-trip ---
+    checks.append(round_trip_skill_endpoint(flow_map / "skills", flow_map / "endpoints"))
+
+    # --- HTTP-detail leakage ---
+    checks.append(check_no_http_detail_leakage(flow_map / "flows", flow_map / "skills"))
 
     return checks
 
