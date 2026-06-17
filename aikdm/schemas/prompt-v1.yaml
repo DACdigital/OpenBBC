@@ -1,4 +1,4 @@
-version: v3
+version: v4
 
 main_prompt:
   - name: role
@@ -60,7 +60,7 @@ main_prompt:
     tag: tools
     source: config_derived
     required: true
-    guidance: "Structured list of atomic tools the agent can call, flattened from flow_map_config.capabilities[].tools[]. Each entry: name, description, method, path, auth, capability (back-ref), confidence, source. No LLM synthesis."
+    guidance: "Structured list of general-purpose tools the agent can call directly — endpoints with empty used_by_skills in the input. Each entry: id, description, method, path, auth, source. Tools that belong to a skill are described inside that skill's prompt; never listed here."
 
 skill_prompt:
   - name: role
@@ -77,7 +77,7 @@ skill_prompt:
     tag: tools
     source: llm_synthesized
     required: true
-    guidance: "Name the tools this skill calls. Describe each tool's purpose in 1-2 sentences and when to invoke it. Never use the word 'capability' or 'resource'; tools are the only abstraction the runtime agent sees."
+    guidance: "Name the tools this skill calls (every endpoint in target_skill.suggested_endpoints). For each: 1-2 sentence purpose + when to invoke. Never include HTTP method, path, or parameters in the prose body. Never use the word 'capability' or 'resource'; tools are the only abstraction the runtime agent sees."
   - name: guardrails
     tag: guardrails
     source: llm_synthesized
