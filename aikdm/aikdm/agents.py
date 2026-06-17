@@ -26,7 +26,7 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types as _genai_types
 from pydantic import BaseModel
 
-from aikdm.schemas import Capability, FlowMapConfig, Skill
+from aikdm.schemas import Endpoint, FlowMapConfig, Skill
 
 MAIN_PROMPT_SYSTEM_PROMPT = """\
 You are aikdm's main-prompt generator.
@@ -35,14 +35,14 @@ You receive a <flow_map_config> describing a planned AI agent and a
 <main_prompt_scaffold> showing the section layout you must produce.
 
 Your only output is the main system prompt as a single XML string.
-You do NOT emit skills — each skill is generated separately. The main
+You do NOT emit skills - each skill is generated separately. The main
 prompt references skills by name through <skills_index>; you do not
 write their prompt bodies.
 
 Rules:
 - Fill every LLM-synthesized tag with your own prose. Never copy the
   wizard fields (scope, business_domain, should_do, should_not_do) verbatim
-  — refine them into polished, concrete instructions.
+  - refine them into polished, concrete instructions.
 - The <workflows> section must begin with the <usage> sub-block copied
   verbatim from the scaffold, then synthesize each included flow
   (name, intent, preconditions, ordered steps referencing skill names,
@@ -51,37 +51,44 @@ Rules:
   agent picks skill Y / declines / redirects). Distinct from per-skill
   examples.
 - The <skills_index> lists every internal skill (name + one-line
-  description) — keep it in sync with the input.
+  description) - keep it in sync with the input.
 - The <external_actions> section names every external skill from input
   (skill id + external_note). Empty if there are none.
+- The <tools> section lists ONLY general-purpose tools - endpoints whose
+  used_by_skills in the input is empty. Tools that belong to one or more
+  skills are described INSIDE that skill's prompt; never duplicate them
+  at the agent level. For each general-purpose tool: name, description,
+  HTTP detail (method + path), auth.
 - Never use the words "capability" or "resource" in any prose section.
-  The runtime agent only knows about tools; treat tools as the only
-  abstraction. The input contains capabilities (config-time grouping),
-  but the agent's prompt must talk in terms of tools.
+  The runtime agent only knows about tools. Discovery uses "endpoint"
+  at its layer; in the bundle and runtime, the word is "tool".
 - All XML tags use Anthropic-style.
 
-Return structured output: {"main_prompt": "<role>...</role>...<external_actions/>"}
+Return structured output: {"main_prompt": "<role>...</role>...<tools/>"}
 """
 
 SKILL_PROMPT_SYSTEM_PROMPT = """\
 You are aikdm's skill-prompt generator.
 
-You receive a <flow_map_config>, a single <target_skill> (the skill you
-must write the prompt for), and a <skill_scaffold> showing the section
-layout. You produce the prompt body for THIS ONE skill.
+You receive a <flow_map_config>, a single <target_skill> (the business-
+domain skill you must write the prompt for), and a <skill_scaffold>
+showing the section layout. You produce the prompt body for THIS ONE
+skill.
 
 Rules:
 - Fill every LLM-synthesized tag in the scaffold with your own prose.
-- The <tools> block names a single <tool> with name=target_skill.proposed_tool.
-  Describe its purpose and when to invoke it. Never include HTTP method,
-  path, or parameters in the prompt body — those are metadata, not prose.
+- The <tools> block names EVERY endpoint in target_skill.suggested_endpoints[].
+  For each: a 1-2 sentence purpose and a "when to invoke" phrase mapping
+  user intent to the tool. Never include HTTP method, path, or parameters
+  in the prompt body - those are metadata on the endpoint, not prose.
 - Never use the words "capability" or "resource" in the prompt body. The
-  runtime agent only knows about tools; treat the tool as the abstraction.
+  runtime agent only knows about tools. Discovery uses "endpoint" at its
+  layer; in this skill's prompt the word is "tool".
 - The <examples> block shows 2-3 execution-level examples for this skill
   (a representative turn inside the skill, not skill routing).
 - Tone and guardrails must be consistent with the wider agent context
   (flow_map_config.scope, business_domain, should_not_do). You do not
-  see the main_prompt body — rely on shared input for consistency.
+  see the main_prompt body - rely on shared input for consistency.
 - All XML tags use Anthropic-style.
 
 Return structured output: {"name": "<skill-id>", "prompt": "<role>...</role>...<examples/>"}
@@ -102,14 +109,20 @@ Focus on:
 - <skills_index> entries not matching the input's internal skills (missing
   any, listing extra, name mismatches).
 - <external_actions> not matching the input's external skills.
+- The <tools> block contains endpoints whose used_by_skills is non-empty
+  in the input - these are skill-owned tools and must not appear at the
+  agent level. The agent <tools> block should list only general-purpose
+  tools (used_by_skills is empty).
+- The <tools> block omits a general-purpose tool that should be listed
+  (an endpoint whose used_by_skills is empty in the input).
 - Use of the words "capability" or "resource" in any prose section.
-  These are config-time terms — the runtime agent's main prompt must
-  only reference tools.
+  Capability is a v1 concept; do not use it. Discovery uses "endpoint";
+  the runtime/main-prompt uses "tool".
 - Examples that imply forbidden behavior (contradicting should_not_do).
 - Internal contradictions between sections (e.g. should_do allowing a
   thing the guardrails forbid).
 
-Do NOT critique skill prompt bodies — you don't see them. Do NOT flag
+Do NOT critique skill prompt bodies - you don't see them. Do NOT flag
 stylistic preferences. Return an empty list if the main_prompt is acceptable.
 
 Return structured output: {"issues": [string, ...]}.
@@ -122,17 +135,21 @@ Your job: identify substantive issues IN THIS SKILL PROMPT that would
 mislead an agent.
 
 Focus on:
-- The <tools> block: <tool> name must equal target_skill.proposed_tool.
-  No HTTP method/path/parameters allowed in the prose body.
-- Prose uses the words "capability" or "resource" instead of "tool".
-  The runtime agent only knows about tools — these terms must not appear
-  in skill or main-prompt body text.
+- The <tools> block: every endpoint id in target_skill.suggested_endpoints[]
+  must appear as a <tool name="..."> entry. Missing entries are a flag;
+  extra entries (tools the skill should not call) are a flag.
+- HTTP detail in prose body: any HTTP method (GET/POST/PUT/PATCH/DELETE)
+  at the start of a line, any "fetch(", "axios.", or "/api/" path string
+  is forbidden in the prompt body. HTTP detail lives on the endpoint
+  metadata, not in prose.
+- Use of the words "capability" or "resource" in the prompt body. Use
+  "tool" instead. Capability is a v1 concept and must not appear.
 - <examples> being routing examples rather than execution examples.
 - Skill body contradicting the input scope or should_not_do.
 - Missing or empty required sections.
 - Tone/guardrails clearly inconsistent with the input's business_domain.
 
-Do NOT critique the main_prompt — you don't see it. Do NOT flag
+Do NOT critique the main_prompt - you don't see it. Do NOT flag
 stylistic preferences. Return an empty list if the skill prompt is
 acceptable.
 
@@ -222,23 +239,31 @@ def _render_config_as_xml(config: FlowMapConfig) -> str:
     lines.append(f"  <scope>{_esc(config.scope)}</scope>")
     lines.append(f"  <should_do>{_esc(config.should_do)}</should_do>")
     lines.append(f"  <should_not_do>{_esc(config.should_not_do)}</should_not_do>")
-    lines.append("  <capabilities>")
-    for c in config.capabilities:
-        lines.append(f'    <capability name="{_esc(c.name)}">')
-        lines.append(f"      <summary>{_esc(c.summary)}</summary>")
-        lines.append(f"      <prose>{_esc(c.prose_md)}</prose>")
-        lines.append("    </capability>")
-    lines.append("  </capabilities>")
+    lines.append("  <endpoints>")
+    for e in config.endpoints:
+        used_by = ", ".join(e.used_by_skills)
+        lines.append(
+            f'    <endpoint id="{_esc(e.id)}" method="{e.method}" path="{_esc(e.path)}"'
+            f' auth="{_esc(e.auth)}" used_by_skills="{_esc(used_by)}">'
+        )
+        lines.append(f"      <prose>{_esc(e.prose_md)}</prose>")
+        lines.append("    </endpoint>")
+    lines.append("  </endpoints>")
     lines.append("  <skills>")
     for s in config.skills:
         lines.append(
-            f'    <skill id="{_esc(s.id)}" role="{s.role}" external="{str(s.external).lower()}">'
+            f'    <skill id="{_esc(s.id)}" external="{str(s.external).lower()}">'
         )
         lines.append(f"      <name>{_esc(s.name)}</name>")
+        lines.append(f"      <domain>{_esc(s.domain)}</domain>")
         lines.append(f"      <description>{_esc(s.description)}</description>")
         lines.append(f"      <user_phrases>{_esc(', '.join(s.user_phrases))}</user_phrases>")
-        lines.append(f"      <capability_ref>{_esc(s.capability_ref)}</capability_ref>")
-        lines.append(f"      <proposed_tool>{_esc(s.proposed_tool)}</proposed_tool>")
+        lines.append("      <suggested_endpoints>")
+        for ref in s.suggested_endpoints:
+            lines.append(
+                f'        <endpoint role="{ref.role}" when="{_esc(ref.when)}">{_esc(ref.endpoint)}</endpoint>'
+            )
+        lines.append("      </suggested_endpoints>")
         lines.append(f"      <external_note>{_esc(s.external_note)}</external_note>")
         lines.append(f"      <prose>{_esc(s.prose_md)}</prose>")
         lines.append("    </skill>")
@@ -261,17 +286,29 @@ def _render_config_as_xml(config: FlowMapConfig) -> str:
     return "\n".join(lines)
 
 
-def _render_target_skill_as_xml(skill: Skill, capability: Capability | None) -> str:
+def _render_target_skill_as_xml(skill: Skill, config: FlowMapConfig) -> str:
+    endpoint_by_id = {e.id: e for e in config.endpoints}
     lines: list[str] = [f'<target_skill id="{_esc(skill.id)}">']
     lines.append(f"  <name>{_esc(skill.name)}</name>")
+    lines.append(f"  <domain>{_esc(skill.domain)}</domain>")
     lines.append(f"  <description>{_esc(skill.description)}</description>")
-    lines.append(f"  <proposed_tool>{_esc(skill.proposed_tool)}</proposed_tool>")
-    lines.append(f"  <capability_ref>{_esc(skill.capability_ref)}</capability_ref>")
-    if capability is not None:
-        lines.append(f'  <linked_capability name="{_esc(capability.name)}">')
-        lines.append(f"    <summary>{_esc(capability.summary)}</summary>")
-        lines.append(f"    <prose>{_esc(capability.prose_md)}</prose>")
-        lines.append("  </linked_capability>")
+    lines.append("  <suggested_endpoints>")
+    for ref in skill.suggested_endpoints:
+        lines.append(
+            f'    <endpoint role="{ref.role}" when="{_esc(ref.when)}">{_esc(ref.endpoint)}</endpoint>'
+        )
+    lines.append("  </suggested_endpoints>")
+    lines.append("  <linked_endpoints>")
+    for ref in skill.suggested_endpoints:
+        ep = endpoint_by_id.get(ref.endpoint)
+        if ep is None:
+            continue
+        lines.append(
+            f'    <linked_endpoint id="{_esc(ep.id)}" method="{ep.method}" path="{_esc(ep.path)}" auth="{_esc(ep.auth)}">'
+        )
+        lines.append(f"      <prose>{_esc(ep.prose_md)}</prose>")
+        lines.append("    </linked_endpoint>")
+    lines.append("  </linked_endpoints>")
     lines.append(f"  <prose>{_esc(skill.prose_md)}</prose>")
     lines.append("</target_skill>")
     return "\n".join(lines)
@@ -386,7 +423,6 @@ async def call_skill_prompt(
     agent: LlmAgent,
     config: FlowMapConfig,
     skill: Skill,
-    capability: Capability | None,
     scaffold: str,
     *,
     previous_output: str | None = None,
@@ -394,7 +430,7 @@ async def call_skill_prompt(
 ) -> SkillPromptResult:
     parts = [
         _render_config_as_xml(config),
-        _render_target_skill_as_xml(skill, capability),
+        _render_target_skill_as_xml(skill, config),
         "<skill_scaffold>",
         scaffold,
         "</skill_scaffold>",
@@ -427,12 +463,11 @@ async def call_skill_prompt_critic(
     agent: LlmAgent,
     config: FlowMapConfig,
     skill: Skill,
-    capability: Capability | None,
     skill_prompt: str,
 ) -> CriticResult:
     user_message_xml = "\n".join([
         _render_config_as_xml(config),
-        _render_target_skill_as_xml(skill, capability),
+        _render_target_skill_as_xml(skill, config),
         "<skill_prompt>",
         skill_prompt,
         "</skill_prompt>",
