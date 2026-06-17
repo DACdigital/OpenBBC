@@ -1,15 +1,19 @@
 ---
-schema_version: 1
+schema_version: 2
 id: {{id}}
 name: {{name}}
+domain: "{{domain_one_line}}"
 description: "Use when {{trigger_condition}}"
 user_phrases:
 {{#each user_phrases}}
   - "{{this}}"
 {{/each}}
-role: {{role}}
-capability_ref: {{capability_ref}}
-proposed_tool: {{proposed_tool}}
+suggested_endpoints:
+{{#each suggested_endpoints}}
+  - endpoint: {{this.endpoint}}
+    role: {{this.role}}
+    when: "{{this.when}}"
+{{/each}}
 flows_using_this: [{{flows_using_this_csv}}]
 confidence: {{confidence}}
 ---
@@ -29,17 +33,15 @@ Trigger phrases:
 - "{{this}}"
 {{/each}}
 
-## Preconditions
+## Domain vocabulary
 
-{{#each preconditions}}
-{{@index_plus_1}}. {{this}}
+{{#each domain_concepts}}
+- {{this}}
 {{/each}}
 
-## Flows that surface this skill
+## Endpoint selection guide
 
-{{#each flows_using_this}}
-- [{{this.id}}](../flows/{{this.id}}.md) — {{this.context}}
-{{/each}}
+{{endpoint_selection_paragraph_or_list}}
 
 ## Failure modes
 
@@ -49,18 +51,10 @@ Trigger phrases:
 | {{this.result}} | {{this.meaning}} | {{this.action}} |
 {{/each}}
 
-## Examples
+## Flows that surface this skill
 
-{{#each examples}}
-**{{@index_plus_1}}.** User says: *"{{this.user_phrase}}"*
-
-Expected tool call shape (proposed — exact arguments depend on the
-final MCP server):
-
-```
-{{this.tool_call_shape}}
-```
-
+{{#each flows_using_this}}
+- [{{this.id}}](../flows/{{this.id}}.md) — {{this.context}}
 {{/each}}
 
 <!-- HUMAN id="notes" -->
