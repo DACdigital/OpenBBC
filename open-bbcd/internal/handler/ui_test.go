@@ -261,7 +261,7 @@ func TestUIHandler_DiscoveryDownload_StreamsZip(t *testing.T) {
 	if w.Header().Get("Content-Type") != "application/zip" {
 		t.Errorf("content-type = %q", w.Header().Get("Content-Type"))
 	}
-	if got := w.Header().Get("Content-Disposition"); !strings.Contains(got, `attachment; filename="abc.zip"`) {
+	if got := w.Header().Get("Content-Disposition"); !strings.Contains(got, `attachment; filename="`+agentID+`.zip"`) {
 		t.Errorf("content-disposition = %q", got)
 	}
 }

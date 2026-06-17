@@ -351,7 +351,10 @@ func (h *UIHandler) DiscoveryDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rc.Close()
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+agent.DiscoveryFilePath+`"`)
+	// Filename derives from agent.ID (always a UUID) rather than the
+	// discovery_file_path column — keeps header-injection-safe even if the
+	// path column ever holds untrusted strings.
+	w.Header().Set("Content-Disposition", `attachment; filename="`+agent.ID+`.zip"`)
 	if _, err := io.Copy(w, rc); err != nil {
 		h.logger.Warn("discovery download copy failed", slog.Any("error", err))
 	}
