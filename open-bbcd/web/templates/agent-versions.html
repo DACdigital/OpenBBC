@@ -10,7 +10,7 @@
            class="btn-secondary">Download discovery</a>
       {{end}}
       {{if .CurrentDeployedVersionID}}
-        <button class="btn-small btn-danger"
+        <button class="btn-secondary btn-danger"
                 hx-get="/agents/{{.AgentID}}/undeploy/confirm"
                 hx-target="body" hx-swap="beforeend">Undeploy</button>
       {{end}}
