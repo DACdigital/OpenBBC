@@ -21,6 +21,10 @@
         <button class="btn-primary"
                 hx-get="/agents/{{.AgentID}}/deploy/confirm?version_id={{.VersionID}}"
                 hx-target="body" hx-swap="beforeend">Deploy</button>
+      {{else if eq .AgentStatus "DEPLOYED"}}
+        <button class="btn-secondary btn-danger"
+                hx-get="/agents/{{.AgentID}}/undeploy/confirm"
+                hx-target="body" hx-swap="beforeend">Undeploy</button>
       {{end}}
     </div>
     {{end}}

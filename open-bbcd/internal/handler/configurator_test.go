@@ -958,25 +958,31 @@ func TestConfiguratorLayout_DeployButton_VisibleWhenReady(t *testing.T) {
 	}
 }
 
-func TestConfiguratorLayout_DeployButton_HiddenWhenDeployed(t *testing.T) {
+func TestConfiguratorLayout_UndeployButton_VisibleWhenDeployed(t *testing.T) {
 	body := renderConfigLayoutFixture(t, configFixture{
 		Tab: "architecture", SubTab: "flows",
 		ReadOnly: true, AgentStatus: "DEPLOYED",
 		AgentID: "a1", VersionID: "v1", AgentName: "Bot",
 	})
-	if strings.Contains(body, "deploy/confirm") {
+	if !strings.Contains(body, `hx-get="/agents/a1/undeploy/confirm"`) {
+		t.Errorf("expected Undeploy button hx-get; body:\n%s", body)
+	}
+	if strings.Contains(body, `/agents/a1/deploy/confirm`) {
 		t.Errorf("Deploy button must not render for DEPLOYED; body:\n%s", body)
 	}
 }
 
-func TestConfiguratorLayout_DeployButton_HiddenWhenDraft(t *testing.T) {
+func TestConfiguratorLayout_DeployAndUndeploy_HiddenWhenDraft(t *testing.T) {
 	body := renderConfigLayoutFixture(t, configFixture{
 		Tab: "architecture", SubTab: "flows",
 		ReadOnly: true, AgentStatus: "DRAFT",
 		AgentID: "a1", VersionID: "v1", AgentName: "Bot",
 	})
-	if strings.Contains(body, "deploy/confirm") {
+	if strings.Contains(body, `/agents/a1/deploy/confirm`) {
 		t.Errorf("Deploy button must not render for DRAFT; body:\n%s", body)
+	}
+	if strings.Contains(body, `/agents/a1/undeploy/confirm`) {
+		t.Errorf("Undeploy button must not render for DRAFT; body:\n%s", body)
 	}
 }
 
