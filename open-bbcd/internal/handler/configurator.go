@@ -148,6 +148,7 @@ type configPageData struct {
 	SubTab            string // architecture sub-tab: "flows" | "skills" | "capabilities" (empty for other primary tabs)
 	Config            types.FlowMapConfig
 	ParseError        string
+	Bundle            json.RawMessage   // raw bundle bytes; len()>0 ↔ HasBundle
 	WizardFields      []wizardFieldView // populated for the Inputs tab
 	SelectedFlow      *types.Flow
 	SelectedSkill     *types.Skill
@@ -190,6 +191,7 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 		HasBundle:         len(version.Bundle) > 0,
 		Config:            cfg,
 		ParseError:        parseErr,
+		Bundle:            version.Bundle,
 	}, nil
 }
 
@@ -285,16 +287,12 @@ func (h *ConfiguratorHandler) Prompts(w http.ResponseWriter, r *http.Request) {
 	data.Tab = "prompts"
 
 	page := promptsPageData{configPageData: data}
-	versionID := r.PathValue("version_id")
-	// Re-fetch the version row to access Bundle (load() drops the bytes,
-	// keeping only HasBundle).
-	version, _, gerr := h.repo.GetWithAgent(r.Context(), versionID)
-	if gerr == nil && len(version.Bundle) > 0 {
+	if len(data.Bundle) > 0 {
 		var raw struct {
 			MainPrompt string            `json:"main_prompt"`
 			Skills     []skillPromptView `json:"skills"`
 		}
-		if err := json.Unmarshal(version.Bundle, &raw); err == nil {
+		if err := json.Unmarshal(data.Bundle, &raw); err == nil {
 			page.MainPrompt = raw.MainPrompt
 			page.SkillPrompts = raw.Skills
 		}
