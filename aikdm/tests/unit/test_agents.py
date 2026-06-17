@@ -73,13 +73,15 @@ async def test_call_skill_prompt_forwards_target_and_scaffold(mocker):
     mocker.patch.object(agents, "_run_skill_prompt", side_effect=fake_run)
     cfg = load_flow_map_config(CONFIG)
     skill = next(s for s in cfg.skills if s.id == "place_order")
-    capability = next(c for c in cfg.capabilities if c.name == skill.capability_ref)
     result = await agents.call_skill_prompt(
-        _StubLlm(model="stub-model"), cfg, skill, capability,
+        _StubLlm(model="stub-model"), cfg, skill,
         scaffold="<scaffold/>",
     )
     assert result.skill_name == "place_order"
     assert "<target_skill id=\"place_order\">" in seen["xml"]
+    # v2: linked_endpoints (not linked_capabilities)
+    assert "<linked_endpoints>" in seen["xml"]
+    assert "<suggested_endpoints>" in seen["xml"]
 
 
 async def test_call_main_prompt_critic_forwards_main_prompt(mocker):
@@ -109,9 +111,8 @@ async def test_call_skill_prompt_critic_forwards_target_and_prompt(mocker):
     mocker.patch.object(agents, "_run_critic", side_effect=fake_run)
     cfg = load_flow_map_config(CONFIG)
     skill = next(s for s in cfg.skills if s.id == "place_order")
-    capability = next(c for c in cfg.capabilities if c.name == skill.capability_ref)
     result = await agents.call_skill_prompt_critic(
-        _StubLlm(model="stub-model"), cfg, skill, capability, "<role>body</role>",
+        _StubLlm(model="stub-model"), cfg, skill, "<role>body</role>",
     )
     assert result.issues == ["nope"]
     assert "<target_skill id=\"place_order\">" in seen["xml"]

@@ -40,7 +40,7 @@ def _patch_main_clean(mocker):
 
 def _patch_skill_clean(mocker):
     """call_skill_prompt returns a per-skill body; skill_prompt_critic finds no issues."""
-    async def fake_gen(agent, config, skill, capability, scaffold,
+    async def fake_gen(agent, config, skill, scaffold,
                        *, previous_output=None, critic_issues=None):
         return agents.SkillPromptResult(
             skill_name=skill.id, prompt=f"<role>{skill.id}</role>",
@@ -115,7 +115,7 @@ async def test_skill_unit_retries_independently_of_main(mocker, settings):
     _patch_adk(mocker)
     _patch_main_clean(mocker)
 
-    async def fake_gen(agent, config, skill, capability, scaffold,
+    async def fake_gen(agent, config, skill, scaffold,
                        *, previous_output=None, critic_issues=None):
         return agents.SkillPromptResult(
             skill_name=skill.id, prompt=f"<role>{skill.id}</role>",
@@ -125,7 +125,7 @@ async def test_skill_unit_retries_independently_of_main(mocker, settings):
     gen = mocker.patch.object(agents, "call_skill_prompt", side_effect=fake_gen)
 
     # check_rewards' critic always finds issues; place_order's clears immediately.
-    async def fake_crit(agent, config, skill, capability, prompt):
+    async def fake_crit(agent, config, skill, prompt):
         if skill.id == "check_rewards":
             return agents.CriticResult(
                 issues=["rewards body is wrong"], tokens_in=2, tokens_out=2,
@@ -228,41 +228,33 @@ async def test_orchestrator_propagates_skill_generation_failure(mocker, settings
         )
 
 
-async def test_orchestrator_flattens_capabilities_tools_to_bundle_tools(mocker, settings):
-    """v3: bundle exposes flat tools[]; each tool inherits HTTP detail from
-    its capability's tools[] entry, with a `capability` back-reference."""
+async def test_orchestrator_flattens_endpoints_to_bundle_tools(mocker, settings):
+    """v2: bundle exposes flat tools[]; each tool comes from config.endpoints[],
+    named by endpoint id, with HTTP detail from the endpoint."""
     _patch_adk(mocker)
     _patch_main_clean(mocker)
     _patch_skill_clean(mocker)
 
     config = load_flow_map_config(CONFIG_PATH)
     schema = load_prompt_schema(SCHEMA_PATH)
-    expected_tool_count = sum(len(c.tools) for c in config.capabilities)
-    assert expected_tool_count > 0, "fixture must have at least one tool to flatten"
+    assert len(config.endpoints) > 0, "fixture must have at least one endpoint"
 
     emitter = ProgressEmitter(io.StringIO())
     bundle = await orchestrator.run_generation(
         config=config, prompt_schema=schema, settings=settings, progress=emitter,
     )
 
-    assert len(bundle.tools) == expected_tool_count
-    # Build the expected (name, capability) pairs from the input and verify
-    # they all appear in the bundle output.
-    expected = {
-        (str(t.get("tool") or t.get("name") or ""), c.name)
-        for c in config.capabilities
-        for t in c.tools
-    }
-    actual = {(t.name, t.capability) for t in bundle.tools}
-    assert expected == actual
-    # Spot-check HTTP detail passthrough on one tool.
-    for c in config.capabilities:
-        for t in c.tools:
-            name = str(t.get("tool") or t.get("name") or "")
-            method = str(t.get("method") or "")
-            if not method:
-                continue
-            bt = next(b for b in bundle.tools if b.name == name and b.capability == c.name)
-            assert bt.method == method
-            assert bt.path == str(t.get("path") or "")
-            return
+    # One BundleTool per endpoint.
+    assert len(bundle.tools) == len(config.endpoints)
+    # Tool names come from endpoint ids.
+    tool_names = {t.name for t in bundle.tools}
+    endpoint_ids = {e.id for e in config.endpoints}
+    assert tool_names == endpoint_ids
+    # No legacy 'capability' field on BundleTool.
+    for t in bundle.tools:
+        assert not hasattr(t, "capability")
+    # Spot-check HTTP detail on orders.create.
+    orders_tool = next(t for t in bundle.tools if t.name == "orders.create")
+    assert orders_tool.method == "POST"
+    assert orders_tool.path == "/api/orders"
+    assert orders_tool.auth == "bearer"
