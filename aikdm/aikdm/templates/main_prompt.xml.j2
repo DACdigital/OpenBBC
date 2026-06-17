@@ -39,3 +39,15 @@
 {%- endfor %}
 </external_actions>
 {%- endif %}
+<tools>
+  <!-- LLM: list ONLY general-purpose tools - endpoints whose used_by_skills is empty
+       in the input. Tools that belong to a skill are described inside that skill,
+       not here. Format: <tool name="<id>"><description>...</description>
+       <http>METHOD path</http><auth>...</auth><source>...</source></tool> -->
+{%- for e in general_purpose_endpoints %}
+  <!-- general-purpose endpoint available: {{ e.id }} ({{ e.method }} {{ e.path }}) -->
+{%- endfor %}
+{%- if not general_purpose_endpoints %}
+  <!-- no general-purpose tools in input - all endpoints belong to a skill -->
+{%- endif %}
+</tools>
