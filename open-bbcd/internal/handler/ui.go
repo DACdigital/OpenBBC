@@ -3,7 +3,9 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"html/template"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -22,6 +25,7 @@ type GroupedAgentRepository interface {
 type UIHandler struct {
 	agentRepo         GroupedAgentRepository
 	versions          DeployVersionRepository
+	storage           storage.Storage
 	schema            *types.WizardSchema
 	logger            *slog.Logger
 	agentsTmpl        *template.Template
@@ -47,7 +51,7 @@ func statusClass(status string) string {
 	}
 }
 
-func NewUIHandler(agentRepo GroupedAgentRepository, versions DeployVersionRepository, schema *types.WizardSchema, webFS fs.FS, logger *slog.Logger) (*UIHandler, error) {
+func NewUIHandler(agentRepo GroupedAgentRepository, versions DeployVersionRepository, store storage.Storage, schema *types.WizardSchema, webFS fs.FS, logger *slog.Logger) (*UIHandler, error) {
 	funcs := template.FuncMap{
 		"statusClass": statusClass,
 		"add":         func(a, b int) int { return a + b },
@@ -102,6 +106,7 @@ func NewUIHandler(agentRepo GroupedAgentRepository, versions DeployVersionReposi
 	return &UIHandler{
 		agentRepo:         agentRepo,
 		versions:          versions,
+		storage:           store,
 		schema:            schema,
 		logger:            logger,
 		agentsTmpl:        agentsTmpl,
@@ -310,4 +315,44 @@ func (u *UIHandler) UndeployConfirm(w http.ResponseWriter, r *http.Request) {
 		AgentID string
 		Version *types.AgentVersion
 	}{agentID, cur})
+}
+
+// DiscoveryDownload streams the discovery zip referenced by the agent's
+// discovery_file_path. Returns 404 when the agent does not exist, has no
+// discovery_file_path, or the underlying blob is missing.
+func (h *UIHandler) DiscoveryDownload(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	agent, err := h.agentRepo.GetByID(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	if agent.DiscoveryFilePath == "" {
+		http.NotFound(w, r)
+		return
+	}
+	rc, err := h.storage.Open(r.Context(), agent.DiscoveryFilePath)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			h.logger.Info("discovery file missing on disk",
+				slog.String("agent_id", agentID),
+				slog.String("key", agent.DiscoveryFilePath),
+			)
+			http.NotFound(w, r)
+			return
+		}
+		h.logger.Error("storage.Open", slog.Any("error", err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+agent.DiscoveryFilePath+`"`)
+	if _, err := io.Copy(w, rc); err != nil {
+		h.logger.Warn("discovery download copy failed", slog.Any("error", err))
+	}
 }

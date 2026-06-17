@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"gopkg.in/yaml.v3"
 )
@@ -216,5 +219,106 @@ func TestUIHandler_AgentDetail_NoneDeployed(t *testing.T) {
 	h.AgentsPage(w, req)
 	if !strings.Contains(w.Body.String(), `<p class="deployed">—</p>`) {
 		t.Errorf("expected em-dash for no-deploy:\n%s", w.Body.String())
+	}
+}
+
+type stubStorage struct {
+	openFn func(ctx context.Context, key string) (io.ReadCloser, error)
+}
+
+func (s *stubStorage) Put(ctx context.Context, key string, r io.Reader) error { return nil }
+func (s *stubStorage) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	return s.openFn(ctx, key)
+}
+
+func TestUIHandler_DiscoveryDownload_StreamsZip(t *testing.T) {
+	agentID := "33333333-3333-3333-3333-333333333333"
+	agent := &types.Agent{ID: agentID, Name: "X", DiscoveryFilePath: "abc.zip"}
+	body := []byte("PK\x03\x04 fake zip")
+	h := &UIHandler{
+		agentRepo: &mockGroupedAgentRepo{
+			getByID: func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
+		},
+		storage: &stubStorage{openFn: func(ctx context.Context, key string) (io.ReadCloser, error) {
+			if key != "abc.zip" {
+				t.Fatalf("Open called with %q, want abc.zip", key)
+			}
+			return io.NopCloser(bytes.NewReader(body)), nil
+		}},
+		logger: slog.Default(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/agents/"+agentID+"/discovery", nil)
+	req.SetPathValue("agent_id", agentID)
+	w := httptest.NewRecorder()
+	h.DiscoveryDownload(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := w.Body.Bytes(); !bytes.Equal(got, body) {
+		t.Errorf("body mismatch: got %q", got)
+	}
+	if w.Header().Get("Content-Type") != "application/zip" {
+		t.Errorf("content-type = %q", w.Header().Get("Content-Type"))
+	}
+	if got := w.Header().Get("Content-Disposition"); !strings.Contains(got, `attachment; filename="abc.zip"`) {
+		t.Errorf("content-disposition = %q", got)
+	}
+}
+
+func TestUIHandler_DiscoveryDownload_AgentNotFound(t *testing.T) {
+	h := &UIHandler{
+		agentRepo: &mockGroupedAgentRepo{
+			getByID: func(ctx context.Context, id string) (*types.Agent, error) {
+				return nil, types.ErrNotFound
+			},
+		},
+		logger: slog.Default(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/agents/missing/discovery", nil)
+	req.SetPathValue("agent_id", "missing")
+	w := httptest.NewRecorder()
+	h.DiscoveryDownload(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestUIHandler_DiscoveryDownload_NoDiscoveryFile(t *testing.T) {
+	agentID := "44444444-4444-4444-4444-444444444444"
+	agent := &types.Agent{ID: agentID, Name: "X", DiscoveryFilePath: ""}
+	h := &UIHandler{
+		agentRepo: &mockGroupedAgentRepo{
+			getByID: func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
+		},
+		logger: slog.Default(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/agents/"+agentID+"/discovery", nil)
+	req.SetPathValue("agent_id", agentID)
+	w := httptest.NewRecorder()
+	h.DiscoveryDownload(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestUIHandler_DiscoveryDownload_FileMissingOnDisk(t *testing.T) {
+	agentID := "55555555-5555-5555-5555-555555555555"
+	agent := &types.Agent{ID: agentID, Name: "X", DiscoveryFilePath: "abc.zip"}
+	h := &UIHandler{
+		agentRepo: &mockGroupedAgentRepo{
+			getByID: func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
+		},
+		storage: &stubStorage{openFn: func(ctx context.Context, key string) (io.ReadCloser, error) {
+			return nil, storage.ErrNotFound
+		}},
+		logger: slog.Default(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/agents/"+agentID+"/discovery", nil)
+	req.SetPathValue("agent_id", agentID)
+	w := httptest.NewRecorder()
+	h.DiscoveryDownload(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
 	}
 }

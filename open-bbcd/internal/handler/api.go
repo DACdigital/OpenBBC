@@ -75,7 +75,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("parse wizard schema", err)
 	}
 
-	uiHandler, err := NewUIHandler(agentRepo, versionRepo, &schema, web.Assets, logger)
+	uiHandler, err := NewUIHandler(agentRepo, versionRepo, store, &schema, web.Assets, logger)
 	if err != nil {
 		fatal("init UI handler", err)
 	}
@@ -168,6 +168,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	// Per-agent deploy/undeploy + confirm modals
 	mux.HandleFunc("POST /agents/{agent_id}/deploy", deployHandler.Deploy)
 	mux.HandleFunc("POST /agents/{agent_id}/undeploy", deployHandler.Undeploy)
+	mux.HandleFunc("GET /agents/{agent_id}/discovery", uiHandler.DiscoveryDownload)
 	mux.HandleFunc("GET /agents/{agent_id}/deploy/confirm", uiHandler.DeployConfirm)
 	mux.HandleFunc("GET /agents/{agent_id}/undeploy/confirm", uiHandler.UndeployConfirm)
 
