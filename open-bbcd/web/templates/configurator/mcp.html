@@ -1,0 +1,32 @@
+{{define "tab_content"}}
+<div class="config-banner">
+  Attach MCP servers to this agent version. Each attached server's tools become available at runtime. The note (optional) is folded into the main prompt by aikdm as guidance for when to use the server.
+</div>
+
+{{if .AllMCPBackends}}
+<div class="config-mcp-list">
+  {{range .AllMCPBackends}}
+    {{$bid := .ID}}
+    {{$att := index $.Attachments $bid}}
+    {{$attached := ne $att nil}}
+    <div class="config-mcp-row">
+      <div class="config-mcp-header">
+        <label class="checkbox-row">
+          <input type="checkbox" name="attached" value="1" {{if $attached}}checked{{end}}
+                 hx-trigger="change"
+                 hx-post="/agent_versions/{{$.VersionID}}/architecture/mcp/{{$bid}}/toggle"
+                 hx-include="[name=attached]"
+                 hx-target="#mcp-row-{{$bid}}" hx-swap="outerHTML">
+          <span><strong>{{.Name}}</strong> <span class="muted">— {{.PrimaryURL}}</span></span>
+        </label>
+      </div>
+      <div id="mcp-row-{{$bid}}" class="config-mcp-detail">
+        {{template "mcp_row_detail" (dict "VersionID" $.VersionID "Backend" . "Attachment" $att)}}
+      </div>
+    </div>
+  {{end}}
+</div>
+{{else}}
+<p class="empty-state">No MCP backends registered yet. <a href="/mcp/new?kind=mcp_client">Create one</a>.</p>
+{{end}}
+{{end}}

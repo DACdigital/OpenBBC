@@ -172,6 +172,9 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/finalize", configuratorHandler.FinalizeConfirm)
 	mux.HandleFunc("POST /agent_versions/{version_id}/finalize", configuratorHandler.Finalize)
 	mux.HandleFunc("GET /agent_versions/{version_id}/config.yaml", configuratorHandler.DownloadYAML)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/mcp", configuratorHandler.MCPSubtab)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/toggle", configuratorHandler.ToggleMCPBackend)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/note", configuratorHandler.UpdateMCPNote)
 	RegisterConfiguratorRedirects(mux)
 
 	// MCP / tool backends CRUD

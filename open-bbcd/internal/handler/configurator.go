@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"html/template"
 	"io/fs"
 	"net/http"
@@ -32,12 +33,19 @@ type ConfigStore interface {
 	UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error
 }
 
+// mcpBackendView wraps a ToolBackend and exposes its primary URL for template
+// use without requiring the template to decode the Config JSON blob.
+type mcpBackendView struct {
+	*types.ToolBackend
+	PrimaryURL string
+}
+
 type ConfiguratorHandler struct {
-	repo                                                                            ConfigStore
-	backends                                                                        *repository.ToolBackendRepository
-	wiring                                                                          *repository.VersionWiringRepository
-	schema                                                                          *types.WizardSchema
-	flowsTmpl, skillsTmpl, endpointsTmpl, finalizeTmpl, inputsTmpl, promptsTmpl *template.Template
+	repo                                                                                    ConfigStore
+	backends                                                                                *repository.ToolBackendRepository
+	wiring                                                                                  *repository.VersionWiringRepository
+	schema                                                                                  *types.WizardSchema
+	flowsTmpl, skillsTmpl, endpointsTmpl, finalizeTmpl, inputsTmpl, promptsTmpl, mcpTmpl *template.Template
 }
 
 func NewConfiguratorHandler(
@@ -127,6 +135,10 @@ func NewConfiguratorHandler(
 	if err != nil {
 		return nil, err
 	}
+	mcpTmpl, err := parse("mcp")
+	if err != nil {
+		return nil, err
+	}
 	return &ConfiguratorHandler{
 		repo:          repo,
 		backends:      backends,
@@ -138,6 +150,7 @@ func NewConfiguratorHandler(
 		finalizeTmpl:  finalizeTmpl,
 		inputsTmpl:    inputsTmpl,
 		promptsTmpl:   promptsTmpl,
+		mcpTmpl:       mcpTmpl,
 	}, nil
 }
 
@@ -537,6 +550,156 @@ func (h *ConfiguratorHandler) SetEndpointBackend(w http.ResponseWriter, r *http.
 		"AvailableBackends": httpBackends,
 		"EndpointBackends":  endpointBackends,
 	})
+}
+
+// MCPSubtab renders the architecture/mcp subtab — list of all MCP backends
+// globally with attach checkboxes + notes.
+func (h *ConfiguratorHandler) MCPSubtab(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	version, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	data, err := h.mcpSubtabData(r.Context(), version, agent)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, h.mcpTmpl, "layout", data)
+}
+
+func (h *ConfiguratorHandler) mcpSubtabData(ctx context.Context, version *types.AgentVersion, agent *types.Agent) (map[string]any, error) {
+	var allBackends []mcpBackendView
+	if h.backends != nil {
+		all, err := h.backends.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, b := range all {
+			if b.Kind == types.ToolBackendKindMCPClient {
+				var cfg types.MCPBackendConfig
+				_ = json.Unmarshal(b.Config, &cfg)
+				allBackends = append(allBackends, mcpBackendView{
+					ToolBackend: b,
+					PrimaryURL:  cfg.URL,
+				})
+			}
+		}
+	}
+	var attMap map[string]*repository.MCPAttachment
+	if h.wiring != nil {
+		atts, err := h.wiring.ListMCPAttachments(ctx, version.ID)
+		if err != nil {
+			return nil, err
+		}
+		attMap = make(map[string]*repository.MCPAttachment, len(atts))
+		for i := range atts {
+			a := atts[i]
+			attMap[a.BackendID] = &a
+		}
+	}
+	return map[string]any{
+		"VersionID":      version.ID,
+		"AgentName":      agent.Name,
+		"AgentID":        agent.ID,
+		"Tab":            "architecture",
+		"SubTab":         "mcp",
+		"Active":         "agents",
+		"AllMCPBackends": allBackends,
+		"Attachments":    attMap,
+	}, nil
+}
+
+// ToggleMCPBackend attaches or detaches an MCP backend based on whether the
+// "attached" form field is present. Returns the row's detail fragment.
+func (h *ConfiguratorHandler) ToggleMCPBackend(w http.ResponseWriter, r *http.Request) {
+	vid := r.PathValue("version_id")
+	bid := r.PathValue("backendID")
+	if err := r.ParseForm(); err != nil {
+		Error(w, err)
+		return
+	}
+	attached := r.FormValue("attached") != ""
+
+	if h.wiring == nil {
+		http.Error(w, "wiring repo not configured", http.StatusInternalServerError)
+		return
+	}
+
+	if attached {
+		if err := h.wiring.AttachMCP(r.Context(), vid, bid, ""); err != nil {
+			Error(w, err)
+			return
+		}
+	} else {
+		if err := h.wiring.DetachMCP(r.Context(), vid, bid); err != nil {
+			Error(w, err)
+			return
+		}
+	}
+	h.renderMCPRowFragment(w, r.Context(), vid, bid)
+}
+
+// UpdateMCPNote updates the guidance note for an attached MCP backend.
+// Returns 204 (no content) since the textarea fires on blur and doesn't need
+// a re-render.
+func (h *ConfiguratorHandler) UpdateMCPNote(w http.ResponseWriter, r *http.Request) {
+	vid := r.PathValue("version_id")
+	bid := r.PathValue("backendID")
+	if err := r.ParseForm(); err != nil {
+		Error(w, err)
+		return
+	}
+	note := r.FormValue("note")
+
+	if h.wiring == nil {
+		http.Error(w, "wiring repo not configured", http.StatusInternalServerError)
+		return
+	}
+
+	// AttachMCP upserts — re-attaching with the new note updates it.
+	if err := h.wiring.AttachMCP(r.Context(), vid, bid, note); err != nil {
+		Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// renderMCPRowFragment renders just the #mcp-row-{bid} outer div for htmx
+// outerHTML swap after a toggle or note update.
+func (h *ConfiguratorHandler) renderMCPRowFragment(w http.ResponseWriter, ctx context.Context, vid, bid string) {
+	if h.backends == nil || h.wiring == nil {
+		http.Error(w, "repos not configured", http.StatusInternalServerError)
+		return
+	}
+	be, err := h.backends.Get(ctx, bid)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	atts, err := h.wiring.ListMCPAttachments(ctx, vid)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	var att *repository.MCPAttachment
+	for i := range atts {
+		if atts[i].BackendID == bid {
+			a := atts[i]
+			att = &a
+			break
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<div id="mcp-row-%s" class="config-mcp-detail">`, html.EscapeString(bid))
+	_ = h.mcpTmpl.ExecuteTemplate(w, "mcp_row_detail", map[string]any{
+		"VersionID":  vid,
+		"Backend":    be,
+		"Attachment": att,
+	})
+	fmt.Fprint(w, `</div>`)
 }
 
 // tplDict builds a map[string]any from alternating key/value template args.
