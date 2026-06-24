@@ -54,6 +54,47 @@ def test_main_scaffold_workflow_hints_list_included_flows_only():
             assert f.id not in workflows
 
 
+def test_main_prompt_renders_attached_mcps_when_present():
+    from aikdm.schemas import FlowMapConfig, FlowMapSource, AttachedMCP
+
+    cfg = FlowMapConfig(
+        schema_version=3,
+        name="x",
+        source=FlowMapSource(
+            compiler_schema_version=2,
+            generated_from_sha="abc123",
+            app_name="test-app",
+        ),
+        attached_mcps=[
+            AttachedMCP(name="Slack", url="https://slack.example", note="use for escalations"),
+            AttachedMCP(name="GitHub", url="https://gh.example"),
+        ],
+    )
+    xml = render_main_prompt_scaffold(cfg)
+    assert "<external_mcps>" in xml
+    assert "Slack" in xml
+    assert "GitHub" in xml
+    assert "use for escalations" in xml
+    assert "https://slack.example" in xml
+    assert "https://gh.example" in xml
+
+
+def test_main_prompt_omits_external_mcps_when_empty():
+    from aikdm.schemas import FlowMapConfig, FlowMapSource
+
+    cfg = FlowMapConfig(
+        schema_version=3,
+        name="x",
+        source=FlowMapSource(
+            compiler_schema_version=2,
+            generated_from_sha="abc123",
+            app_name="test-app",
+        ),
+    )
+    xml = render_main_prompt_scaffold(cfg)
+    assert "<external_mcps>" not in xml
+
+
 def test_skill_scaffold_renders_linked_endpoints():
     cfg = load_flow_map_config(CONFIG)
     skill = next(s for s in cfg.skills if s.id == "place_order")

@@ -56,6 +56,12 @@ main_prompt:
     source: config_derived
     required: false
     guidance: "Bulleted list of external skills the agent must redirect the user to."
+  - name: external_mcps
+    tag: external_mcps
+    source: config_derived
+    source_field: attached_mcps
+    required: false
+    guidance: "List of external MCP servers attached to this agent version, with the operator's guidance note for when to use each. Rendered verbatim from config.attached_mcps; the LLM does not synthesize this section."
   - name: tools
     tag: tools
     source: config_derived
