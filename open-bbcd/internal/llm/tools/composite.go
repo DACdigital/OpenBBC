@@ -55,7 +55,10 @@ func (c *Composite) Call(ctx context.Context, bundle json.RawMessage, call Call)
 	// tools aren't prefixed, since each tool name is unique across endpoints
 	// within the agent version).
 	for _, be := range c.backends {
-		defs, _ := be.Tools(ctx)
+		defs, err := be.Tools(ctx)
+		if err != nil {
+			return Result{ToolUseID: call.ID}, fmt.Errorf("tools: backend %s Tools() during routing: %w", be.Name(), err)
+		}
 		for _, d := range defs {
 			if d.Name == call.Name {
 				return be.Call(ctx, call.Name, call.Input)
@@ -110,8 +113,10 @@ func buildSkillToolDef(bundle json.RawMessage) (llm.ToolDef, error) {
 
 func callSkillMetaTool(bundle json.RawMessage, call Call) (Result, error) {
 	var b bundleSkillShape
-	if err := json.Unmarshal(bundle, &b); err != nil {
-		return Result{ToolUseID: call.ID}, fmt.Errorf("tools: parse bundle for Skill call: %w", err)
+	if len(bundle) > 0 {
+		if err := json.Unmarshal(bundle, &b); err != nil {
+			return Result{ToolUseID: call.ID}, fmt.Errorf("tools: parse bundle for Skill call: %w", err)
+		}
 	}
 	var args struct {
 		Name string `json:"name"`
