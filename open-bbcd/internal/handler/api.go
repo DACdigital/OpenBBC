@@ -139,7 +139,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agents/new/step/{n}", uiHandler.WizardStep)
 	mux.HandleFunc("POST /agents/wizard", wizardHandler.Submit)
 
-	// Per-version configurator. Flows / Skills / Capabilities are nested under
+	// Per-version configurator. Flows / Skills / Endpoints are nested under
 	// the Architecture primary tab; Inputs, Finalize, and the YAML download are
 	// siblings. RegisterConfiguratorRedirects below 301s the pre-redesign tab
 	// URLs to their /architecture/ equivalents.
@@ -148,8 +148,8 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/flows/{flowId}", configuratorHandler.Flows)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills", configuratorHandler.Skills)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/{skillId}", configuratorHandler.Skills)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/capabilities", configuratorHandler.Capabilities)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/capabilities/{capName}", configuratorHandler.Capabilities)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/endpoints", configuratorHandler.Endpoints)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/endpoints/{endpointID}", configuratorHandler.Endpoints)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/inputs", configuratorHandler.Inputs)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/prompts", configuratorHandler.Prompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)

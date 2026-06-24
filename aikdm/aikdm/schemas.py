@@ -1,15 +1,15 @@
 """Pydantic models for aikdm inputs and outputs.
 
-The input contract mirrors the upstream FlowMapConfig shape that
-producers emit. Adding a field upstream requires adding it here too
-(and bumping schema_version).
+The input contract mirrors the v2 FlowMapConfig shape that producers emit
+(open-bbcd's flowmap.Parse → JSONB row → CLI stdin YAML). Adding a field
+upstream requires adding it here too (and bumping schema_version).
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class FlowMapSource(BaseModel):
@@ -21,13 +21,38 @@ class FlowMapSource(BaseModel):
     stack: dict[str, str] = Field(default_factory=dict)
 
 
-class Capability(BaseModel):
+class ParamSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    summary: str = ""
-    tools: list[dict[str, Any]] = Field(default_factory=list)
+    type: str = ""
+    required: bool = False
+
+
+class Endpoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    proposed: bool = True
+    method: str
+    path: str
+    path_params: list[ParamSpec] = Field(default_factory=list)
+    query_params: list[ParamSpec] = Field(default_factory=list)
+    body_shape: Any = None
+    response_shape: Any = None
+    auth: str = ""
+    source: str = ""
+    used_by_skills: list[str] = Field(default_factory=list)
+    confidence: str = ""
     prose_md: str = ""
+
+
+class SkillEndpointRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint: str
+    role: Literal["read", "write", "side-effect"] = "read"
+    when: str = ""
 
 
 class Skill(BaseModel):
@@ -37,12 +62,12 @@ class Skill(BaseModel):
     origin: Literal["discovered", "custom"]
     name: str
     description: str = ""
+    domain: str = ""
     user_phrases: list[str] = Field(default_factory=list)
-    role: Literal["read", "write"]
-    capability_ref: str = ""
+    suggested_endpoints: list[SkillEndpointRef] = Field(default_factory=list)
     external: bool = False
     external_note: str = ""
-    proposed_tool: str = ""
+    confidence: str = ""
     prose_md: str = ""
 
 
@@ -92,9 +117,17 @@ class FlowMapConfig(BaseModel):
     should_not_do: str = ""
     business_domain: str = ""
     source: FlowMapSource
-    capabilities: list[Capability] = Field(default_factory=list)
+    endpoints: list[Endpoint] = Field(default_factory=list)
     skills: list[Skill] = Field(default_factory=list)
     flows: list[Flow] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_v2(self) -> "FlowMapConfig":
+        if self.schema_version != 2:
+            raise ValueError(
+                f"schema_version {self.schema_version} not supported; require 2"
+            )
+        return self
 
 
 # ---------- Output bundle ----------
@@ -141,14 +174,11 @@ class ExternalAction(BaseModel):
 
 
 class BundleTool(BaseModel):
-    """Atomic tool the agent can call. One entry per backend endpoint —
-    flattened from FlowMapConfig.capabilities[].tools[]. Carries the
-    information open-bbcd needs to wrap the endpoint as an MCP tool
-    (name, method, path, auth) plus runtime context (description,
-    capability back-reference for grouping, source for provenance).
-
-    Request/response schemas are not yet emitted by the discovery skill;
-    when they appear they'll land in `input_schema` / `output_schema`.
+    """Atomic tool the agent can call. One entry per discovered endpoint
+    (flattened from FlowMapConfig.endpoints[]). Carries the information
+    open-bbcd needs to wrap the endpoint as an MCP tool (name, method,
+    path, auth) plus runtime context (description, source for provenance,
+    confidence).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -158,9 +188,8 @@ class BundleTool(BaseModel):
     method: str
     path: str
     auth: str = ""
-    capability: str = ""  # back-ref to source capability (for future MCP grouping)
-    confidence: str = ""  # discovery confidence: "high" | "medium" | "low"
-    source: str = ""  # provenance, e.g. "src/api/orders.ts:24"
+    confidence: str = ""
+    source: str = ""
 
 
 class Bundle(BaseModel):
@@ -182,12 +211,12 @@ SectionSource = Literal["wizard_copied", "llm_synthesized", "config_derived"]
 class PromptSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str                           # logical identifier
-    tag: str                            # XML tag rendered in the final prompt
+    name: str
+    tag: str
     source: SectionSource
-    source_field: str = ""              # for wizard_copied: which FlowMapConfig field
+    source_field: str = ""
     required: bool = True
-    guidance: str = ""                  # short note rendered into the generator system prompt
+    guidance: str = ""
 
 
 class PromptSchema(BaseModel):

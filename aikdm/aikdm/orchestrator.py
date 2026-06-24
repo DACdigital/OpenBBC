@@ -73,9 +73,8 @@ async def run_generation(
 
     main_scaffold = rendering.render_main_prompt_scaffold(config)
     internal_skills, external_skills = rendering.split_skills(config)
-    capability_by_name = {c.name: c for c in config.capabilities}
     skill_scaffolds = {
-        s.id: rendering.render_skill_prompt_scaffold(s, capability_by_name.get(s.capability_ref))
+        s.id: rendering.render_skill_prompt_scaffold(s, config)
         for s in internal_skills
     }
 
@@ -95,15 +94,14 @@ async def run_generation(
 
     async def skill_unit_task(skill: Skill) -> _UnitOutcome:
         scaffold = skill_scaffolds[skill.id]
-        capability = capability_by_name.get(skill.capability_ref)
         return await _run_unit_atomic(
             unit_name=f"skill:{skill.id}",
             max_rounds=settings.critic_rounds,
             generate=lambda prev, issues: _gen_skill(
-                skill_agent, config, skill, capability, scaffold, prev, issues
+                skill_agent, config, skill, scaffold, prev, issues
             ),
             criticise=lambda body: _crit_skill(
-                skill_critic, config, skill, capability, body
+                skill_critic, config, skill, body
             ),
             progress=progress,
             semaphore=sem,
@@ -219,20 +217,20 @@ async def _crit_main(
 
 
 async def _gen_skill(
-    agent, config: FlowMapConfig, skill: Skill, capability, scaffold: str,
+    agent, config: FlowMapConfig, skill: Skill, scaffold: str,
     prev: str | None, issues: list[str],
 ) -> tuple[str, int, int]:
     res = await agents.call_skill_prompt(
-        agent, config, skill, capability, scaffold,
+        agent, config, skill, scaffold,
         previous_output=prev, critic_issues=issues,
     )
     return res.prompt, res.tokens_in, res.tokens_out
 
 
 async def _crit_skill(
-    agent, config: FlowMapConfig, skill: Skill, capability, body: str,
+    agent, config: FlowMapConfig, skill: Skill, body: str,
 ) -> tuple[list[str], int, int]:
-    res = await agents.call_skill_prompt_critic(agent, config, skill, capability, body)
+    res = await agents.call_skill_prompt_critic(agent, config, skill, body)
     return res.issues, res.tokens_in, res.tokens_out
 
 
@@ -289,25 +287,24 @@ def _assemble_bundle(
         [main_outcome.rounds_run] + [o.rounds_run for o in skill_outcomes.values()]
     )
 
-    # Flatten capabilities[].tools[] → bundle.tools[]. The agent's runtime
-    # abstraction is "tool"; capability is a config-side grouping only.
-    # Each tool entry carries enough to wrap as an MCP tool (name, method,
-    # path, auth) plus runtime context.
+    # Flatten config.endpoints[] → bundle.tools[]. The agent's runtime
+    # abstraction is "tool"; discovery's "endpoint" is the same atom under a
+    # different name. Each tool entry carries enough to wrap as an MCP tool
+    # (name, method, path, auth) plus runtime context.
     tools: list[BundleTool] = []
-    for c in config.capabilities:
-        for t in c.tools:
-            tools.append(
-                BundleTool(
-                    name=str(t.get("tool") or t.get("name") or ""),
-                    description=str(t.get("does") or t.get("description") or ""),
-                    method=str(t.get("method") or ""),
-                    path=str(t.get("path") or ""),
-                    auth=str(t.get("auth") or ""),
-                    capability=c.name,
-                    confidence=str(t.get("confidence") or ""),
-                    source=str(t.get("source") or ""),
-                )
+    for e in config.endpoints:
+        first_line = e.prose_md.splitlines()[0] if e.prose_md else ""
+        tools.append(
+            BundleTool(
+                name=e.id,
+                description=first_line,
+                method=e.method,
+                path=e.path,
+                auth=e.auth,
+                confidence=e.confidence,
+                source=e.source,
             )
+        )
 
     metadata = BundleMetadata(
         config_schema_version=config.schema_version,

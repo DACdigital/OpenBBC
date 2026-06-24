@@ -1,10 +1,10 @@
 package types
 
 // FlowMapConfig is the agent's full configuration: phase-1 wizard fields
-// at root, plus the parsed and edited discovery snapshot. Stored in the
-// agents.flow_map_config JSONB column; rendered as YAML on demand.
+// at root, plus the parsed and edited v2 discovery snapshot. Stored in
+// the agents.flow_map_config JSONB column; rendered as YAML on demand.
 type FlowMapConfig struct {
-	SchemaVersion int `json:"schema_version" yaml:"schema_version"`
+	SchemaVersion int `json:"schema_version" yaml:"schema_version"` // must be 2
 
 	// Phase-1 wizard answers.
 	Name           string `json:"name" yaml:"name"`
@@ -14,10 +14,10 @@ type FlowMapConfig struct {
 	BusinessDomain string `json:"business_domain,omitempty" yaml:"business_domain,omitempty"`
 
 	// Phase-2 discovery snapshot.
-	Source       FlowMapSource `json:"source" yaml:"source"`
-	Capabilities []Capability  `json:"capabilities" yaml:"capabilities"`
-	Skills       []Skill       `json:"skills" yaml:"skills"`
-	Flows        []Flow        `json:"flows" yaml:"flows"`
+	Source    FlowMapSource `json:"source" yaml:"source"`
+	Endpoints []Endpoint    `json:"endpoints" yaml:"endpoints"`
+	Skills    []Skill       `json:"skills" yaml:"skills"`
+	Flows     []Flow        `json:"flows" yaml:"flows"`
 }
 
 type FlowMapSource struct {
@@ -27,25 +27,46 @@ type FlowMapSource struct {
 	Stack                 map[string]string `json:"stack,omitempty" yaml:"stack,omitempty"`
 }
 
-type Capability struct {
-	Name    string           `json:"name" yaml:"name"`
-	Summary string           `json:"summary,omitempty" yaml:"summary,omitempty"`
-	Tools   []map[string]any `json:"tools,omitempty" yaml:"tools,omitempty"`
-	ProseMD string           `json:"prose_md,omitempty" yaml:"prose_md,omitempty"`
+type Endpoint struct {
+	ID            string      `json:"id" yaml:"id"`
+	Proposed      bool        `json:"proposed" yaml:"proposed"`
+	Method        string      `json:"method" yaml:"method"`
+	Path          string      `json:"path" yaml:"path"`
+	PathParams    []ParamSpec `json:"path_params,omitempty" yaml:"path_params,omitempty"`
+	QueryParams   []ParamSpec `json:"query_params,omitempty" yaml:"query_params,omitempty"`
+	BodyShape     any         `json:"body_shape,omitempty" yaml:"body_shape,omitempty"`
+	ResponseShape any         `json:"response_shape,omitempty" yaml:"response_shape,omitempty"`
+	Auth          string      `json:"auth" yaml:"auth"`
+	Source        string      `json:"source,omitempty" yaml:"source,omitempty"`
+	UsedBySkills  []string    `json:"used_by_skills" yaml:"used_by_skills"`
+	Confidence    string      `json:"confidence,omitempty" yaml:"confidence,omitempty"`
+	ProseMD       string      `json:"prose_md,omitempty" yaml:"prose_md,omitempty"`
+}
+
+type ParamSpec struct {
+	Name     string `json:"name" yaml:"name"`
+	Type     string `json:"type,omitempty" yaml:"type,omitempty"`
+	Required bool   `json:"required" yaml:"required"`
 }
 
 type Skill struct {
-	ID            string   `json:"id" yaml:"id"`
-	Origin        string   `json:"origin" yaml:"origin"` // "discovered" | "custom"
-	Name          string   `json:"name" yaml:"name"`
-	Description   string   `json:"description,omitempty" yaml:"description,omitempty"`
-	UserPhrases   []string `json:"user_phrases,omitempty" yaml:"user_phrases,omitempty"`
-	Role          string   `json:"role" yaml:"role"` // "read" | "write"
-	CapabilityRef string   `json:"capability_ref,omitempty" yaml:"capability_ref,omitempty"`
-	External      bool     `json:"external" yaml:"external"`
-	ExternalNote  string   `json:"external_note,omitempty" yaml:"external_note,omitempty"`
-	ProposedTool  string   `json:"proposed_tool,omitempty" yaml:"proposed_tool,omitempty"`
-	ProseMD       string   `json:"prose_md,omitempty" yaml:"prose_md,omitempty"`
+	ID                 string             `json:"id" yaml:"id"`
+	Origin             string             `json:"origin" yaml:"origin"`
+	Name               string             `json:"name" yaml:"name"`
+	Description        string             `json:"description,omitempty" yaml:"description,omitempty"`
+	Domain             string             `json:"domain,omitempty" yaml:"domain,omitempty"`
+	UserPhrases        []string           `json:"user_phrases,omitempty" yaml:"user_phrases,omitempty"`
+	SuggestedEndpoints []SkillEndpointRef `json:"suggested_endpoints,omitempty" yaml:"suggested_endpoints,omitempty"`
+	External           bool               `json:"external" yaml:"external"`
+	ExternalNote       string             `json:"external_note,omitempty" yaml:"external_note,omitempty"`
+	Confidence         string             `json:"confidence,omitempty" yaml:"confidence,omitempty"`
+	ProseMD            string             `json:"prose_md,omitempty" yaml:"prose_md,omitempty"`
+}
+
+type SkillEndpointRef struct {
+	Endpoint string `json:"endpoint" yaml:"endpoint"`
+	Role     string `json:"role" yaml:"role"`
+	When     string `json:"when,omitempty" yaml:"when,omitempty"`
 }
 
 type Flow struct {

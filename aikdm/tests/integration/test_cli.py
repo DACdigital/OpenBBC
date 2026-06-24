@@ -51,7 +51,7 @@ def stub_llm(mocker, monkeypatch):
         )),
     )
 
-    async def fake_skill(agent, config, skill, capability, scaffold,
+    async def fake_skill(agent, config, skill, scaffold,
                          *, previous_output=None, critic_issues=None):
         return agents.SkillPromptResult(
             skill_name=skill.id, prompt="<role>p</role>",
@@ -80,7 +80,7 @@ def test_generate_agent_writes_bundle_to_stdout(stub_llm):
     assert result.exit_code == 0, result.stderr
     bundle = yaml.safe_load(result.stdout)
     assert bundle["main_prompt"] == "<role>r</role>"
-    assert bundle["metadata"]["prompt_schema_version"] == "v3"
+    assert bundle["metadata"]["prompt_schema_version"] == "v4"
 
 
 def test_generate_agent_writes_bundle_to_output_path(stub_llm, tmp_path):

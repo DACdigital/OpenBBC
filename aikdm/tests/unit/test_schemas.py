@@ -9,6 +9,7 @@ from aikdm.schemas import (
     BundleMetadata,
     ExternalAction,
     FlowMapConfig,
+    FlowMapSource,
     PromptSchema,
     PromptSection,
     SkillPrompt,
@@ -22,10 +23,10 @@ def test_flow_map_config_parses_canonical_fixture():
     data = yaml.safe_load(FIXTURE.read_text())
     config = FlowMapConfig.model_validate(data)
 
-    assert config.schema_version == 1
+    assert config.schema_version == 2
     assert config.name == "coffee_shop_agent"
     assert config.business_domain.startswith("Independent")
-    assert len(config.capabilities) == 2
+    assert len(config.endpoints) == 2
     assert len(config.skills) == 3
     assert len(config.flows) == 1
     assert config.source.app_name == "coffeeshop-web"
@@ -44,7 +45,50 @@ def test_flow_map_config_partitions_internal_and_external_skills():
 
 def test_flow_map_config_rejects_missing_required_fields():
     with pytest.raises(ValidationError):
-        FlowMapConfig.model_validate({"schema_version": 1})  # missing name + others
+        FlowMapConfig.model_validate({"schema_version": 2})  # missing name + source
+
+
+def test_flowmapconfig_rejects_v1():
+    with pytest.raises(ValueError, match="schema_version 1 not supported"):
+        FlowMapConfig(
+            schema_version=1,
+            name="x",
+            source=FlowMapSource(compiler_schema_version=1, generated_from_sha="x", app_name="x"),
+        )
+
+
+def test_flowmapconfig_accepts_v2():
+    cfg = FlowMapConfig(
+        schema_version=2,
+        name="x",
+        source=FlowMapSource(compiler_schema_version=2, generated_from_sha="x", app_name="x"),
+    )
+    assert cfg.schema_version == 2
+
+
+def test_endpoint_minimal():
+    from aikdm.schemas import Endpoint
+
+    e = Endpoint(id="users.get", method="GET", path="/api/users", auth="bearer")
+    assert e.id == "users.get"
+    assert e.proposed is True
+    assert e.used_by_skills == []
+
+
+def test_skill_with_suggested_endpoints():
+    from aikdm.schemas import Skill, SkillEndpointRef
+
+    s = Skill(
+        id="account",
+        origin="discovered",
+        name="Account",
+        domain="User profile",
+        suggested_endpoints=[
+            SkillEndpointRef(endpoint="users.update", role="write", when="user confirms"),
+        ],
+    )
+    assert len(s.suggested_endpoints) == 1
+    assert s.suggested_endpoints[0].endpoint == "users.update"
 
 
 PROMPT_SCHEMA_PATH = Path(__file__).parents[2] / "schemas" / "prompt-v1.yaml"
@@ -54,7 +98,7 @@ def test_prompt_schema_loads_from_yaml():
     data = yaml.safe_load(PROMPT_SCHEMA_PATH.read_text())
     schema = PromptSchema.model_validate(data)
 
-    assert schema.version == "v3"
+    assert schema.version == "v4"
     main_section_names = [s.name for s in schema.main_prompt]
     assert "role" in main_section_names
     assert "guardrails" in main_section_names
@@ -62,7 +106,7 @@ def test_prompt_schema_loads_from_yaml():
     assert "tools" in main_section_names
     skill_section_names = [s.name for s in schema.skill_prompt]
     assert "tools" in skill_section_names
-    # v3: capability/resource terminology dropped from the prompt schema.
+    # v4: capability/resource terminology dropped from the prompt schema.
     assert "capabilities" not in skill_section_names
     assert "resources" not in skill_section_names
 
@@ -76,8 +120,8 @@ def test_prompt_section_classifies_source():
 def test_bundle_round_trips_through_model_validate():
     bundle = Bundle(
         metadata=BundleMetadata(
-            config_schema_version=1,
-            prompt_schema_version="v1",
+            config_schema_version=2,
+            prompt_schema_version="v4",
             model_generator="claude-opus-4-7",
             model_critic="claude-opus-4-7",
             generated_at="2026-05-27T00:00:00Z",

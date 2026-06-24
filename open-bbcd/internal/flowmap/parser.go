@@ -4,7 +4,6 @@ package flowmap
 import (
 	"archive/zip"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"path"
@@ -19,7 +18,7 @@ import (
 // Phase-1 fields (Name, Scope, etc.) are NOT set here — callers
 // (the wizard handler) merge those in from the form values.
 func Parse(r io.Reader) (types.FlowMapConfig, error) {
-	cfg := types.FlowMapConfig{SchemaVersion: 1}
+	cfg := types.FlowMapConfig{SchemaVersion: 2}
 
 	body, err := io.ReadAll(r)
 	if err != nil {
@@ -50,7 +49,7 @@ func Parse(r io.Reader) (types.FlowMapConfig, error) {
 		files[key] = b
 	}
 
-	required := []string{"AGENTS.md", "APP.md", "glossary.md", "tools-proposed.json"}
+	required := []string{"AGENTS.md", "APP.md", "glossary.md"}
 	for _, rq := range required {
 		if _, ok := files[rq]; !ok {
 			return cfg, fmt.Errorf("%w: missing %s", types.ErrFlowMapInvalid, rq)
@@ -60,18 +59,14 @@ func Parse(r io.Reader) (types.FlowMapConfig, error) {
 	if err := parseAgentsMD(files["AGENTS.md"], &cfg); err != nil {
 		return cfg, err
 	}
-	if err := parseToolsProposed(files["tools-proposed.json"]); err != nil {
-		return cfg, err
-	}
-
 	for name, b := range files {
 		switch {
-		case strings.HasPrefix(name, "capabilities/") && strings.HasSuffix(name, ".md"):
-			cap, err := parseCapability(name, b)
+		case strings.HasPrefix(name, "endpoints/") && strings.HasSuffix(name, ".md"):
+			ep, err := parseEndpoint(name, b)
 			if err != nil {
 				return cfg, err
 			}
-			cfg.Capabilities = append(cfg.Capabilities, cap)
+			cfg.Endpoints = append(cfg.Endpoints, ep)
 		case strings.HasPrefix(name, "skills/") && strings.HasSuffix(name, ".md"):
 			sk, err := parseSkill(name, b)
 			if err != nil {
@@ -87,7 +82,7 @@ func Parse(r io.Reader) (types.FlowMapConfig, error) {
 		}
 	}
 
-	sort.Slice(cfg.Capabilities, func(i, j int) bool { return cfg.Capabilities[i].Name < cfg.Capabilities[j].Name })
+	sort.Slice(cfg.Endpoints, func(i, j int) bool { return cfg.Endpoints[i].ID < cfg.Endpoints[j].ID })
 	sort.Slice(cfg.Skills, func(i, j int) bool { return cfg.Skills[i].ID < cfg.Skills[j].ID })
 	sort.Slice(cfg.Flows, func(i, j int) bool { return cfg.Flows[i].ID < cfg.Flows[j].ID })
 
@@ -134,6 +129,10 @@ func parseAgentsMD(b []byte, cfg *types.FlowMapConfig) error {
 	if err := yaml.Unmarshal(front, &fm); err != nil {
 		return fmt.Errorf("%w: AGENTS.md frontmatter: %v", types.ErrFlowMapInvalid, err)
 	}
+	if fm.SchemaVersion != 2 {
+		return fmt.Errorf("%w: unsupported schema_version %d; this build requires 2",
+			types.ErrFlowMapInvalid, fm.SchemaVersion)
+	}
 	cfg.Source = types.FlowMapSource{
 		CompilerSchemaVersion: fm.SchemaVersion,
 		GeneratedFromSHA:      fm.GeneratedFromSHA,
@@ -143,34 +142,48 @@ func parseAgentsMD(b []byte, cfg *types.FlowMapConfig) error {
 	return nil
 }
 
-func parseToolsProposed(b []byte) error {
-	var v struct {
-		SchemaVersion int `json:"schema_version"`
-	}
-	if err := json.Unmarshal(b, &v); err != nil {
-		return fmt.Errorf("%w: tools-proposed.json: %v", types.ErrFlowMapInvalid, err)
-	}
-	return nil
-}
 
-func parseCapability(name string, b []byte) (types.Capability, error) {
+func parseEndpoint(name string, b []byte) (types.Endpoint, error) {
 	front, body, err := splitFrontmatter(b)
 	if err != nil {
-		return types.Capability{}, fmt.Errorf("%w: %s: %v", types.ErrFlowMapInvalid, name, err)
+		return types.Endpoint{}, fmt.Errorf("%w: %s: %v", types.ErrFlowMapInvalid, name, err)
 	}
 	var fm struct {
-		Capability string           `yaml:"capability"`
-		Summary    string           `yaml:"summary"`
-		Tools      []map[string]any `yaml:"tools"`
+		SchemaVersion      int               `yaml:"schema_version"`
+		ID                 string            `yaml:"id"`
+		Proposed           bool              `yaml:"proposed"`
+		Method             string            `yaml:"method"`
+		Path               string            `yaml:"path"`
+		PathParams         []types.ParamSpec `yaml:"path_params"`
+		QueryParams        []types.ParamSpec `yaml:"query_params"`
+		BodyShape          any               `yaml:"body_shape"`
+		ResponseShape      any               `yaml:"response_shape"`
+		Auth               string            `yaml:"auth"`
+		Source             string            `yaml:"source"`
+		UsedBySkills       []string          `yaml:"used_by_skills"`
+		Confidence         string            `yaml:"confidence"`
+		OpenapiOperationID string            `yaml:"openapi_operation_id"`
 	}
 	if err := yaml.Unmarshal(front, &fm); err != nil {
-		return types.Capability{}, fmt.Errorf("%w: %s frontmatter: %v", types.ErrFlowMapInvalid, name, err)
+		return types.Endpoint{}, fmt.Errorf("%w: %s frontmatter: %v", types.ErrFlowMapInvalid, name, err)
 	}
-	return types.Capability{
-		Name:    fm.Capability,
-		Summary: fm.Summary,
-		Tools:   fm.Tools,
-		ProseMD: string(body),
+	if fm.ID == "" {
+		return types.Endpoint{}, fmt.Errorf("%w: %s: missing id in frontmatter", types.ErrFlowMapInvalid, name)
+	}
+	return types.Endpoint{
+		ID:            fm.ID,
+		Proposed:      fm.Proposed,
+		Method:        fm.Method,
+		Path:          fm.Path,
+		PathParams:    fm.PathParams,
+		QueryParams:   fm.QueryParams,
+		BodyShape:     fm.BodyShape,
+		ResponseShape: fm.ResponseShape,
+		Auth:          fm.Auth,
+		Source:        fm.Source,
+		UsedBySkills:  fm.UsedBySkills,
+		Confidence:    fm.Confidence,
+		ProseMD:       string(body),
 	}, nil
 }
 
@@ -180,35 +193,35 @@ func parseSkill(name string, b []byte) (types.Skill, error) {
 		return types.Skill{}, fmt.Errorf("%w: %s: %v", types.ErrFlowMapInvalid, name, err)
 	}
 	var fm struct {
-		ID            string   `yaml:"id"`
-		Name          string   `yaml:"name"`
-		Description   string   `yaml:"description"`
-		UserPhrases   []string `yaml:"user_phrases"`
-		Role          string   `yaml:"role"`
-		CapabilityRef string   `yaml:"capability_ref"`
-		ProposedTool  string   `yaml:"proposed_tool"`
+		SchemaVersion      int                      `yaml:"schema_version"`
+		ID                 string                   `yaml:"id"`
+		Name               string                   `yaml:"name"`
+		Description        string                   `yaml:"description"`
+		Domain             string                   `yaml:"domain"`
+		UserPhrases        []string                 `yaml:"user_phrases"`
+		SuggestedEndpoints []types.SkillEndpointRef `yaml:"suggested_endpoints"`
+		External           bool                     `yaml:"external"`
+		ExternalNote       string                   `yaml:"external_note"`
+		Confidence         string                   `yaml:"confidence"`
 	}
 	if err := yaml.Unmarshal(front, &fm); err != nil {
 		return types.Skill{}, fmt.Errorf("%w: %s frontmatter: %v", types.ErrFlowMapInvalid, name, err)
 	}
-	cap := fm.CapabilityRef
-	if i := strings.Index(cap, "/"); i >= 0 {
-		cap = cap[i+1:]
-	}
-	if i := strings.Index(cap, "."); i >= 0 {
-		cap = cap[:i]
+	if fm.ID == "" {
+		return types.Skill{}, fmt.Errorf("%w: %s: missing id in frontmatter", types.ErrFlowMapInvalid, name)
 	}
 	return types.Skill{
-		ID:            fm.ID,
-		Origin:        "discovered",
-		Name:          fm.Name,
-		Description:   fm.Description,
-		UserPhrases:   fm.UserPhrases,
-		Role:          fm.Role,
-		CapabilityRef: cap,
-		External:      false,
-		ProposedTool:  fm.ProposedTool,
-		ProseMD:       string(body),
+		ID:                 fm.ID,
+		Origin:             "discovered",
+		Name:               fm.Name,
+		Description:        fm.Description,
+		Domain:             fm.Domain,
+		UserPhrases:        fm.UserPhrases,
+		SuggestedEndpoints: fm.SuggestedEndpoints,
+		External:           fm.External,
+		ExternalNote:       fm.ExternalNote,
+		Confidence:         fm.Confidence,
+		ProseMD:            string(body),
 	}, nil
 }
 
@@ -283,23 +296,22 @@ func linearFallback(skills []struct {
 	return b.String()
 }
 
-// validate runs cross-reference checks: every skill's capability_ref must
-// resolve to a discovered capability; every flow's workflow skill nodes
-// must resolve to a declared skill (see ValidateWorkflowSkillRefs in mermaid.go).
 func validate(cfg *types.FlowMapConfig) error {
-	caps := make(map[string]struct{}, len(cfg.Capabilities))
-	for _, c := range cfg.Capabilities {
-		caps[c.Name] = struct{}{}
+	endpointIDs := make(map[string]struct{}, len(cfg.Endpoints))
+	for _, e := range cfg.Endpoints {
+		endpointIDs[e.ID] = struct{}{}
 	}
 	for _, s := range cfg.Skills {
-		if s.External || s.CapabilityRef == "" {
+		if s.External {
 			continue
 		}
-		if _, ok := caps[s.CapabilityRef]; !ok {
-			return fmt.Errorf("%w: skill %q references unknown capability %q", types.ErrFlowMapInvalid, s.ID, s.CapabilityRef)
+		for _, ref := range s.SuggestedEndpoints {
+			if _, ok := endpointIDs[ref.Endpoint]; !ok {
+				return fmt.Errorf("%w: skill %q references unknown endpoint %q",
+					types.ErrFlowMapInvalid, s.ID, ref.Endpoint)
+			}
 		}
 	}
-
 	skillIDs := make(map[string]struct{}, len(cfg.Skills))
 	for _, s := range cfg.Skills {
 		skillIDs[s.ID] = struct{}{}

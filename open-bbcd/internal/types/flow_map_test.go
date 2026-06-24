@@ -9,34 +9,38 @@ import (
 
 func TestFlowMapConfig_JSONRoundTrip(t *testing.T) {
 	cfg := types.FlowMapConfig{
-		SchemaVersion:  1,
+		SchemaVersion:  2,
 		Name:           "test-agent",
 		Scope:          "support",
 		ShouldDo:       "answer",
 		ShouldNotDo:    "guess",
 		BusinessDomain: "saas",
 		Source: types.FlowMapSource{
-			CompilerSchemaVersion: 1,
+			CompilerSchemaVersion: 2,
 			GeneratedFromSHA:      "deadbeef",
 			AppName:               "test-app",
 			Stack:                 map[string]string{"framework": "react"},
 		},
-		Capabilities: []types.Capability{
+		Endpoints: []types.Endpoint{
 			{
-				Name:    "users",
-				Summary: "user resource",
-				Tools:   []map[string]any{{"tool": "users.getMe", "method": "GET"}},
-				ProseMD: "# Users",
+				ID:           "users.getMe",
+				Method:       "GET",
+				Path:         "/api/users/me",
+				Auth:         "bearer",
+				UsedBySkills: []string{"read-self-profile"},
+				ProseMD:      "# Users",
 			},
 		},
 		Skills: []types.Skill{
 			{
 				ID: "read-self-profile", Origin: "discovered",
-				Name: "Read self profile", Role: "read",
-				CapabilityRef: "users", External: false,
-				ProposedTool: "users.getMe",
-				ProseMD:      "# Read self profile",
-				UserPhrases:  []string{"who am I"},
+				Name:    "Read self profile",
+				External: false,
+				SuggestedEndpoints: []types.SkillEndpointRef{
+					{Endpoint: "users.getMe", Role: "read"},
+				},
+				ProseMD:     "# Read self profile",
+				UserPhrases: []string{"who am I"},
 			},
 		},
 		Flows: []types.Flow{

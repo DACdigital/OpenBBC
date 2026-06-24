@@ -82,13 +82,6 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			zipBytes = b
-
-			discoveryKey = agentID + ".zip"
-			if err := h.store.Put(r.Context(), discoveryKey, bytes.NewReader(zipBytes)); err != nil {
-				h.logger.Error("wizard: storage.Put", slog.String("key", discoveryKey), slog.Any("error", err))
-				http.Error(w, "failed to save discovery file", http.StatusInternalServerError)
-				return
-			}
 			continue
 		}
 
@@ -100,45 +93,45 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		wizardInput[of.Key] = val
 	}
 
-	// Parse the zip into a structured config; non-fatal — we record any
-	// error on the row so the configurator page can surface it.
+	// Parse the zip BEFORE persisting anything. A parse failure means the
+	// upload is structurally wrong — surface it as 400 so the wizard stays
+	// open with the user's inputs intact rather than creating an unrunnable
+	// agent row with an error stamp.
 	cfg, parseErr := flowmap.Parse(bytes.NewReader(zipBytes))
+	if parseErr != nil {
+		http.Error(w, "Discovery archive could not be parsed: "+parseErr.Error(), http.StatusBadRequest)
+		return
+	}
 	cfg.Name = wizardInput["name"]
 	cfg.Scope = wizardInput["scope"]
 	cfg.ShouldDo = wizardInput["should_do"]
 	cfg.ShouldNotDo = wizardInput["should_not_do"]
 	cfg.BusinessDomain = wizardInput["business_domain"]
-	cfg.SchemaVersion = 1
 
-	var (
-		cfgJSON      json.RawMessage
-		parseErrText string
-	)
-	if parseErr != nil {
-		parseErrText = parseErr.Error()
-	} else {
-		b, err := json.Marshal(cfg)
-		if err != nil {
-			h.logger.Error("wizard: marshal flow_map_config", slog.Any("error", err))
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		cfgJSON = b
+	cfgJSON, err := json.Marshal(cfg)
+	if err != nil {
+		h.logger.Error("wizard: marshal flow_map_config", slog.Any("error", err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Parse succeeded — store the original zip blob now so it's available
+	// for later re-rendering or debugging.
+	discoveryKey = agentID + ".zip"
+	if err := h.store.Put(r.Context(), discoveryKey, bytes.NewReader(zipBytes)); err != nil {
+		h.logger.Error("wizard: storage.Put", slog.String("key", discoveryKey), slog.Any("error", err))
+		http.Error(w, "failed to save discovery file", http.StatusInternalServerError)
+		return
 	}
 
 	_, version, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
 		ID:                agentID,
 		Name:              wizardInput["name"],
 		FlowMapConfig:     cfgJSON,
-		FlowMapParseError: parseErrText,
 		DiscoveryFilePath: discoveryKey,
 	})
 	if err != nil {
-		if discoveryKey != "" {
-			h.logger.Error("wizard: orphan discovery file after insert failure", slog.String("key", discoveryKey), slog.Any("error", err))
-		} else {
-			h.logger.Error("wizard: CreateFromWizard", slog.Any("error", err))
-		}
+		h.logger.Error("wizard: orphan discovery file after insert failure", slog.String("key", discoveryKey), slog.Any("error", err))
 		Error(w, err)
 		return
 	}

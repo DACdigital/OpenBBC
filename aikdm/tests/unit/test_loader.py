@@ -38,14 +38,14 @@ def test_load_flow_map_config_malformed_yaml(tmp_path):
 
 def test_load_flow_map_config_schema_violation(tmp_path):
     bad = tmp_path / "wrong.yaml"
-    bad.write_text("schema_version: 1\nname: x\n")  # missing source
+    bad.write_text("schema_version: 2\nname: x\n")  # missing source
     with pytest.raises(InputValidationError):
         load_flow_map_config(bad)
 
 
-def test_load_prompt_schema_loads_v3():
+def test_load_prompt_schema_loads_v4():
     schema = load_prompt_schema(PROMPT_SCHEMA)
-    assert schema.version == "v3"
+    assert schema.version == "v4"
 
 
 def test_write_bundle_to_path(tmp_path):

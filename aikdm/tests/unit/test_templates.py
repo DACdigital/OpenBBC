@@ -54,14 +54,14 @@ def test_main_scaffold_workflow_hints_list_included_flows_only():
             assert f.id not in workflows
 
 
-def test_skill_scaffold_renders_proposed_tool_as_tool_name():
+def test_skill_scaffold_renders_linked_endpoints():
     cfg = load_flow_map_config(CONFIG)
     skill = next(s for s in cfg.skills if s.id == "place_order")
-    capability = next(c for c in cfg.capabilities if c.name == skill.capability_ref)
-    xml = render_skill_prompt_scaffold(skill, capability)
-    assert 'name="place_order"' in xml  # <tool name> == proposed_tool
+    xml = render_skill_prompt_scaffold(skill, cfg)
+    # v2: tool name comes from the endpoint id (orders.create), not proposed_tool
+    assert 'name="orders.create"' in xml
     assert "<role>" in xml
     assert "<tools>" in xml
-    # v3: never expose capability/resource concepts in the rendered scaffold.
+    # v2: uses endpoints/linked_endpoints terminology, not capabilities/resources.
     assert "<capabilities>" not in xml
     assert "<resources>" not in xml

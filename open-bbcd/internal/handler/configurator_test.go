@@ -50,17 +50,21 @@ func TestConfiguratorRouter_OldSkillsRedirectsToArchitecture(t *testing.T) {
 	}
 }
 
-func TestConfiguratorRouter_OldCapabilitiesRedirectsToArchitecture(t *testing.T) {
+func TestConfiguratorRouter_OldCapabilitiesRedirectsToEndpoints(t *testing.T) {
+	// In v2, /configure/capabilities was renamed to /configure/endpoints.
+	// Both the pre-architecture URL and the pre-rename name should redirect
+	// to the current canonical path /configure/architecture/endpoints.
 	mux := http.NewServeMux()
 	handler.RegisterConfiguratorRedirects(mux)
 	versionID := "33333333-3333-3333-3333-333333333333"
-	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/capabilities", nil)
+	// /configure/endpoints → /configure/architecture/endpoints
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/configure/endpoints", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusMovedPermanently {
 		t.Fatalf("status = %d, want 301", w.Code)
 	}
-	want := "/agent_versions/" + versionID + "/configure/architecture/capabilities"
+	want := "/agent_versions/" + versionID + "/configure/architecture/endpoints"
 	if got := w.Header().Get("Location"); got != want {
 		t.Errorf("Location = %q, want %q", got, want)
 	}
@@ -144,12 +148,14 @@ func (s *stubConfigStore) UpdateStatus(ctx context.Context, versionID, expectedF
 
 func sampleConfig() types.FlowMapConfig {
 	return types.FlowMapConfig{
-		SchemaVersion: 1, Name: "test-agent",
-		Source:       types.FlowMapSource{AppName: "sample"},
-		Capabilities: []types.Capability{{Name: "orders", Summary: "orders"}},
+		SchemaVersion: 2, Name: "test-agent",
+		Source: types.FlowMapSource{AppName: "sample"},
+		Endpoints: []types.Endpoint{
+			{ID: "orders.create", Method: "POST", Path: "/api/orders", Auth: "bearer", UsedBySkills: []string{"place-order"}},
+		},
 		Skills: []types.Skill{{
 			ID: "place-order", Origin: "discovered", Name: "Place order",
-			Role: "write", CapabilityRef: "orders", ProposedTool: "orders.create",
+			SuggestedEndpoints: []types.SkillEndpointRef{{Endpoint: "orders.create", Role: "write"}},
 		}},
 		Flows: []types.Flow{{
 			ID: "place-order", Origin: "discovered", Included: true,
@@ -218,23 +224,23 @@ func TestConfigurator_SkillsTab_ShowsSkillRow(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "place-order") || !strings.Contains(w.Body.String(), "orders.create") {
+	if !strings.Contains(w.Body.String(), "place-order") || !strings.Contains(w.Body.String(), "1 endpoints") {
 		t.Errorf("Skills tab missing expected row content")
 	}
 }
 
-func TestConfigurator_CapabilitiesTab_IsReadOnly(t *testing.T) {
+func TestConfigurator_EndpointsTab_IsReadOnly(t *testing.T) {
 	h := newConfigHandler(t, &stubConfigStore{cfg: sampleConfig()})
-	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure/capabilities", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/configure/architecture/endpoints", nil)
 	req.SetPathValue("version_id", "abc")
 	w := httptest.NewRecorder()
-	h.Capabilities(w, req)
+	h.Endpoints(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "Capabilities are derived") {
-		t.Errorf("Capabilities tab missing read-only banner")
+	if !strings.Contains(body, "orders.create") {
+		t.Errorf("Endpoints tab missing endpoint ID in list")
 	}
 }
 
@@ -316,14 +322,13 @@ func TestConfigurator_SkillUpdate_HappyPath(t *testing.T) {
 	h := newConfigHandler(t, store)
 
 	form := url.Values{
-		"name":          {"Place an order"},
-		"description":   {"Updated description"},
-		"role":          {"write"},
-		"capability":    {"orders"},
-		"proposed_tool": {"orders.create"},
-		"user_phrases":  {"check out\nplace order\nbuy"},
-		"external":      {"false"},
+		"name":        {"Place an order"},
+		"description": {"Updated description"},
+		"domain":      {"Order management"},
+		"user_phrases": {"check out\nplace order\nbuy"},
+		"external":    {"false"},
 	}
+	form.Add("suggested_endpoints", "orders.create")
 	req := httptest.NewRequest(http.MethodPost,
 		"/agent_versions/abc/configure/skills/place-order",
 		strings.NewReader(form.Encode()))
@@ -345,6 +350,9 @@ func TestConfigurator_SkillUpdate_HappyPath(t *testing.T) {
 	if got.External {
 		t.Error("External should be false")
 	}
+	if len(got.SuggestedEndpoints) != 1 || got.SuggestedEndpoints[0].Endpoint != "orders.create" {
+		t.Errorf("SuggestedEndpoints not saved correctly: %+v", got.SuggestedEndpoints)
+	}
 }
 
 func TestConfigurator_SkillUpdate_External(t *testing.T) {
@@ -353,7 +361,6 @@ func TestConfigurator_SkillUpdate_External(t *testing.T) {
 
 	form := url.Values{
 		"name":          {"Send notification"},
-		"role":          {"write"},
 		"external":      {"true"},
 		"external_note": {"sends to webhook"},
 		"user_phrases":  {""},
@@ -373,19 +380,24 @@ func TestConfigurator_SkillUpdate_External(t *testing.T) {
 	if !got.External || got.ExternalNote != "sends to webhook" {
 		t.Errorf("External/Note not saved: %+v", got)
 	}
-	if got.CapabilityRef != "" {
-		t.Errorf("CapabilityRef should be cleared when external=true, got %q", got.CapabilityRef)
+	// External skills must not carry suggested endpoints.
+	if len(got.SuggestedEndpoints) != 0 {
+		t.Errorf("SuggestedEndpoints should be empty when external=true, got %+v", got.SuggestedEndpoints)
 	}
 }
 
-func TestConfigurator_SkillUpdate_InvalidRole(t *testing.T) {
+// TestConfigurator_SkillUpdate_UnknownEndpoint verifies that submitting a
+// suggested_endpoints value that is not in the agent's endpoint inventory
+// returns 400. This is the v2 equivalent of the old invalid-role check.
+func TestConfigurator_SkillUpdate_UnknownEndpoint(t *testing.T) {
 	store := &stubConfigStore{cfg: sampleConfig()}
 	h := newConfigHandler(t, store)
 
 	form := url.Values{
-		"name": {"Some skill"},
-		"role": {"banana"}, // invalid
+		"name":    {"Some skill"},
+		"external": {"false"},
 	}
+	form.Add("suggested_endpoints", "ghost.endpoint") // not in inventory
 	req := httptest.NewRequest(http.MethodPost,
 		"/agent_versions/abc/configure/skills/place-order",
 		strings.NewReader(form.Encode()))
@@ -406,7 +418,6 @@ func TestConfigurator_SkillCreate_HappyPath(t *testing.T) {
 	form := url.Values{
 		"name":          {"Send Email Alert"},
 		"description":   {"Notify the user via email"},
-		"role":          {"write"},
 		"external":      {"true"},
 		"external_note": {"sends through SMTP relay"},
 		"user_phrases":  {"send email\nemail me"},
@@ -445,7 +456,6 @@ func TestConfigurator_SkillCreate_NameCollision_GetsDiscriminator(t *testing.T) 
 
 	form := url.Values{
 		"name":     {"Place Order"},
-		"role":     {"write"},
 		"external": {"true"},
 	}
 	req := httptest.NewRequest(http.MethodPost,
@@ -468,7 +478,7 @@ func TestConfigurator_SkillCreate_NameRequired(t *testing.T) {
 	store := &stubConfigStore{cfg: sampleConfig()}
 	h := newConfigHandler(t, store)
 
-	form := url.Values{"role": {"write"}, "external": {"true"}}
+	form := url.Values{"external": {"true"}}
 	req := httptest.NewRequest(http.MethodPost,
 		"/agent_versions/abc/configure/skills",
 		strings.NewReader(form.Encode()))
@@ -484,7 +494,7 @@ func TestConfigurator_SkillCreate_NameRequired(t *testing.T) {
 func TestConfigurator_SkillDelete_Custom_OK(t *testing.T) {
 	cfg := sampleConfig()
 	cfg.Skills = append(cfg.Skills, types.Skill{
-		ID: "custom-thing", Origin: "custom", Name: "Custom thing", Role: "write",
+		ID: "custom-thing", Origin: "custom", Name: "Custom thing",
 		External: true,
 	})
 	store := &stubConfigStore{cfg: cfg}
@@ -525,7 +535,7 @@ func TestConfigurator_SkillDelete_Referenced_409(t *testing.T) {
 	cfg := sampleConfig()
 	// Add a custom skill that is referenced by the existing flow's workflow.
 	cfg.Skills = append(cfg.Skills, types.Skill{
-		ID: "needed-by-flow", Origin: "custom", Name: "Needed", Role: "write",
+		ID: "needed-by-flow", Origin: "custom", Name: "Needed",
 		External: true,
 	})
 	cfg.Flows[0].Workflow.Mermaid = "flowchart TD\n" +
@@ -759,8 +769,8 @@ func TestConfigurator_DownloadYAML_RoundTrip(t *testing.T) {
 	if len(decoded.Skills) != len(cfg.Skills) {
 		t.Errorf("Skills len mismatch: %d vs %d", len(decoded.Skills), len(cfg.Skills))
 	}
-	if len(decoded.Capabilities) != len(cfg.Capabilities) {
-		t.Errorf("Capabilities len mismatch: %d vs %d", len(decoded.Capabilities), len(cfg.Capabilities))
+	if len(decoded.Endpoints) != len(cfg.Endpoints) {
+		t.Errorf("Endpoints len mismatch: %d vs %d", len(decoded.Endpoints), len(cfg.Endpoints))
 	}
 }
 
@@ -774,7 +784,7 @@ func TestConfigurator_DownloadYAML_NoBlockScalarIndentIndicators(t *testing.T) {
 	cfg := sampleConfig()
 	// Multi-line prose with internally-indented content is exactly what
 	// triggers yaml.v3 to emit `|N` as a safety measure.
-	cfg.Capabilities[0].ProseMD = "# Orders\n\n<!-- AGENT id=\"overview\" -->\n" +
+	cfg.Endpoints[0].ProseMD = "# Orders\n\n<!-- AGENT id=\"overview\" -->\n" +
 		"    indented body line\n" +
 		"<!-- /AGENT -->\n\n## Concepts\n\n    nested code block\n"
 	store := &stubConfigStore{cfg: cfg, currentStatus: "DRAFT"}
@@ -817,26 +827,27 @@ func TestConfigurator_DownloadYAML_NoBlockScalarIndentIndicators(t *testing.T) {
 	if err := yaml.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
-	if decoded.Capabilities[0].ProseMD != cfg.Capabilities[0].ProseMD {
+	if decoded.Endpoints[0].ProseMD != cfg.Endpoints[0].ProseMD {
 		t.Errorf("ProseMD content not preserved through normalization+roundtrip")
 	}
 }
 
-// TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans verifies the
-// ?clean=true query parameter strips flows with included=false and
-// capabilities not referenced by any remaining skill. The full export
-// (default) keeps everything for audit and round-trip.
-func TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans(t *testing.T) {
+// TestConfigurator_DownloadYAML_CleanDropsExcludedFlows verifies the
+// ?clean=true query parameter strips flows with included=false. In v2 the
+// endpoint inventory is always preserved (endpoints are the runtime tool
+// catalog), so ?clean=true only filters flows — skills and endpoints are
+// unchanged.
+func TestConfigurator_DownloadYAML_CleanDropsExcludedFlows(t *testing.T) {
 	cfg := types.FlowMapConfig{
-		SchemaVersion: 1, Name: "test-agent",
+		SchemaVersion: 2, Name: "test-agent",
 		Source: types.FlowMapSource{AppName: "sample"},
-		Capabilities: []types.Capability{
-			{Name: "orders", Summary: "used"},
-			{Name: "settings", Summary: "orphan — no skill references it"},
+		Endpoints: []types.Endpoint{
+			{ID: "orders.create", Method: "POST", Path: "/api/orders", Auth: "bearer", UsedBySkills: []string{"place-order"}},
+			{ID: "settings.get", Method: "GET", Path: "/api/settings", Auth: "bearer", UsedBySkills: []string{}},
 		},
 		Skills: []types.Skill{{
 			ID: "place-order", Origin: "discovered", Name: "Place order",
-			Role: "write", CapabilityRef: "orders", ProposedTool: "orders.create",
+			SuggestedEndpoints: []types.SkillEndpointRef{{Endpoint: "orders.create", Role: "write"}},
 		}},
 		Flows: []types.Flow{
 			{
@@ -866,11 +877,11 @@ func TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans(t *testing.T) {
 	if len(full.Flows) != 2 {
 		t.Errorf("full export should keep both flows, got %d", len(full.Flows))
 	}
-	if len(full.Capabilities) != 2 {
-		t.Errorf("full export should keep both capabilities, got %d", len(full.Capabilities))
+	if len(full.Endpoints) != 2 {
+		t.Errorf("full export should keep both endpoints, got %d", len(full.Endpoints))
 	}
 
-	// ?clean=true: filtered.
+	// ?clean=true: excluded flows stripped; endpoints and skills preserved.
 	reqClean := httptest.NewRequest(http.MethodGet, "/agent_versions/abc/config.yaml?clean=true", nil)
 	reqClean.SetPathValue("version_id", "abc")
 	wClean := httptest.NewRecorder()
@@ -881,11 +892,17 @@ func TestConfigurator_DownloadYAML_CleanDropsExcludedAndOrphans(t *testing.T) {
 	}
 	if len(clean.Flows) != 1 || clean.Flows[0].ID != "place-order-flow" {
 		t.Errorf("clean export should keep only the included flow, got %+v",
-			[]string{clean.Flows[0].ID})
+			func() []string {
+				ids := make([]string, len(clean.Flows))
+				for i, f := range clean.Flows {
+					ids[i] = f.ID
+				}
+				return ids
+			}())
 	}
-	if len(clean.Capabilities) != 1 || clean.Capabilities[0].Name != "orders" {
-		t.Errorf("clean export should drop the orphan capability, got %d caps",
-			len(clean.Capabilities))
+	// In v2, endpoints are always preserved — not filtered.
+	if len(clean.Endpoints) != 2 {
+		t.Errorf("clean export should keep all endpoints in v2, got %d", len(clean.Endpoints))
 	}
 	if len(clean.Skills) != len(cfg.Skills) {
 		t.Errorf("clean export should not touch skills, got %d (want %d)",

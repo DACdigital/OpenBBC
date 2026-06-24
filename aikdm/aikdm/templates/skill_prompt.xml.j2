@@ -1,10 +1,15 @@
-<role><!-- LLM: what this skill is responsible for --></role>
+<role><!-- LLM: what this business-domain skill is responsible for --></role>
 <objective><!-- LLM: concrete outcome the skill must achieve --></objective>
 <tools>
-  <tool name="{{ skill.proposed_tool }}">
-    <description><!-- LLM: 1-2 sentence purpose. Never use the words "capability" or "resource"; treat the tool as the only abstraction. --></description>
-    <usage><!-- LLM: when to invoke this tool --></usage>
+{%- for item in linked_endpoints %}
+  <tool name="{{ item.ref.endpoint }}">
+    <description><!-- LLM: 1-2 sentence purpose for {{ item.ref.endpoint }}. Never use the words "capability" or "resource"; treat the tool as the abstraction. --></description>
+    <usage><!-- LLM: when to invoke {{ item.ref.endpoint }} (intent → call). Role from input: {{ item.ref.role }}. --></usage>
   </tool>
+{%- endfor %}
+{%- if not linked_endpoints %}
+  <!-- no suggested endpoints declared on this skill -->
+{%- endif %}
 </tools>
 <guardrails><!-- LLM: skill-specific guardrails consistent with main prompt --></guardrails>
-<examples><!-- LLM: 2-3 short example exchanges --></examples>
+<examples><!-- LLM: 2-3 short example exchanges showing correct skill execution --></examples>
