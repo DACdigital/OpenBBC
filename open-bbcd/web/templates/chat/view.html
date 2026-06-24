@@ -20,7 +20,7 @@
     <div class="session-subtitle">{{.AgentName}}</div>
   </div>
   <div class="chat-actions">
-    <a href="/agent_versions/{{.VersionID}}/chat" class="btn-secondary">Sessions</a>
+    <a href="/agent_versions/{{.VersionID}}/chat?from=chat:{{.SessionID}}" class="btn-secondary">Sessions</a>
     <form method="post" action="/agent_versions/{{.VersionID}}/chat/sessions" style="display:inline">
       <button type="submit" class="btn-primary">+ New Session</button>
     </form>

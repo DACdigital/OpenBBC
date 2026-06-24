@@ -115,9 +115,15 @@ func (h *ChatHandler) NewSession(w http.ResponseWriter, r *http.Request) {
 type sessionListPageData struct {
 	Active    string
 	VersionID string // URL path param value (a version row's ID)
-	AgentID   string // stable agent ID, used for back-link to agent listing
+	AgentID   string // stable agent ID, used for default back-link to agent listing
 	AgentName string
 	Sessions  []*types.ChatSession
+	// BackHref + BackLabel control the "back" link at the top of the
+	// session list. Derived from ?from= so users return to wherever they
+	// came in (configurator view, a specific chat session, or the default
+	// agent listing).
+	BackHref  string
+	BackLabel string
 }
 
 // SessionList renders the session-list page for one agent version.
@@ -137,14 +143,37 @@ func (h *ChatHandler) SessionList(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
+	backHref, backLabel := resolveSessionListBack(r.URL.Query().Get("from"), versionID, agent.ID, agent.Name)
 	data := sessionListPageData{
 		Active:    "agents",
 		VersionID: versionID,
 		AgentID:   agent.ID,
 		AgentName: agent.Name,
 		Sessions:  sessions,
+		BackHref:  backHref,
+		BackLabel: backLabel,
 	}
 	renderTemplate(w, h.sessionsTmpl, "layout", data)
+}
+
+// resolveSessionListBack interprets the ?from= query parameter on the session
+// list page and returns (href, label) for the page's back link.
+//
+// Supported `from` values:
+//   - "version"          → back to the version's configurator (Architecture tab).
+//   - "chat:<sessionID>" → back to that chat session.
+//   - anything else (or empty) → back to the agent's version listing (default).
+func resolveSessionListBack(from, versionID, agentID, agentName string) (string, string) {
+	switch {
+	case from == "version":
+		return "/agent_versions/" + versionID + "/configure/architecture/flows", "← Configurator"
+	case strings.HasPrefix(from, "chat:"):
+		sessionID := strings.TrimPrefix(from, "chat:")
+		if sessionID != "" {
+			return "/agent_versions/" + versionID + "/chat/" + sessionID, "← Back to chat"
+		}
+	}
+	return "/agents/ui?agent=" + agentID, "← " + agentName
 }
 
 type chatViewPageData struct {

@@ -9,10 +9,14 @@
     <div class="config-actions">
       <a href="/agent_versions/{{.VersionID}}/config.yaml" class="btn-secondary">Download YAML</a>
       {{if .HasBundle}}
+        <a href="/agent_versions/{{.VersionID}}/chat?from=version" class="btn-secondary">Sessions</a>
         <form method="post" action="/agent_versions/{{.VersionID}}/chat/sessions" style="display:inline">
           <button type="submit" class="btn-primary">Run</button>
         </form>
       {{else}}
+        <button type="button" class="btn-secondary" disabled
+          style="opacity:0.4;cursor:not-allowed"
+          title="No bundle generated for this version yet">Sessions</button>
         <button type="button" class="btn-primary" disabled
           style="opacity:0.4;cursor:not-allowed"
           title="No bundle generated for this version yet">Run</button>
