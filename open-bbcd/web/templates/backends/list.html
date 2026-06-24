@@ -1,9 +1,28 @@
 {{define "content"}}
 <div class="page-header">
   <h1>MCP / Tool Backends</h1>
-  <div class="page-header-actions">
-    <a href="/mcp/new?kind=http_endpoint" class="btn-secondary">+ New HTTP backend</a>
-    <a href="/mcp/new?kind=mcp_client" class="btn-primary">+ New MCP backend</a>
+  <button type="button" class="btn-primary"
+          onclick="document.getElementById('new-backend-modal').style.display='flex'">+ New backend</button>
+</div>
+
+<div class="modal" id="new-backend-modal" style="display:none">
+  <div class="modal-content">
+    <h2>New backend</h2>
+    <p>Pick the kind of backend you want to create.</p>
+    <div class="backend-kind-choices">
+      <a href="/mcp/new?kind=http_endpoint" class="backend-kind-card">
+        <div class="backend-kind-name">HTTP</div>
+        <div class="backend-kind-desc">Wraps your existing REST endpoints as agent tools.</div>
+      </a>
+      <a href="/mcp/new?kind=mcp_client" class="backend-kind-card">
+        <div class="backend-kind-name">MCP</div>
+        <div class="backend-kind-desc">Connects to an external MCP server (Slack, GitHub, etc.).</div>
+      </a>
+    </div>
+    <div class="modal-actions">
+      <button type="button"
+              onclick="document.getElementById('new-backend-modal').style.display='none'">Cancel</button>
+    </div>
   </div>
 </div>
 
