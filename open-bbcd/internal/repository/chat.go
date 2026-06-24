@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -212,4 +213,46 @@ func (r *ChatRepository) NextSeq(ctx context.Context, sessionID string) (int, er
 		return 1, nil
 	}
 	return int(seq.Int64) + 1, nil
+}
+
+// GetSessionHeaderOverrides returns the per-backend header override map for a
+// session. The map is keyed by backend_id; values are header-name → value.
+// Returns ErrNotFound if the session doesn't exist.
+func (r *ChatRepository) GetSessionHeaderOverrides(ctx context.Context, sessionID string) (map[string]map[string]string, error) {
+	const q = `SELECT backend_header_overrides FROM chat_sessions WHERE id = $1::uuid`
+	var raw json.RawMessage
+	err := r.db.QueryRowContext(ctx, q, sessionID).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, types.ErrNotFound
+		}
+		return nil, err
+	}
+	var out map[string]map[string]string
+	if len(raw) == 0 {
+		return map[string]map[string]string{}, nil
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SetSessionHeaderOverrides replaces the per-backend header override map for a
+// session. Returns ErrNotFound if the session doesn't exist.
+func (r *ChatRepository) SetSessionHeaderOverrides(ctx context.Context, sessionID string, ovr map[string]map[string]string) error {
+	raw, err := json.Marshal(ovr)
+	if err != nil {
+		return err
+	}
+	const q = `UPDATE chat_sessions SET backend_header_overrides = $1 WHERE id = $2::uuid`
+	res, err := r.db.ExecContext(ctx, q, raw, sessionID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return types.ErrNotFound
+	}
+	return nil
 }

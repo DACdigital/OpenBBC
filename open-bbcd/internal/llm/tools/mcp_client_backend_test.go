@@ -163,3 +163,52 @@ func TestMCPClient_Tools_FailsOnUnreachableServer(t *testing.T) {
 		t.Fatal("expected error from unreachable server")
 	}
 }
+
+func TestMCPClient_SessionOverrideAppliedAtConnect(t *testing.T) {
+	var gotAuth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Record the Authorization header from every request.
+		if v := r.Header.Get("Authorization"); v != "" {
+			gotAuth.Store(v)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req jsonrpcRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "bad json", 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			respond(w, req.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "test", "version": "0.1"},
+			})
+		case "notifications/initialized":
+			// no response for notifications
+		case "tools/list":
+			respond(w, req.ID, map[string]any{"tools": []map[string]any{}})
+		default:
+			http.Error(w, "unknown method "+req.Method, 400)
+		}
+	}))
+	defer srv.Close()
+
+	be := NewMCPClientBackend("test", "b1", MCPBackendCfg{
+		URL:            srv.URL,
+		Transport:      "streamable_http",
+		DefaultHeaders: map[string]string{"Authorization": "Bearer default"},
+	})
+	defer be.Close()
+
+	ctx := WithSessionHeaderOverrides(context.Background(), SessionHeaderOverrides{
+		"b1": {"Authorization": "Bearer SESSION"},
+	})
+
+	_, _ = be.Tools(ctx)
+
+	if got := gotAuth.Load(); got != "Bearer SESSION" {
+		t.Fatalf("want Bearer SESSION, got %v", got)
+	}
+}

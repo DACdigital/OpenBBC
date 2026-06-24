@@ -161,15 +161,28 @@ func (b *HTTPEndpointBackend) buildRequest(ep HTTPEndpointDef, args map[string]a
 }
 
 func (b *HTTPEndpointBackend) applyHeaders(ctx context.Context, req *http.Request) {
+	// 1. Default headers (lowest precedence)
 	for k, v := range b.cfg.DefaultHeaders {
 		req.Header.Set(k, v)
 	}
+
+	// 2. Live FE headers (allowlisted) — deployed runtime path
 	live := forwardedHeadersFromContext(ctx)
 	for _, name := range b.cfg.ForwardedHeaders {
 		if v := live.Get(name); v != "" {
 			req.Header.Set(name, v)
 		}
 	}
+
+	// 3. Session overrides for this backend (highest precedence) — BO testing
+	if sess := sessionHeaderOverridesFromContext(ctx); sess != nil {
+		if mine, ok := sess[b.id]; ok {
+			for k, v := range mine {
+				req.Header.Set(k, v)
+			}
+		}
+	}
+
 	if req.Body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}

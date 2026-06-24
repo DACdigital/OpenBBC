@@ -138,6 +138,30 @@ func TestHTTPBackend_Call_MissingOptionalPathParam_DoesNotInjectNilString(t *tes
 	}
 }
 
+func TestHTTPBackend_Call_SessionOverrideWinsOverLiveAndDefault(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+	be.cfg.DefaultHeaders = map[string]string{"Authorization": "Bearer default"}
+	be.cfg.ForwardedHeaders = []string{"Authorization"}
+
+	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
+	ctx = WithSessionHeaderOverrides(ctx, SessionHeaderOverrides{
+		"b1": {"Authorization": "Bearer SESSION"},
+	})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotAuth != "Bearer SESSION" {
+		t.Fatalf("want SESSION, got %s", gotAuth)
+	}
+}
+
 // Compile-time check: the package satisfies the runtime interface.
 var _ Backend = (*HTTPEndpointBackend)(nil)
 var _ llm.ToolDef = llm.ToolDef{}

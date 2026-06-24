@@ -52,7 +52,20 @@ func (b *MCPClientBackend) ensure(ctx context.Context) error {
 		return b.connErr
 	}
 
-	trans, err := transport.NewStreamableHTTP(b.cfg.URL, transport.WithHTTPHeaders(b.cfg.DefaultHeaders))
+	// Merge: default + session overrides for this backend's id.
+	headers := map[string]string{}
+	for k, v := range b.cfg.DefaultHeaders {
+		headers[k] = v
+	}
+	if sess := sessionHeaderOverridesFromContext(ctx); sess != nil {
+		if mine, ok := sess[b.id]; ok {
+			for k, v := range mine {
+				headers[k] = v
+			}
+		}
+	}
+
+	trans, err := transport.NewStreamableHTTP(b.cfg.URL, transport.WithHTTPHeaders(headers))
 	if err != nil {
 		b.connErr = fmt.Errorf("mcp %s: transport: %w", b.name, err)
 		return b.connErr

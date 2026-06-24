@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"database/sql"
+
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
 type VersionWiringRepository struct{ db *sql.DB }
@@ -82,6 +84,37 @@ func (r *VersionWiringRepository) ListMCPAttachments(ctx context.Context, versio
 			return nil, err
 		}
 		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ListBackendsForVersion returns all distinct tool backends wired to a version —
+// HTTP backends via the endpoint_backend mapping, MCP backends via the mcp_backend
+// attachment table. Used by the header-overrides modal in the BO chat UI.
+func (r *VersionWiringRepository) ListBackendsForVersion(ctx context.Context, versionID string) ([]*types.ToolBackend, error) {
+	const q = `
+		SELECT DISTINCT tb.id, tb.name, tb.kind, tb.config, tb.created_at, tb.updated_at
+		FROM tool_backends tb
+		WHERE tb.id IN (
+			SELECT backend_id FROM agent_version_endpoint_backend WHERE agent_version_id = $1
+			UNION
+			SELECT backend_id FROM agent_version_mcp_backend WHERE agent_version_id = $1
+		)
+		ORDER BY tb.name`
+	rows, err := r.db.QueryContext(ctx, q, versionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*types.ToolBackend
+	for rows.Next() {
+		be := &types.ToolBackend{}
+		var kind string
+		if err := rows.Scan(&be.ID, &be.Name, &kind, &be.Config, &be.CreatedAt, &be.UpdatedAt); err != nil {
+			return nil, err
+		}
+		be.Kind = types.ToolBackendKind(kind)
+		out = append(out, be)
 	}
 	return out, rows.Err()
 }

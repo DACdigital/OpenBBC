@@ -119,7 +119,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 
-	chatHandler, err := NewChatHandler(versionRepo, chatRepo, orchestrator, transportFactory, web.Assets, logger)
+	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, wiringRepo, orchestrator, transportFactory, web.Assets, logger)
 	if err != nil {
 		fatal("init chat handler", err)
 	}
@@ -192,6 +192,8 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}", chatHandler.ChatView)
 	mux.HandleFunc("PATCH /agent_versions/{version_id}/chat/{session_id}/title", chatHandler.UpdateSessionTitle)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/turn", chatHandler.Turn)
+	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.ShowHeaderOverridesModal)
+	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.UpdateHeaderOverrides)
 
 	// Per-agent deploy/undeploy + confirm modals
 	mux.HandleFunc("POST /agents/{agent_id}/deploy", deployHandler.Deploy)

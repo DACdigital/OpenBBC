@@ -38,6 +38,20 @@ type ChatSessionStore interface {
 	UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error
 }
 
+// HeaderOverridesStore is the narrow interface for reading and writing
+// per-session backend header overrides. Implemented by *repository.ChatRepository.
+type HeaderOverridesStore interface {
+	GetSessionHeaderOverrides(ctx context.Context, sessionID string) (map[string]map[string]string, error)
+	SetSessionHeaderOverrides(ctx context.Context, sessionID string, ovr map[string]map[string]string) error
+}
+
+// VersionBackendLister lists all tool backends wired to a version (HTTP via
+// endpoint_backend mapping, MCP via mcp_backend attachment). Used by the
+// header overrides modal so the form shows one row per backend.
+type VersionBackendLister interface {
+	ListBackendsForVersion(ctx context.Context, versionID string) ([]*types.ToolBackend, error)
+}
+
 // TurnRunner is the orchestrator dependency. Implemented by *chat.Orchestrator.
 // Defined here (not in chat package) so handler tests can substitute a stub.
 type TurnRunner interface {
@@ -50,16 +64,21 @@ var _ TurnRunner = (*chat.Orchestrator)(nil)
 type ChatHandler struct {
 	agents       ChatAgentReader
 	chats        ChatSessionStore
+	headerOvr    HeaderOverridesStore
+	backends     VersionBackendLister
 	orch         TurnRunner
 	transport    transport.Factory
 	logger       *slog.Logger
 	sessionsTmpl *template.Template
 	viewTmpl     *template.Template
+	headersTmpl  *template.Template
 }
 
 func NewChatHandler(
 	agents ChatAgentReader,
 	chats ChatSessionStore,
+	headerOvr HeaderOverridesStore,
+	backends VersionBackendLister,
 	orch TurnRunner,
 	tf transport.Factory,
 	webFS fs.FS,
@@ -86,9 +105,16 @@ func NewChatHandler(
 	if err != nil {
 		return nil, err
 	}
+	headersTmpl, err := template.New("headers_modal").Funcs(funcs).ParseFS(webFS,
+		"templates/chat/headers_modal.html",
+	)
+	if err != nil {
+		return nil, err
+	}
 	return &ChatHandler{
-		agents: agents, chats: chats, orch: orch, transport: tf, logger: logger,
-		sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl,
+		agents: agents, chats: chats, headerOvr: headerOvr, backends: backends,
+		orch: orch, transport: tf, logger: logger,
+		sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl, headersTmpl: headersTmpl,
 	}, nil
 }
 
@@ -429,9 +455,20 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	// streaming. Defer-closing the sink is owned here, NOT by the orchestrator.
 	w.WriteHeader(http.StatusOK)
 
+	// Build the base context with forwarded FE headers.
+	ctx := tools.WithForwardedHeaders(r.Context(), r.Header)
+
+	// Layer session-scoped backend header overrides on top (BO testing only).
+	// Missing session row is silently ignored — overrides are optional.
+	if h.headerOvr != nil {
+		if ovr, err := h.headerOvr.GetSessionHeaderOverrides(ctx, sessionID); err == nil {
+			ctx = tools.WithSessionHeaderOverrides(ctx, tools.SessionHeaderOverrides(ovr))
+		}
+	}
+
 	// orch.Turn's first scope-id param is still named `agentID` (orchestrator
 	// legacy — see Task 6 notes). It expects a version row's ID.
-	if err := h.orch.Turn(tools.WithForwardedHeaders(r.Context(), r.Header), versionID, sessionID, input, sink); err != nil {
+	if err := h.orch.Turn(ctx, versionID, sessionID, input, sink); err != nil {
 		h.logger.Error("chat turn failed",
 			slog.String("version_id", versionID),
 			slog.String("session_id", sessionID),
@@ -439,4 +476,120 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		)
 		// Orchestrator already emitted ErrorEvent. Nothing more to do here.
 	}
+}
+
+// headerOverrideRow is one backend row in the headers override modal.
+type headerOverrideRow struct {
+	BackendID   string
+	BackendName string
+	Kind        string // "http_endpoint" | "mcp_client"
+	Entries     []headerEntry
+}
+
+type headerEntry struct {
+	Key   string
+	Value string
+}
+
+type headersModalData struct {
+	VersionID string
+	SessionID string
+	Backends  []headerOverrideRow
+}
+
+// ShowHeaderOverridesModal renders the per-backend header overrides form as an
+// htmx partial. Returns 200 with the modal HTML fragment.
+func (h *ChatHandler) ShowHeaderOverridesModal(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	sessionID := r.PathValue("session_id")
+
+	data, err := h.buildHeadersModalData(r.Context(), versionID, sessionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, h.headersTmpl, "headers_modal", data)
+}
+
+// UpdateHeaderOverrides parses the form submission from the headers modal and
+// persists the updated per-backend header overrides for the session.
+func (h *ChatHandler) UpdateHeaderOverrides(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	sessionID := r.PathValue("session_id")
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	// Form encoding: backend_id[<id>][<key_n>] = key, backend_id[<id>][<val_n>] = value.
+	// Simpler approach: pairs of hidden inputs named header_backend[], header_key[], header_val[].
+	backendIDs := r.Form["header_backend[]"]
+	keys := r.Form["header_key[]"]
+	vals := r.Form["header_val[]"]
+
+	ovr := map[string]map[string]string{}
+	for i := range backendIDs {
+		bid := strings.TrimSpace(backendIDs[i])
+		k := strings.TrimSpace(keys[i])
+		v := vals[i] // value may legitimately be blank (to clear a header)
+		if bid == "" || k == "" {
+			continue
+		}
+		if _, ok := ovr[bid]; !ok {
+			ovr[bid] = map[string]string{}
+		}
+		ovr[bid][k] = v
+	}
+
+	if err := h.headerOvr.SetSessionHeaderOverrides(r.Context(), sessionID, ovr); err != nil {
+		Error(w, err)
+		return
+	}
+
+	// Re-render the modal with the saved state so the user sees confirmation.
+	data, err := h.buildHeadersModalData(r.Context(), versionID, sessionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, h.headersTmpl, "headers_modal", data)
+}
+
+func (h *ChatHandler) buildHeadersModalData(ctx context.Context, versionID, sessionID string) (headersModalData, error) {
+	existing, err := h.headerOvr.GetSessionHeaderOverrides(ctx, sessionID)
+	if err != nil && !errors.Is(err, types.ErrNotFound) {
+		return headersModalData{}, err
+	}
+	if existing == nil {
+		existing = map[string]map[string]string{}
+	}
+
+	var rows []headerOverrideRow
+	if h.backends != nil {
+		bes, err := h.backends.ListBackendsForVersion(ctx, versionID)
+		if err != nil {
+			return headersModalData{}, err
+		}
+		for _, be := range bes {
+			row := headerOverrideRow{
+				BackendID:   be.ID,
+				BackendName: be.Name,
+				Kind:        string(be.Kind),
+			}
+			// Populate existing entries for this backend.
+			for k, v := range existing[be.ID] {
+				row.Entries = append(row.Entries, headerEntry{Key: k, Value: v})
+			}
+			// Always ensure at least one blank entry for adding new headers.
+			row.Entries = append(row.Entries, headerEntry{})
+			rows = append(rows, row)
+		}
+	}
+
+	return headersModalData{
+		VersionID: versionID,
+		SessionID: sessionID,
+		Backends:  rows,
+	}, nil
 }
