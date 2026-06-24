@@ -1,6 +1,6 @@
 """Pydantic models for aikdm inputs and outputs.
 
-The input contract mirrors the v2 FlowMapConfig shape that producers emit
+The input contract mirrors the v3 FlowMapConfig shape that producers emit
 (open-bbcd's flowmap.Parse → JSONB row → CLI stdin YAML). Adding a field
 upstream requires adding it here too (and bumping schema_version).
 """
@@ -103,6 +103,23 @@ class Flow(BaseModel):
     prose_md: str = ""
 
 
+class AttachedMCP(BaseModel):
+    """A user-attached MCP server. Carries server identity + a per-attachment
+    operator note that aikdm folds into the main prompt as guidance for
+    when/how to use the server.
+
+    Provided by open-bbcd as part of the aikdm-input YAML (a single source
+    of truth for the agent's configuration). Discovery itself doesn't know
+    about attached MCPs — they're added in the BO configurator.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    url: str
+    note: str = ""
+
+
 class FlowMapConfig(BaseModel):
     """Input contract: full agent configuration emitted by an upstream
     producer. Field shape and semantics are versioned via schema_version.
@@ -120,12 +137,13 @@ class FlowMapConfig(BaseModel):
     endpoints: list[Endpoint] = Field(default_factory=list)
     skills: list[Skill] = Field(default_factory=list)
     flows: list[Flow] = Field(default_factory=list)
+    attached_mcps: list[AttachedMCP] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _require_v2(self) -> "FlowMapConfig":
-        if self.schema_version != 2:
+    def _require_v3(self) -> "FlowMapConfig":
+        if self.schema_version != 3:
             raise ValueError(
-                f"schema_version {self.schema_version} not supported; require 2"
+                f"schema_version {self.schema_version} not supported; require 3"
             )
         return self
 
