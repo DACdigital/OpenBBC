@@ -95,6 +95,11 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	llmClient := anthropic.New(cfg.Anthropic)
 	backendRepo := repository.NewToolBackendRepository(db)
 	wiringRepo := repository.NewVersionWiringRepository(db)
+
+	backendsHandler, err := NewBackendsHandler(backendRepo, wiringRepo, web.Assets)
+	if err != nil {
+		fatal("init backends handler", err)
+	}
 	// Both BO and deployed orchestrators share the same builder: Builder is
 	// stateless (all DB reads happen inside Build, scoped by versionID).
 	builder := tools.NewBuilder(&toolBackendStoreAdapter{backend: backendRepo, wiring: wiringRepo})
@@ -167,6 +172,14 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agent_versions/{version_id}/finalize", configuratorHandler.Finalize)
 	mux.HandleFunc("GET /agent_versions/{version_id}/config.yaml", configuratorHandler.DownloadYAML)
 	RegisterConfiguratorRedirects(mux)
+
+	// MCP / tool backends CRUD
+	mux.HandleFunc("GET /mcp", backendsHandler.List)
+	mux.HandleFunc("GET /mcp/new", backendsHandler.New)
+	mux.HandleFunc("POST /mcp", backendsHandler.Create)
+	mux.HandleFunc("GET /mcp/{id}", backendsHandler.Edit)
+	mux.HandleFunc("POST /mcp/{id}", backendsHandler.Update)
+	mux.HandleFunc("POST /mcp/{id}/delete", backendsHandler.Delete)
 
 	// Per-version BO chat
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/sessions", chatHandler.NewSession)

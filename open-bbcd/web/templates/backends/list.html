@@ -1,0 +1,33 @@
+{{define "content"}}
+<div class="page-header">
+  <h1>MCP / Tool Backends</h1>
+  <a href="/mcp/new?kind=http_endpoint" class="btn-primary">+ New HTTP backend</a>
+</div>
+
+{{if .Rows}}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Kind</th>
+      <th>Endpoint / URL</th>
+      <th class="col-count">Used by</th>
+      <th class="col-date">Updated</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rows}}
+    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/mcp/{{.ID}}">
+      <td><a class="agent-link" href="/mcp/{{.ID}}">{{.Name}}</a></td>
+      <td><span class="badge badge-{{.Kind}}">{{.Kind}}</span></td>
+      <td>{{.PrimaryURL}}</td>
+      <td class="col-count">{{.UsageCount}}</td>
+      <td class="col-date">{{.UpdatedAt.Format "Jan 2, 2006"}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty-state">No backends configured yet. Create an HTTP backend to wire up your agent's endpoints.</p>
+{{end}}
+{{end}}
