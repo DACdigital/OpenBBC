@@ -113,3 +113,20 @@ func TestToolBackendRepo_Update_HappyPath(t *testing.T) {
 	if err != nil { t.Fatalf("Get: %v", err) }
 	if got.Name != "api-renamed" { t.Fatalf("name not updated: %s", got.Name) }
 }
+
+func TestToolBackendRepo_Delete_BlockedByWiring(t *testing.T) {
+	db := openTestDB(t)
+	backendRepo := NewToolBackendRepository(db)
+	wiringRepo := NewVersionWiringRepository(db)
+	ctx := context.Background()
+
+	backendID := seedHTTPBackend(t, db, "wired-backend")
+	versionID := seedAgentVersion(t, db)
+	if err := wiringRepo.SetEndpointBackend(ctx, versionID, "ep.foo", backendID); err != nil {
+		t.Fatalf("SetEndpointBackend: %v", err)
+	}
+	err := backendRepo.Delete(ctx, backendID)
+	if !errors.Is(err, types.ErrToolBackendInUse) {
+		t.Fatalf("want ErrToolBackendInUse, got %v", err)
+	}
+}

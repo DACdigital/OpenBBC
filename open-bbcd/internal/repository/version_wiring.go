@@ -25,6 +25,8 @@ func (r *VersionWiringRepository) SetEndpointBackend(ctx context.Context, versio
 	return err
 }
 
+// UnsetEndpointBackend removes the endpoint→backend mapping. Returns nil if
+// no row matched (idempotent).
 func (r *VersionWiringRepository) UnsetEndpointBackend(ctx context.Context, versionID, endpointID string) error {
 	const q = `DELETE FROM agent_version_endpoint_backend WHERE agent_version_id = $1 AND endpoint_id = $2`
 	_, err := r.db.ExecContext(ctx, q, versionID, endpointID)
@@ -58,6 +60,8 @@ func (r *VersionWiringRepository) AttachMCP(ctx context.Context, versionID, back
 	return err
 }
 
+// DetachMCP removes the version's attachment to the MCP backend. Returns nil
+// if no attachment existed (idempotent).
 func (r *VersionWiringRepository) DetachMCP(ctx context.Context, versionID, backendID string) error {
 	const q = `DELETE FROM agent_version_mcp_backend WHERE agent_version_id = $1 AND backend_id = $2`
 	_, err := r.db.ExecContext(ctx, q, versionID, backendID)
@@ -82,8 +86,10 @@ func (r *VersionWiringRepository) ListMCPAttachments(ctx context.Context, versio
 	return out, rows.Err()
 }
 
-// UsageCounts returns how many agent versions reference each backend id
-// (across both wiring tables). Used by the MCP list page to show "used by N".
+// UsageCounts returns how many distinct agent versions reference each backend id
+// across both wiring tables. A version that wires the same backend via both an
+// HTTP endpoint AND an MCP attachment is counted once. Used by the MCP list
+// page to show "used by N".
 func (r *VersionWiringRepository) UsageCounts(ctx context.Context) (map[string]int, error) {
 	const q = `
 		SELECT backend_id, COUNT(DISTINCT agent_version_id) AS n FROM (
