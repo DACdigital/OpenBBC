@@ -44,15 +44,15 @@ func (b *MCPClientBackend) Name() string { return b.name }
 // since the official SDK's StreamableClientTransport has no headers option.
 //
 // Headers are merged per-request (read from req.Context()) in the same
-// precedence order as HTTPEndpointBackend.applyHeaders so per-user MCP
-// servers receive the live FE user-identifying headers:
+// precedence order as HTTPEndpointBackend.applyHeaders:
 //
-//	1. defaultHeaders  — service-level config on the backend row (lowest)
-//	2. live FE headers — forward-everything-except-hop-by-hop from ctx
-//	3. session overrides for this backend id — BO testing (highest)
+//  1. defaultHeaders    — service-level config on the backend row (lowest)
+//  2. routing envelope  — _all flag copies live FE headers; explicit map overrides
+//  3. session overrides — BO testing modal (highest)
 type headerInjectingTransport struct {
 	base           http.RoundTripper
 	backendID      string
+	backendName    string
 	defaultHeaders map[string]string
 }
 
@@ -64,19 +64,30 @@ func (h *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response,
 		req.Header.Set(k, v)
 	}
 
-	// 2. Live FE headers — forward everything except hop-by-hop.
-	if live := forwardedHeadersFromContext(ctx); live != nil {
-		for name, vals := range live {
-			if hopByHopHeaders[strings.ToLower(name)] {
-				continue
+	// 2/3. Routing envelope.
+	if routing, ok := backendHeaderRoutingFromContext(ctx); ok {
+		if block, found := routing.LookupByBackendName(h.backendName); found {
+			if block.All {
+				if live := forwardedHeadersFromContext(ctx); live != nil {
+					for name, vals := range live {
+						lc := strings.ToLower(name)
+						if hopByHopHeaders[lc] || lc == strings.ToLower(RoutingEnvelopeHeader) {
+							continue
+						}
+						if len(vals) > 0 {
+							req.Header.Set(name, vals[0])
+						}
+					}
+				}
 			}
-			if len(vals) > 0 {
-				req.Header.Set(name, vals[0])
+			for k, v := range block.Headers {
+				req.Header.Set(k, v)
 			}
 		}
+		// backend not in envelope → no FE headers forwarded
 	}
 
-	// 3. Session overrides for this backend.
+	// 4. Session overrides.
 	if sess := sessionHeaderOverridesFromContext(ctx); sess != nil {
 		if mine, ok := sess[h.backendID]; ok {
 			for k, v := range mine {
@@ -99,13 +110,14 @@ func (b *MCPClientBackend) ensure(ctx context.Context) error {
 	}
 
 	// Headers are evaluated per-request inside the RoundTripper from
-	// req.Context(), so live FE headers (set by the chat handler via
-	// WithForwardedHeaders) propagate to every MCP call — important for
-	// per-user MCP servers that key off user-identifying headers.
+	// req.Context(), so routing-envelope-gated FE headers propagate to every
+	// MCP call — important for per-user MCP servers that key off
+	// user-identifying headers.
 	httpClient := &http.Client{
 		Transport: &headerInjectingTransport{
 			base:           http.DefaultTransport,
 			backendID:      b.id,
+			backendName:    b.name,
 			defaultHeaders: b.cfg.DefaultHeaders,
 		},
 	}

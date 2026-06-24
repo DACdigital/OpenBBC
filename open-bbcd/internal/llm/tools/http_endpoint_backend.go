@@ -177,24 +177,38 @@ var hopByHopHeaders = map[string]bool{
 }
 
 func (b *HTTPEndpointBackend) applyHeaders(ctx context.Context, req *http.Request) {
-	// 1. Default headers (lowest precedence).
+	// 1. Default headers (lowest).
 	for k, v := range b.cfg.DefaultHeaders {
 		req.Header.Set(k, v)
 	}
 
-	// 2. Live FE headers — forward everything except hop-by-hop.
-	live := forwardedHeadersFromContext(ctx)
-	for name, vals := range live {
-		if hopByHopHeaders[strings.ToLower(name)] {
-			continue
+	// 2/3. Routing-envelope-controlled FE headers + explicit map.
+	if routing, ok := backendHeaderRoutingFromContext(ctx); ok {
+		if block, found := routing.LookupByBackendName(b.name); found {
+			// 2. _all flag: forward live FE headers minus hop-by-hop minus
+			//    the routing envelope header itself.
+			if block.All {
+				if live := forwardedHeadersFromContext(ctx); live != nil {
+					for name, vals := range live {
+						lc := strings.ToLower(name)
+						if hopByHopHeaders[lc] || lc == strings.ToLower(RoutingEnvelopeHeader) {
+							continue
+						}
+						if len(vals) > 0 {
+							req.Header.Set(name, vals[0])
+						}
+					}
+				}
+			}
+			// 3. Explicit headers (overwrite live-FE on conflict).
+			for k, v := range block.Headers {
+				req.Header.Set(k, v)
+			}
 		}
-		// Use Set (not Add) — single canonical value per name.
-		if len(vals) > 0 {
-			req.Header.Set(name, vals[0])
-		}
+		// backend not in envelope → no FE headers forwarded
 	}
 
-	// 3. Session overrides for this backend (highest precedence).
+	// 4. Session overrides (highest).
 	if sess := sessionHeaderOverridesFromContext(ctx); sess != nil {
 		if mine, ok := sess[b.id]; ok {
 			for k, v := range mine {

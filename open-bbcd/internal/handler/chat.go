@@ -458,6 +458,19 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	// Build the base context with forwarded FE headers.
 	ctx := tools.WithForwardedHeaders(r.Context(), r.Header)
 
+	// Parse the per-backend routing envelope and stash it on ctx. Malformed
+	// envelopes are logged and silently dropped — fail safe: no FE headers
+	// reach any backend.
+	if raw := r.Header.Get(tools.RoutingEnvelopeHeader); raw != "" {
+		routing, err := tools.ParseBackendHeaderRouting(raw)
+		if err != nil {
+			h.logger.Warn("malformed backend header routing envelope; ignoring",
+				slog.String("err", err.Error()))
+		} else {
+			ctx = tools.WithBackendHeaderRouting(ctx, routing)
+		}
+	}
+
 	// Layer session-scoped backend header overrides on top (BO testing only).
 	// Missing session row is silently ignored — overrides are optional.
 	if h.headerOvr != nil {

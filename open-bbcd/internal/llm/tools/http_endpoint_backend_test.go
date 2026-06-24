@@ -75,7 +75,13 @@ func TestHTTPBackend_Call_LiveFEHeadersOverrideDefaults(t *testing.T) {
 		map[string]string{"ping": "b1"}, "b1")
 	be.cfg.DefaultHeaders = map[string]string{"Authorization": "Bearer default"}
 
+	// Opt "test" backend into _all so live FE headers are forwarded.
 	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
+	ctx = WithBackendHeaderRouting(ctx, BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{
+			"test": {All: true},
+		},
+	})
 	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
 	if gotAuth != "Bearer LIVE" {
 		t.Fatalf("want LIVE, got %s", gotAuth)
@@ -150,13 +156,116 @@ func TestHTTPBackend_Call_SessionOverrideWinsOverLiveAndDefault(t *testing.T) {
 		map[string]string{"ping": "b1"}, "b1")
 	be.cfg.DefaultHeaders = map[string]string{"Authorization": "Bearer default"}
 
+	// Opt "test" into _all so live FE headers are forwarded, then session
+	// override must win over everything.
 	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
+	ctx = WithBackendHeaderRouting(ctx, BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{
+			"test": {All: true},
+		},
+	})
 	ctx = WithSessionHeaderOverrides(ctx, SessionHeaderOverrides{
 		"b1": {"Authorization": "Bearer SESSION"},
 	})
 	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
 	if gotAuth != "Bearer SESSION" {
 		t.Fatalf("want SESSION, got %s", gotAuth)
+	}
+}
+
+func TestHTTPBackend_Call_NoEnvelope_DoesNotForwardLiveHeaders(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+
+	// Live FE has Authorization but envelope is absent → must not be forwarded.
+	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotAuth != "" {
+		t.Fatalf("Authorization leaked without envelope: %s", gotAuth)
+	}
+}
+
+func TestHTTPBackend_Call_EnvelopeExplicitHeaderForwarded(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+	// newHTTPTest sets be.name = "test"
+
+	ctx := WithBackendHeaderRouting(context.Background(), BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{
+			"test": {Headers: map[string]string{"Authorization": "Bearer ROUTED"}},
+		},
+	})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotAuth != "Bearer ROUTED" {
+		t.Fatalf("want ROUTED, got %s", gotAuth)
+	}
+}
+
+func TestHTTPBackend_Call_EnvelopeNotMatched_NoLiveHeaders(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+
+	// Envelope addresses a different backend; "test" gets nothing.
+	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
+	ctx = WithBackendHeaderRouting(ctx, BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{"other": {All: true}},
+	})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotAuth != "" {
+		t.Fatalf("Authorization leaked despite no envelope match: %s", gotAuth)
+	}
+}
+
+func TestHTTPBackend_Call_RoutingEnvelopeHeaderExcludedFromAllForwarding(t *testing.T) {
+	var gotEnvHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEnvHeader = r.Header.Get(RoutingEnvelopeHeader)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+
+	// Live FE request includes the routing header itself — it must NOT be
+	// forwarded to the backend even with _all: true.
+	ctx := WithForwardedHeaders(context.Background(), http.Header{
+		RoutingEnvelopeHeader: {"somebase64value"},
+		"X-Other":             {"pass-me-through"},
+	})
+	ctx = WithBackendHeaderRouting(ctx, BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{
+			"test": {All: true},
+		},
+	})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotEnvHeader != "" {
+		t.Fatalf("routing envelope header must not be forwarded to backends, got: %s", gotEnvHeader)
 	}
 }
 

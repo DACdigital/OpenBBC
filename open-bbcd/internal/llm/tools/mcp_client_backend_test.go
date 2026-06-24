@@ -213,10 +213,42 @@ func TestMCPClient_SessionOverrideAppliedAtConnect(t *testing.T) {
 	}
 }
 
+// newMCPHeaderSpy returns a test server that records the Authorization header
+// and responds to the minimal MCP protocol handshake (no tools). The atomic
+// is written on every request so the caller can check after Tools() returns.
+func newMCPHeaderSpy(t *testing.T, gotAuth *atomic.Value) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v := r.Header.Get("Authorization"); v != "" {
+			gotAuth.Store(v)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req jsonrpcRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "bad json", 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			respond(w, req.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "test", "version": "0.1"},
+			})
+		case "notifications/initialized":
+			// no response for notifications
+		case "tools/list":
+			respond(w, req.ID, map[string]any{"tools": []map[string]any{}})
+		default:
+			http.Error(w, "unknown method "+req.Method, 400)
+		}
+	}))
+}
+
 // TestMCPClient_ForwardsLiveFEHeaders verifies that headers stashed on ctx
 // via WithForwardedHeaders flow through to the MCP server on every JSON-RPC
-// request — important for per-user MCP servers that key off user-identifying
-// headers (Authorization, X-User-Id, cookies, etc.).
+// request when the backend is opted into _all in the routing envelope.
 func TestMCPClient_ForwardsLiveFEHeaders(t *testing.T) {
 	var gotAuth, gotUserID atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -256,10 +288,16 @@ func TestMCPClient_ForwardsLiveFEHeaders(t *testing.T) {
 	})
 	defer be.Close()
 
+	// Opt "test" backend into _all so live FE headers are forwarded.
 	ctx := WithForwardedHeaders(context.Background(), http.Header{
 		"Authorization": {"Bearer USER-TOKEN"},
 		"X-User-Id":     {"user-42"},
-		"Host":          {"should-be-stripped.example"}, // hop-by-hop set; must not be forwarded
+		"Host":          {"should-be-stripped.example"}, // hop-by-hop; must not be forwarded
+	})
+	ctx = WithBackendHeaderRouting(ctx, BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{
+			"test": {All: true},
+		},
 	})
 
 	_, _ = be.Tools(ctx)
@@ -269,5 +307,81 @@ func TestMCPClient_ForwardsLiveFEHeaders(t *testing.T) {
 	}
 	if got := gotUserID.Load(); got != "user-42" {
 		t.Fatalf("X-User-Id: want user-42, got %v", got)
+	}
+}
+
+// TestMCPClient_NoEnvelope_DoesNotForwardLiveHeaders verifies that live FE
+// headers are NOT forwarded when no routing envelope is present on the context.
+func TestMCPClient_NoEnvelope_DoesNotForwardLiveHeaders(t *testing.T) {
+	var gotAuth atomic.Value
+	srv := newMCPHeaderSpy(t, &gotAuth)
+	defer srv.Close()
+
+	be := NewMCPClientBackend("test", "b1", MCPBackendCfg{
+		URL:       srv.URL,
+		Transport: "streamable_http",
+	})
+	defer be.Close()
+
+	// Live FE has Authorization but no routing envelope → must not be forwarded.
+	ctx := WithForwardedHeaders(context.Background(), http.Header{
+		"Authorization": {"Bearer LIVE"},
+	})
+	_, _ = be.Tools(ctx)
+
+	if got := gotAuth.Load(); got != nil && got != "" {
+		t.Fatalf("Authorization leaked without envelope: %v", got)
+	}
+}
+
+// TestMCPClient_EnvelopeExplicitHeaderForwarded verifies that an explicitly
+// listed header in the routing envelope reaches the MCP server.
+func TestMCPClient_EnvelopeExplicitHeaderForwarded(t *testing.T) {
+	var gotAuth atomic.Value
+	srv := newMCPHeaderSpy(t, &gotAuth)
+	defer srv.Close()
+
+	be := NewMCPClientBackend("test", "b1", MCPBackendCfg{
+		URL:       srv.URL,
+		Transport: "streamable_http",
+	})
+	defer be.Close()
+
+	ctx := WithBackendHeaderRouting(context.Background(), BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{
+			"test": {Headers: map[string]string{"Authorization": "Bearer ROUTED"}},
+		},
+	})
+	_, _ = be.Tools(ctx)
+
+	if got := gotAuth.Load(); got != "Bearer ROUTED" {
+		t.Fatalf("want Bearer ROUTED, got %v", got)
+	}
+}
+
+// TestMCPClient_EnvelopeNotMatched_NoLiveHeaders verifies that when the
+// envelope addresses a different backend, no live FE headers are forwarded.
+func TestMCPClient_EnvelopeNotMatched_NoLiveHeaders(t *testing.T) {
+	var gotAuth atomic.Value
+	srv := newMCPHeaderSpy(t, &gotAuth)
+	defer srv.Close()
+
+	be := NewMCPClientBackend("test", "b1", MCPBackendCfg{
+		URL:       srv.URL,
+		Transport: "streamable_http",
+	})
+	defer be.Close()
+
+	// Envelope is for "other" backend; "test" should receive nothing.
+	ctx := WithForwardedHeaders(context.Background(), http.Header{
+		"Authorization": {"Bearer LIVE"},
+	})
+	ctx = WithBackendHeaderRouting(ctx, BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{"other": {All: true}},
+	})
+	_, _ = be.Tools(ctx)
+
+	if got := gotAuth.Load(); got != nil && got != "" {
+		t.Fatalf("Authorization leaked despite no envelope match: %v", got)
 	}
 }
