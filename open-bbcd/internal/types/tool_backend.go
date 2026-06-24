@@ -22,9 +22,13 @@ type ToolBackend struct {
 }
 
 type HTTPBackendConfig struct {
-	BaseURL          string            `json:"base_url"`
-	DefaultHeaders   map[string]string `json:"default_headers,omitempty"`
-	ForwardedHeaders []string          `json:"forwarded_headers,omitempty"`
+	BaseURL        string            `json:"base_url"`
+	DefaultHeaders map[string]string `json:"default_headers,omitempty"`
+	// ForwardedHeaders is deprecated and ignored at runtime — the HTTP
+	// backend now forwards all live FE headers except hop-by-hop ones.
+	// Kept on the struct only for round-trip compatibility with rows
+	// written by earlier versions; do not surface in new UI.
+	ForwardedHeaders []string `json:"forwarded_headers,omitempty"`
 }
 
 type MCPBackendConfig struct {

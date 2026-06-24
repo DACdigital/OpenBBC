@@ -1,7 +1,10 @@
 {{define "content"}}
 <div class="page-header">
   <h1>MCP / Tool Backends</h1>
-  <a href="/mcp/new?kind=http_endpoint" class="btn-primary">+ New HTTP backend</a>
+  <div class="page-header-actions">
+    <a href="/mcp/new?kind=http_endpoint" class="btn-secondary">+ New HTTP backend</a>
+    <a href="/mcp/new?kind=mcp_client" class="btn-primary">+ New MCP backend</a>
+  </div>
 </div>
 
 {{if .Rows}}

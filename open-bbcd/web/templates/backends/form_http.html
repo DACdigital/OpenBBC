@@ -19,7 +19,7 @@
 
   <fieldset>
     <legend>Default headers</legend>
-    <p class="form-hint">Headers always sent with every request. Per-session overrides win; live FE headers (allowlisted below) win over both.</p>
+    <p class="form-hint">Headers always sent with every request. Per-session overrides win; live FE headers win over defaults.</p>
     <div class="kv-rows" data-prefix="default_headers">
       <div class="kv-row">
         <input type="text" name="default_headers_key" placeholder="Header name">
@@ -30,14 +30,6 @@
         <input type="text" name="default_headers_value" placeholder="Header value">
       </div>
     </div>
-  </fieldset>
-
-  <fieldset>
-    <legend>Forwarded headers (allowlist)</legend>
-    <p class="form-hint">Header names to forward from the live FE request to the backend. Defaults are pre-checked; uncheck to disable, or add a custom one.</p>
-    <label class="checkbox-row"><input type="checkbox" name="forwarded_headers" value="Authorization" checked> Authorization</label>
-    <label class="checkbox-row"><input type="checkbox" name="forwarded_headers" value="Cookie" checked> Cookie</label>
-    <label class="checkbox-row"><input type="checkbox" name="forwarded_headers" value="X-User-Id" checked> X-User-Id</label>
   </fieldset>
 
   <div class="form-actions">

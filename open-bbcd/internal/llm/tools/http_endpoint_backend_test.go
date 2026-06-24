@@ -74,7 +74,6 @@ func TestHTTPBackend_Call_LiveFEHeadersOverrideDefaults(t *testing.T) {
 	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
 		map[string]string{"ping": "b1"}, "b1")
 	be.cfg.DefaultHeaders = map[string]string{"Authorization": "Bearer default"}
-	be.cfg.ForwardedHeaders = []string{"Authorization"}
 
 	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
 	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
@@ -150,7 +149,6 @@ func TestHTTPBackend_Call_SessionOverrideWinsOverLiveAndDefault(t *testing.T) {
 	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
 		map[string]string{"ping": "b1"}, "b1")
 	be.cfg.DefaultHeaders = map[string]string{"Authorization": "Bearer default"}
-	be.cfg.ForwardedHeaders = []string{"Authorization"}
 
 	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
 	ctx = WithSessionHeaderOverrides(ctx, SessionHeaderOverrides{

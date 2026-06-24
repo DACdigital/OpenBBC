@@ -145,9 +145,8 @@ func (h *BackendsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	switch kind {
 	case types.ToolBackendKindHTTPEndpoint:
 		cfg := types.HTTPBackendConfig{
-			BaseURL:          r.FormValue("base_url"),
-			DefaultHeaders:   parseHeaderRows(r, "default_headers"),
-			ForwardedHeaders: r.Form["forwarded_headers"],
+			BaseURL:        r.FormValue("base_url"),
+			DefaultHeaders: parseHeaderRows(r, "default_headers"),
 		}
 		cfgJSON, _ = json.Marshal(cfg)
 	case types.ToolBackendKindMCPClient:
@@ -194,35 +193,12 @@ func (h *BackendsHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(be.Config, &cfg)
 	}
 
-	type hdrOption struct {
-		Name    string
-		Checked bool
-	}
-	defaults := []string{"Authorization", "Cookie", "X-User-Id"}
-	already := map[string]bool{}
-	for _, hdr := range cfg.ForwardedHeaders {
-		already[hdr] = true
-	}
-	opts := []hdrOption{}
-	seen := map[string]bool{}
-	for _, d := range defaults {
-		opts = append(opts, hdrOption{Name: d, Checked: already[d]})
-		seen[d] = true
-	}
-	for _, hdr := range cfg.ForwardedHeaders {
-		if !seen[hdr] {
-			opts = append(opts, hdrOption{Name: hdr, Checked: true})
-			seen[hdr] = true
-		}
-	}
-
 	renderTemplate(w, h.editTmpl, "layout", map[string]any{
-		"Active":                 "mcp",
-		"Backend":                be,
-		"Cfg":                    cfg,
-		"MCPCfg":                 mcpCfg,
-		"UsageCount":             counts[be.ID],
-		"ForwardedHeaderOptions": opts,
+		"Active":     "mcp",
+		"Backend":    be,
+		"Cfg":        cfg,
+		"MCPCfg":     mcpCfg,
+		"UsageCount": counts[be.ID],
 	})
 }
 
@@ -247,9 +223,8 @@ func (h *BackendsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	switch be.Kind {
 	case types.ToolBackendKindHTTPEndpoint:
 		cfg := types.HTTPBackendConfig{
-			BaseURL:          r.FormValue("base_url"),
-			DefaultHeaders:   parseHeaderRows(r, "default_headers"),
-			ForwardedHeaders: r.Form["forwarded_headers"],
+			BaseURL:        r.FormValue("base_url"),
+			DefaultHeaders: parseHeaderRows(r, "default_headers"),
 		}
 		cfgJSON, _ := json.Marshal(cfg)
 		be.Name = name

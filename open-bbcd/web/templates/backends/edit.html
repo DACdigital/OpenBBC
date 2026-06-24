@@ -31,14 +31,6 @@
       </div>
     </div>
   </fieldset>
-  <fieldset>
-    <legend>Forwarded headers (allowlist)</legend>
-    {{range .ForwardedHeaderOptions}}
-    <label class="checkbox-row">
-      <input type="checkbox" name="forwarded_headers" value="{{.Name}}" {{if .Checked}}checked{{end}}> {{.Name}}
-    </label>
-    {{end}}
-  </fieldset>
   {{end}}
 
   {{if eq (printf "%s" .Backend.Kind) "mcp_client"}}

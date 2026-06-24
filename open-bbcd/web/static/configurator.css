@@ -440,6 +440,10 @@
 .config-form { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
 .config-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #8b949e; }
 .config-form input[type=text],
+.config-form input[type=url],
+.config-form input[type=email],
+.config-form input[type=password],
+.config-form input[type=number],
 .config-form textarea,
 .config-form select {
   background: #0d1117;
@@ -450,10 +454,63 @@
   font-size: 13px;
   font-family: inherit;
 }
+
+.config-form input:focus,
+.config-form textarea:focus,
+.config-form select:focus {
+  outline: none;
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 3px rgba(56, 139, 253, 0.15);
+}
+
 .config-form textarea { resize: vertical; min-height: 80px; }
 .config-form .form-row { display: flex; gap: 12px; align-items: flex-end; }
 .config-form .form-row > * { flex: 1; }
-.config-form .form-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+.config-form fieldset {
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 14px 16px 16px;
+  margin: 4px 0;
+  background: #0d1117;
+}
+.config-form legend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.config-form fieldset > * + * {
+  margin-top: 8px;
+}
+.config-form fieldset .form-hint {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.config-form .kv-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.config-form .kv-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 8px;
+}
+.config-form .kv-row input {
+  width: 100%;
+}
+
+.config-form .form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #21262d;
+}
 
 .config-form .checkbox-row {
   flex-direction: row;
@@ -464,6 +521,15 @@
 }
 .config-form .checkbox-row input[type=checkbox] { margin: 0; }
 .config-form .checkbox-row span { font-size: 13px; }
+
+.config-form .radio-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: #e6edf3;
+  cursor: pointer;
+}
+.config-form .radio-row input[type=radio] { margin: 0; }
 
 .config-form .endpoint-select {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

@@ -160,21 +160,41 @@ func (b *HTTPEndpointBackend) buildRequest(ep HTTPEndpointDef, args map[string]a
 	return u.String(), body, nil
 }
 
+// hopByHopHeaders are headers that must not be forwarded by a proxy/relay
+// (RFC 7230 section 6.1) plus a few that Go's http.Client manages itself.
+// We forward everything else from the live FE request to the target backend.
+var hopByHopHeaders = map[string]bool{
+	"connection":          true,
+	"keep-alive":          true,
+	"proxy-authenticate":  true,
+	"proxy-authorization": true,
+	"te":                  true,
+	"trailer":             true,
+	"transfer-encoding":   true,
+	"upgrade":             true,
+	"host":                true, // set by http.NewRequest from URL
+	"content-length":      true, // set by http.Client from body
+}
+
 func (b *HTTPEndpointBackend) applyHeaders(ctx context.Context, req *http.Request) {
-	// 1. Default headers (lowest precedence)
+	// 1. Default headers (lowest precedence).
 	for k, v := range b.cfg.DefaultHeaders {
 		req.Header.Set(k, v)
 	}
 
-	// 2. Live FE headers (allowlisted) — deployed runtime path
+	// 2. Live FE headers — forward everything except hop-by-hop.
 	live := forwardedHeadersFromContext(ctx)
-	for _, name := range b.cfg.ForwardedHeaders {
-		if v := live.Get(name); v != "" {
-			req.Header.Set(name, v)
+	for name, vals := range live {
+		if hopByHopHeaders[strings.ToLower(name)] {
+			continue
+		}
+		// Use Set (not Add) — single canonical value per name.
+		if len(vals) > 0 {
+			req.Header.Set(name, vals[0])
 		}
 	}
 
-	// 3. Session overrides for this backend (highest precedence) — BO testing
+	// 3. Session overrides for this backend (highest precedence).
 	if sess := sessionHeaderOverridesFromContext(ctx); sess != nil {
 		if mine, ok := sess[b.id]; ok {
 			for k, v := range mine {
