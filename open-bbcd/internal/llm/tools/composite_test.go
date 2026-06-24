@@ -87,3 +87,30 @@ func TestComposite_SkillMetaToolStillResolvesFromBundle(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestComposite_RoutesMixedHTTPAndMCP(t *testing.T) {
+	httpBE := &stubBackend{name: "api", tools: []llm.ToolDef{{Name: "orders_create"}}, calls: map[string]Result{"orders_create": {Output: json.RawMessage(`"http-ok"`)}}}
+	mcpBE := &stubBackend{name: "slack", tools: []llm.ToolDef{{Name: "slack__send_message"}}, calls: map[string]Result{"send_message": {Output: json.RawMessage(`"mcp-ok"`)}}}
+
+	h := NewComposite([]Backend{httpBE, mcpBE})
+
+	defs, err := h.Tools(nil)
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	if len(defs) != 3 {
+		t.Fatalf("want 3 tools (Skill + 2 backends), got %d", len(defs))
+	}
+
+	// HTTP (no prefix) routing
+	r, _ := h.Call(context.Background(), nil, Call{ID: "1", Name: "orders_create", Input: json.RawMessage(`{}`)})
+	if string(r.Output) != `"http-ok"` {
+		t.Fatalf("http route: got %s", string(r.Output))
+	}
+
+	// MCP (prefixed) routing
+	r, _ = h.Call(context.Background(), nil, Call{ID: "2", Name: "slack__send_message", Input: json.RawMessage(`{}`)})
+	if string(r.Output) != `"mcp-ok"` {
+		t.Fatalf("mcp route: got %s", string(r.Output))
+	}
+}

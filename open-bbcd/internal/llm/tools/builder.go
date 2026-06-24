@@ -89,8 +89,21 @@ func (b *Builder) Build(ctx context.Context, versionID string, bundle json.RawMe
 		backends = append(backends, NewHTTPEndpointBackend(name, bid, cfg, eps, m))
 	}
 
-	// MCP backends built in Task 13 — until then, log + skip.
-	_ = mcp
+	// Build MCP backends from the attachment list.
+	for bid := range mcp {
+		kind, name, cfgJSON, err := b.store.GetBackend(ctx, bid)
+		if err != nil {
+			return nil, fmt.Errorf("builder: load backend %s: %w", bid, err)
+		}
+		if kind != "mcp_client" {
+			continue
+		}
+		var cfg MCPBackendCfg
+		if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
+			return nil, fmt.Errorf("builder: parse mcp config for backend %s: %w", bid, err)
+		}
+		backends = append(backends, NewMCPClientBackend(name, bid, cfg))
+	}
 
 	return NewComposite(backends), nil
 }
