@@ -212,3 +212,62 @@ func TestMCPClient_SessionOverrideAppliedAtConnect(t *testing.T) {
 		t.Fatalf("want Bearer SESSION, got %v", got)
 	}
 }
+
+// TestMCPClient_ForwardsLiveFEHeaders verifies that headers stashed on ctx
+// via WithForwardedHeaders flow through to the MCP server on every JSON-RPC
+// request — important for per-user MCP servers that key off user-identifying
+// headers (Authorization, X-User-Id, cookies, etc.).
+func TestMCPClient_ForwardsLiveFEHeaders(t *testing.T) {
+	var gotAuth, gotUserID atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v := r.Header.Get("Authorization"); v != "" {
+			gotAuth.Store(v)
+		}
+		if v := r.Header.Get("X-User-Id"); v != "" {
+			gotUserID.Store(v)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req jsonrpcRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "bad json", 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			respond(w, req.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "test", "version": "0.1"},
+			})
+		case "notifications/initialized":
+			// no response
+		case "tools/list":
+			respond(w, req.ID, map[string]any{"tools": []map[string]any{}})
+		default:
+			http.Error(w, "unknown method "+req.Method, 400)
+		}
+	}))
+	defer srv.Close()
+
+	be := NewMCPClientBackend("test", "b1", MCPBackendCfg{
+		URL:       srv.URL,
+		Transport: "streamable_http",
+	})
+	defer be.Close()
+
+	ctx := WithForwardedHeaders(context.Background(), http.Header{
+		"Authorization": {"Bearer USER-TOKEN"},
+		"X-User-Id":     {"user-42"},
+		"Host":          {"should-be-stripped.example"}, // hop-by-hop set; must not be forwarded
+	})
+
+	_, _ = be.Tools(ctx)
+
+	if got := gotAuth.Load(); got != "Bearer USER-TOKEN" {
+		t.Fatalf("Authorization: want USER-TOKEN, got %v", got)
+	}
+	if got := gotUserID.Load(); got != "user-42" {
+		t.Fatalf("X-User-Id: want user-42, got %v", got)
+	}
+}

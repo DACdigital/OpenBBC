@@ -40,17 +40,51 @@ func NewMCPClientBackend(name, id string, cfg MCPBackendCfg) *MCPClientBackend {
 
 func (b *MCPClientBackend) Name() string { return b.name }
 
-// headerInjectingTransport sets static headers on every outgoing request,
+// headerInjectingTransport applies headers to every outgoing MCP request,
 // since the official SDK's StreamableClientTransport has no headers option.
+//
+// Headers are merged per-request (read from req.Context()) in the same
+// precedence order as HTTPEndpointBackend.applyHeaders so per-user MCP
+// servers receive the live FE user-identifying headers:
+//
+//	1. defaultHeaders  — service-level config on the backend row (lowest)
+//	2. live FE headers — forward-everything-except-hop-by-hop from ctx
+//	3. session overrides for this backend id — BO testing (highest)
 type headerInjectingTransport struct {
-	base    http.RoundTripper
-	headers map[string]string
+	base           http.RoundTripper
+	backendID      string
+	defaultHeaders map[string]string
 }
 
 func (h *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	for k, v := range h.headers {
+	ctx := req.Context()
+
+	// 1. Default headers.
+	for k, v := range h.defaultHeaders {
 		req.Header.Set(k, v)
 	}
+
+	// 2. Live FE headers — forward everything except hop-by-hop.
+	if live := forwardedHeadersFromContext(ctx); live != nil {
+		for name, vals := range live {
+			if hopByHopHeaders[strings.ToLower(name)] {
+				continue
+			}
+			if len(vals) > 0 {
+				req.Header.Set(name, vals[0])
+			}
+		}
+	}
+
+	// 3. Session overrides for this backend.
+	if sess := sessionHeaderOverridesFromContext(ctx); sess != nil {
+		if mine, ok := sess[h.backendID]; ok {
+			for k, v := range mine {
+				req.Header.Set(k, v)
+			}
+		}
+	}
+
 	return h.base.RoundTrip(req)
 }
 
@@ -64,23 +98,15 @@ func (b *MCPClientBackend) ensure(ctx context.Context) error {
 		return b.connErr
 	}
 
-	// Merge headers: default + per-session overrides for this backend's id.
-	headers := map[string]string{}
-	for k, v := range b.cfg.DefaultHeaders {
-		headers[k] = v
-	}
-	if sess := sessionHeaderOverridesFromContext(ctx); sess != nil {
-		if mine, ok := sess[b.id]; ok {
-			for k, v := range mine {
-				headers[k] = v
-			}
-		}
-	}
-
+	// Headers are evaluated per-request inside the RoundTripper from
+	// req.Context(), so live FE headers (set by the chat handler via
+	// WithForwardedHeaders) propagate to every MCP call — important for
+	// per-user MCP servers that key off user-identifying headers.
 	httpClient := &http.Client{
 		Transport: &headerInjectingTransport{
-			base:    http.DefaultTransport,
-			headers: headers,
+			base:           http.DefaultTransport,
+			backendID:      b.id,
+			defaultHeaders: b.cfg.DefaultHeaders,
 		},
 	}
 
