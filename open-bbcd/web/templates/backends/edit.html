@@ -41,6 +41,33 @@
   </fieldset>
   {{end}}
 
+  {{if eq (printf "%s" .Backend.Kind) "mcp_client"}}
+  <label>
+    URL
+    <input type="url" name="url" required value="{{.MCPCfg.URL}}">
+  </label>
+  <fieldset>
+    <legend>Transport</legend>
+    <label class="radio-row"><input type="radio" name="transport" value="streamable_http" {{if eq .MCPCfg.Transport "streamable_http"}}checked{{end}}> Streamable HTTP</label>
+    <label class="radio-row"><input type="radio" name="transport" value="sse" {{if eq .MCPCfg.Transport "sse"}}checked{{end}}> SSE</label>
+  </fieldset>
+  <fieldset>
+    <legend>Default headers</legend>
+    <div class="kv-rows" data-prefix="default_headers">
+      {{range $k, $v := .MCPCfg.DefaultHeaders}}
+      <div class="kv-row">
+        <input type="text" name="default_headers_key" value="{{$k}}">
+        <input type="text" name="default_headers_value" value="{{$v}}">
+      </div>
+      {{end}}
+      <div class="kv-row">
+        <input type="text" name="default_headers_key" placeholder="Header name">
+        <input type="text" name="default_headers_value" placeholder="Header value">
+      </div>
+    </div>
+  </fieldset>
+  {{end}}
+
   <div class="form-actions">
     <button type="submit" class="btn-primary">Save</button>
     <a href="/mcp" class="btn-secondary">Cancel</a>

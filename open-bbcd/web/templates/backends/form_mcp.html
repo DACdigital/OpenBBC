@@ -1,0 +1,53 @@
+{{define "content"}}
+<div class="page-header">
+  <a href="/mcp" class="back-link">← Back to backends</a>
+  <h1>New MCP backend</h1>
+</div>
+
+<form method="POST" action="/mcp" class="config-form" id="mcp-form">
+  <input type="hidden" name="kind" value="mcp_client">
+
+  <label>
+    Name
+    <input type="text" name="name" required maxlength="100" placeholder="slack / github / filesystem">
+  </label>
+
+  <label>
+    URL
+    <input type="url" name="url" required placeholder="https://mcp.example.com/v1">
+  </label>
+
+  <fieldset>
+    <legend>Transport</legend>
+    <label class="radio-row"><input type="radio" name="transport" value="streamable_http" checked> Streamable HTTP (recommended)</label>
+    <label class="radio-row"><input type="radio" name="transport" value="sse"> Server-Sent Events (legacy)</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Default headers</legend>
+    <p class="form-hint">Service-level auth for the MCP server (typically a bearer token).</p>
+    <div class="kv-rows" data-prefix="default_headers">
+      <div class="kv-row">
+        <input type="text" name="default_headers_key" placeholder="Header name">
+        <input type="text" name="default_headers_value" placeholder="Header value">
+      </div>
+      <div class="kv-row">
+        <input type="text" name="default_headers_key" placeholder="Header name">
+        <input type="text" name="default_headers_value" placeholder="Header value">
+      </div>
+    </div>
+  </fieldset>
+
+  <div class="form-actions">
+    <button type="submit" class="btn-primary">Create backend</button>
+    <button type="button" class="btn-secondary"
+            hx-post="/mcp/test"
+            hx-include="#mcp-form"
+            hx-target="#mcp-test-result"
+            hx-swap="innerHTML">Test connection</button>
+    <a href="/mcp" class="btn-secondary">Cancel</a>
+  </div>
+
+  <div id="mcp-test-result"></div>
+</form>
+{{end}}

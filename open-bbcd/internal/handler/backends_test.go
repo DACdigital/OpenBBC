@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -89,7 +90,7 @@ func TestBackendsHandler_New_RendersHTTPForm(t *testing.T) {
 	}
 }
 
-func TestBackendsHandler_New_UnknownKind_501(t *testing.T) {
+func TestBackendsHandler_New_RendersMCPForm(t *testing.T) {
 	var nilDB *sql.DB
 	h, err := NewBackendsHandler(
 		repository.NewToolBackendRepository(nilDB),
@@ -104,8 +105,35 @@ func TestBackendsHandler_New_UnknownKind_501(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.New(w, req)
 
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "New MCP backend") {
+		t.Errorf("body missing 'New MCP backend': %s", body)
+	}
+	if !strings.Contains(body, `name="url"`) {
+		t.Errorf("body missing url input: %s", body)
+	}
+}
+
+func TestBackendsHandler_New_UnknownKind_400(t *testing.T) {
+	var nilDB *sql.DB
+	h, err := NewBackendsHandler(
+		repository.NewToolBackendRepository(nilDB),
+		repository.NewVersionWiringRepository(nilDB),
+		web.Assets,
+	)
+	if err != nil {
+		t.Fatalf("NewBackendsHandler: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp/new?kind=foobar", nil)
+	w := httptest.NewRecorder()
+	h.New(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }
 
@@ -331,6 +359,138 @@ func TestBackendsHandler_Delete_HappyPath(t *testing.T) {
 	remaining, _ := backendRepo.List(context.Background())
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 backends after delete, got %d", len(remaining))
+	}
+}
+
+// newBackendsHandlerForTest builds a BackendsHandler with nil-safe repos.
+// TestConnection does not touch the DB, so nil repos are fine for those tests.
+func newBackendsHandlerForTest(t *testing.T) *BackendsHandler {
+	t.Helper()
+	var nilDB *sql.DB
+	h, err := NewBackendsHandler(
+		repository.NewToolBackendRepository(nilDB),
+		repository.NewVersionWiringRepository(nilDB),
+		web.Assets,
+	)
+	if err != nil {
+		t.Fatalf("NewBackendsHandler: %v", err)
+	}
+	return h
+}
+
+// stubMCPJSONRPCRequest is the inbound shape parsed from MCP wire traffic.
+type stubMCPJSONRPCRequest struct {
+	JSONRPC string `json:"jsonrpc"`
+	ID      any    `json:"id"`
+	Method  string `json:"method"`
+}
+
+func stubMCPRespond(w http.ResponseWriter, id any, result any) {
+	resp := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// newStubMCPServer returns an httptest.Server that responds to the MCP
+// initialize / tools/list handshake with a single canned tool.
+func newStubMCPServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req stubMCPJSONRPCRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "bad json", 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			stubMCPRespond(w, req.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "stub", "version": "0.1"},
+			})
+		case "notifications/initialized":
+			// no response for notifications
+		case "tools/list":
+			stubMCPRespond(w, req.ID, map[string]any{
+				"tools": []map[string]any{
+					{
+						"name":        "do_thing",
+						"description": "Does a thing",
+						"inputSchema": map[string]any{"type": "object"},
+					},
+				},
+			})
+		default:
+			http.Error(w, "unknown method "+req.Method, 400)
+		}
+	}))
+}
+
+func TestBackends_TestConnection_Success(t *testing.T) {
+	srv := newStubMCPServer(t)
+	defer srv.Close()
+
+	h := newBackendsHandlerForTest(t)
+	form := url.Values{}
+	form.Set("url", srv.URL)
+	form.Set("transport", "streamable_http")
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	h.TestConnection(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Connection OK") {
+		t.Fatalf("expected success banner: %s", w.Body.String())
+	}
+}
+
+func TestBackends_TestConnection_UnreachableURL(t *testing.T) {
+	h := newBackendsHandlerForTest(t)
+	form := url.Values{}
+	form.Set("url", "http://127.0.0.1:1")
+	form.Set("transport", "streamable_http")
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	h.TestConnection(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with error fragment, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Test failed") {
+		t.Fatalf("expected error banner: %s", w.Body.String())
+	}
+}
+
+func TestBackends_TestConnection_MissingURL(t *testing.T) {
+	h := newBackendsHandlerForTest(t)
+	form := url.Values{}
+	form.Set("transport", "streamable_http")
+	// no url
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	h.TestConnection(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Test failed") {
+		t.Fatalf("expected error banner: %s", w.Body.String())
 	}
 }
 

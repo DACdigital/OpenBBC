@@ -1,23 +1,30 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"html/template"
 	"io/fs"
 	"net/http"
+	"strconv"
+	"time"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
 // BackendsHandler serves the /mcp CRUD pages for tool backends.
 type BackendsHandler struct {
-	repo     *repository.ToolBackendRepository
-	wiring   *repository.VersionWiringRepository
-	listTmpl *template.Template
-	formTmpl *template.Template
-	editTmpl *template.Template
+	repo        *repository.ToolBackendRepository
+	wiring      *repository.VersionWiringRepository
+	listTmpl    *template.Template
+	formTmpl    *template.Template
+	formMCPTmpl *template.Template
+	editTmpl    *template.Template
 }
 
 // NewBackendsHandler parses templates once at construction time (matching UIHandler pattern).
@@ -39,6 +46,13 @@ func NewBackendsHandler(repo *repository.ToolBackendRepository, wiring *reposito
 	if err != nil {
 		return nil, err
 	}
+	formMCPTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/layout.html",
+		"templates/backends/form_mcp.html",
+	)
+	if err != nil {
+		return nil, err
+	}
 	editTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
 		"templates/backends/edit.html",
@@ -46,7 +60,7 @@ func NewBackendsHandler(repo *repository.ToolBackendRepository, wiring *reposito
 	if err != nil {
 		return nil, err
 	}
-	return &BackendsHandler{repo, wiring, listTmpl, formTmpl, editTmpl}, nil
+	return &BackendsHandler{repo, wiring, listTmpl, formTmpl, formMCPTmpl, editTmpl}, nil
 }
 
 // listRow is the rendering shape: backend + computed UsageCount + PrimaryURL.
@@ -93,20 +107,25 @@ func (h *BackendsHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // New renders GET /mcp/new — the create form.
-// MCP backend form is added in Task 14; only http_endpoint is supported now.
 func (h *BackendsHandler) New(w http.ResponseWriter, r *http.Request) {
 	kind := r.URL.Query().Get("kind")
 	if kind == "" {
 		kind = "http_endpoint"
 	}
-	if kind != "http_endpoint" {
-		http.Error(w, "MCP backend form not yet available (Task 14)", http.StatusNotImplemented)
-		return
+	switch kind {
+	case "http_endpoint":
+		renderTemplate(w, h.formTmpl, "layout", map[string]any{
+			"Active": "mcp",
+			"Kind":   kind,
+		})
+	case "mcp_client":
+		renderTemplate(w, h.formMCPTmpl, "layout", map[string]any{
+			"Active": "mcp",
+			"Kind":   kind,
+		})
+	default:
+		http.Error(w, "unknown kind", http.StatusBadRequest)
 	}
-	renderTemplate(w, h.formTmpl, "layout", map[string]any{
-		"Active": "mcp",
-		"Kind":   kind,
-	})
 }
 
 // Create handles POST /mcp — persist a new backend and redirect.
@@ -132,9 +151,15 @@ func (h *BackendsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		cfgJSON, _ = json.Marshal(cfg)
 	case types.ToolBackendKindMCPClient:
-		// Added in Task 14.
-		http.Error(w, "MCP backend not yet supported in form (Task 14)", http.StatusNotImplemented)
-		return
+		cfg := types.MCPBackendConfig{
+			URL:            r.FormValue("url"),
+			Transport:      r.FormValue("transport"),
+			DefaultHeaders: parseHeaderRows(r, "default_headers"),
+		}
+		if cfg.Transport == "" {
+			cfg.Transport = "streamable_http"
+		}
+		cfgJSON, _ = json.Marshal(cfg)
 	default:
 		Error(w, types.ErrToolBackendKindInvalid)
 		return
@@ -162,7 +187,12 @@ func (h *BackendsHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var cfg types.HTTPBackendConfig
-	_ = json.Unmarshal(be.Config, &cfg)
+	var mcpCfg types.MCPBackendConfig
+	if be.Kind == types.ToolBackendKindMCPClient {
+		_ = json.Unmarshal(be.Config, &mcpCfg)
+	} else {
+		_ = json.Unmarshal(be.Config, &cfg)
+	}
 
 	type hdrOption struct {
 		Name    string
@@ -190,6 +220,7 @@ func (h *BackendsHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		"Active":                 "mcp",
 		"Backend":                be,
 		"Cfg":                    cfg,
+		"MCPCfg":                 mcpCfg,
 		"UsageCount":             counts[be.ID],
 		"ForwardedHeaderOptions": opts,
 	})
@@ -224,9 +255,17 @@ func (h *BackendsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		be.Name = name
 		be.Config = cfgJSON
 	case types.ToolBackendKindMCPClient:
-		// Added in Task 14.
-		http.Error(w, "MCP backend update not yet supported (Task 14)", http.StatusNotImplemented)
-		return
+		cfg := types.MCPBackendConfig{
+			URL:            r.FormValue("url"),
+			Transport:      r.FormValue("transport"),
+			DefaultHeaders: parseHeaderRows(r, "default_headers"),
+		}
+		if cfg.Transport == "" {
+			cfg.Transport = "streamable_http"
+		}
+		cfgJSON, _ := json.Marshal(cfg)
+		be.Name = name
+		be.Config = cfgJSON
 	}
 	if err := h.repo.Update(r.Context(), be); err != nil {
 		Error(w, err)
@@ -247,6 +286,50 @@ func (h *BackendsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/mcp", http.StatusSeeOther)
+}
+
+// TestConnection builds an ephemeral MCPClientBackend from form fields and
+// calls Tools(ctx) with a 5s timeout. Returns an HTML fragment listing the
+// discovered tools or the error message.
+func (h *BackendsHandler) TestConnection(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		renderTestResult(w, "", "invalid form: "+err.Error())
+		return
+	}
+	cfg := tools.MCPBackendCfg{
+		URL:            r.FormValue("url"),
+		Transport:      r.FormValue("transport"),
+		DefaultHeaders: parseHeaderRows(r, "default_headers"),
+	}
+	if cfg.URL == "" {
+		renderTestResult(w, "", "URL is required")
+		return
+	}
+
+	backend := tools.NewMCPClientBackend("test", "test-ephemeral", cfg)
+	defer backend.Close()
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	defs, err := backend.Tools(ctx)
+	if err != nil {
+		renderTestResult(w, "", err.Error())
+		return
+	}
+
+	renderTestResult(w, "Connection OK — "+strconv.Itoa(len(defs))+" tools discovered.", "")
+}
+
+// renderTestResult emits an HTML fragment with either a success message or an
+// error. Inline minimal markup; we don't need a full template for this.
+func renderTestResult(w http.ResponseWriter, ok, errMsg string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if errMsg != "" {
+		fmt.Fprintf(w, `<div class="config-banner config-banner-error">Test failed: %s</div>`, html.EscapeString(errMsg))
+		return
+	}
+	fmt.Fprintf(w, `<div class="config-banner config-banner-success">%s</div>`, html.EscapeString(ok))
 }
 
 // parseHeaderRows reads paired "<prefix>_key" / "<prefix>_value" multi-value

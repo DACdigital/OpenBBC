@@ -178,6 +178,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /mcp", backendsHandler.List)
 	mux.HandleFunc("GET /mcp/new", backendsHandler.New)
 	mux.HandleFunc("POST /mcp", backendsHandler.Create)
+	mux.HandleFunc("POST /mcp/test", backendsHandler.TestConnection)
 	mux.HandleFunc("GET /mcp/{id}", backendsHandler.Edit)
 	mux.HandleFunc("POST /mcp/{id}", backendsHandler.Update)
 	mux.HandleFunc("POST /mcp/{id}/delete", backendsHandler.Delete)
