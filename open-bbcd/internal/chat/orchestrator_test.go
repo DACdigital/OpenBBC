@@ -33,7 +33,7 @@ func TestOrchestrator_TurnTextOnly(t *testing.T) {
 	}
 	ftools := &fakeTools{}
 
-	o := NewOrchestrator(fakeAgent, fakeChat, flm, ftools, slog.Default())
+	o := NewOrchestrator(fakeAgent, fakeChat, flm, &fakeBuilder{handler: ftools}, slog.Default())
 
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
@@ -68,7 +68,7 @@ func TestOrchestrator_TurnTextOnly(t *testing.T) {
 func TestOrchestrator_NoBundle_ReturnsErrAgentNotRunnable(t *testing.T) {
 	version := &types.AgentVersion{ID: "agent-1", Bundle: nil}
 	fakeAgent := &fakeAgentRepo{version: version}
-	o := NewOrchestrator(fakeAgent, &fakeChatRepo{}, &fakeLLM{}, &fakeTools{}, slog.Default())
+	o := NewOrchestrator(fakeAgent, &fakeChatRepo{}, &fakeLLM{}, &fakeBuilder{handler: &fakeTools{}}, slog.Default())
 
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
@@ -102,7 +102,7 @@ func TestOrchestrator_AssistantTextPersistsConcatenated(t *testing.T) {
 			},
 		},
 	}
-	o := NewOrchestrator(&fakeAgentRepo{version: version}, fakeChat, flm, &fakeTools{}, slog.Default())
+	o := NewOrchestrator(&fakeAgentRepo{version: version}, fakeChat, flm, &fakeBuilder{handler: &fakeTools{}}, slog.Default())
 
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
@@ -158,7 +158,7 @@ func TestOrchestrator_OneToolRound(t *testing.T) {
 	ft := &fakeTools{
 		results: []tools.Result{{ToolUseID: "tu_1", Output: []byte(`{"prompt":"X"}`)}},
 	}
-	o := NewOrchestrator(&fakeAgentRepo{version: version}, fakeChat, flm, ft, slog.Default())
+	o := NewOrchestrator(&fakeAgentRepo{version: version}, fakeChat, flm, &fakeBuilder{handler: ft}, slog.Default())
 
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
@@ -209,7 +209,7 @@ func TestOrchestrator_BoundedToolLoop(t *testing.T) {
 	}
 	flm := &fakeLLM{name: "fake", script: script}
 	ft := &fakeTools{}
-	o := NewOrchestrator(&fakeAgentRepo{version: version}, fakeChat, flm, ft, slog.Default())
+	o := NewOrchestrator(&fakeAgentRepo{version: version}, fakeChat, flm, &fakeBuilder{handler: ft}, slog.Default())
 	o.MaxToolRounds = 3
 
 	var buf bytes.Buffer

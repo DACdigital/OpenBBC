@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -92,7 +93,9 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 
 	chatRepo := repository.NewChatRepository(db)
 	llmClient := anthropic.New(cfg.Anthropic)
-	toolHandler := tools.NewMockHandler()
+	backendRepo := repository.NewToolBackendRepository(db)
+	wiringRepo := repository.NewVersionWiringRepository(db)
+	builder := tools.NewBuilder(&toolBackendStoreAdapter{backend: backendRepo, wiring: wiringRepo})
 
 	var transportFactory transport.Factory
 	switch cfg.Chat.Transport {
@@ -104,7 +107,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("unknown chat transport", fmt.Errorf("%q", cfg.Chat.Transport))
 	}
 
-	orchestrator := chat.NewOrchestrator(versionRepo, chatRepo, llmClient, toolHandler, logger)
+	orchestrator := chat.NewOrchestrator(versionRepo, chatRepo, llmClient, builder, logger)
 	orchestrator.Model = cfg.Anthropic.DefaultModel
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
@@ -115,7 +118,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	}
 
 	deployedChatStore := chat.NewDeployedChatStore(deployedRepo)
-	deployedOrchestrator := chat.NewOrchestrator(versionRepo, deployedChatStore, llmClient, toolHandler, logger)
+	deployedOrchestrator := chat.NewOrchestrator(versionRepo, deployedChatStore, llmClient, builder, logger)
 	deployedOrchestrator.Model = cfg.Anthropic.DefaultModel
 	deployedOrchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
@@ -202,4 +205,35 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 
 	return RequestLogger(logger, mux)
+}
+
+// toolBackendStoreAdapter implements tools.BackendStore by delegating to the
+// two repo types. Lives here to keep the tools package free of handler deps.
+type toolBackendStoreAdapter struct {
+	backend *repository.ToolBackendRepository
+	wiring  *repository.VersionWiringRepository
+}
+
+func (a *toolBackendStoreAdapter) GetBackend(ctx context.Context, id string) (string, string, json.RawMessage, error) {
+	be, err := a.backend.Get(ctx, id)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return string(be.Kind), be.Name, be.Config, nil
+}
+
+func (a *toolBackendStoreAdapter) EndpointBackends(ctx context.Context, versionID string) (map[string]string, error) {
+	return a.wiring.ListEndpointBackends(ctx, versionID)
+}
+
+func (a *toolBackendStoreAdapter) MCPAttachments(ctx context.Context, versionID string) (map[string]string, error) {
+	atts, err := a.wiring.ListMCPAttachments(ctx, versionID)
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]string{}
+	for _, att := range atts {
+		m[att.BackendID] = att.Note
+	}
+	return m, nil
 }

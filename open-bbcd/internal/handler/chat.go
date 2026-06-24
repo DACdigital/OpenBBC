@@ -14,6 +14,7 @@ import (
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/google/uuid"
@@ -430,7 +431,7 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 
 	// orch.Turn's first scope-id param is still named `agentID` (orchestrator
 	// legacy — see Task 6 notes). It expects a version row's ID.
-	if err := h.orch.Turn(r.Context(), versionID, sessionID, input, sink); err != nil {
+	if err := h.orch.Turn(tools.WithForwardedHeaders(r.Context(), r.Header), versionID, sessionID, input, sink); err != nil {
 		h.logger.Error("chat turn failed",
 			slog.String("version_id", versionID),
 			slog.String("session_id", sessionID),

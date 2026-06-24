@@ -93,6 +93,18 @@ func (f *fakeLLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.E
 	}
 }
 
+// fakeBuilder wraps a fakeTools (or any tools.Handler) so existing tests can
+// satisfy the new ToolHandlerBuilder dependency without rewriting per-test
+// fixture setup.
+type fakeBuilder struct {
+	handler tools.Handler
+	err     error
+}
+
+func (f *fakeBuilder) Build(ctx context.Context, versionID string, bundle json.RawMessage) (tools.Handler, error) {
+	return f.handler, f.err
+}
+
 // fakeTools returns one canned tool def and logs all calls.
 type fakeTools struct {
 	callLog []tools.Call
