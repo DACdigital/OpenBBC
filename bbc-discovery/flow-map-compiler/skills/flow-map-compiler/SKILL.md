@@ -217,6 +217,15 @@ with a one-line reason.
       reasonable default but not required. Two resources that always
       appear together (e.g. `cart` + `orders` in a checkout-focused app)
       may be one skill.
+- **Skill `id` must be a descriptive multi-word kebab-case phrase that
+  names what the agent does in this domain — never a bare single noun.**
+  Prefer verb-noun or noun-noun phrases (e.g. `manage-orders`,
+  `browse-product-catalog`, `update-user-profile`, `check-system-health`)
+  over `orders`, `catalog`, `account`, `health`. The id is what an
+  on-demand dispatcher reads when picking a skill at runtime; a vague
+  single-word name like `orders` is hard for the dispatcher (and the
+  human reviewer) to discriminate. Same rule for `name` — write a short
+  human-readable phrase ("Manage orders") not a single word ("Orders").
 - Compute the unresolved rate. **If it exceeds 25 %, stop and report.**
   Do not proceed to render.
 

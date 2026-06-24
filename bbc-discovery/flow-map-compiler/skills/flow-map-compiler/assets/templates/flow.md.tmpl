@@ -23,8 +23,14 @@ postconditions:
 {{#each postconditions}}
   - {{this}}
 {{/each}}
-side_effects: [{{side_effects_csv}}]
-related_flows: [{{related_flows_csv}}]
+side_effects:
+{{#each side_effects}}
+  - "{{this}}"
+{{/each}}
+related_flows:
+{{#each related_flows}}
+  - {{this}}
+{{/each}}
 confidence: {{confidence}}
 workflow: |
 {{workflow_mermaid_indented_2}}
