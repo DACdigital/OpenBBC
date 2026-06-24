@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -107,6 +108,33 @@ func newHTTPTest(t *testing.T, baseURL string, endpoints []HTTPEndpointDef, mapp
 		endpoints: endpoints,
 		mapping:   mapping,
 		client:    &http.Client{},
+	}
+}
+
+func TestHTTPBackend_Call_MissingOptionalPathParam_DoesNotInjectNilString(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(404)  // backend will 404 on the unsubstituted path
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{
+		ID: "orders.show", Name: "orders_show", Method: "GET",
+		Path: "/api/orders/{id}",
+		PathParams: []ParamSpec{{Name: "id", Type: "string", Required: false}},
+	}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"orders.show": "b1"}, "b1")
+
+	// Caller omits the id arg. The placeholder should remain as the literal
+	// {id} (not "<nil>") so the failure is debuggable, not silent.
+	_, _ = be.Call(context.Background(), "orders_show", json.RawMessage(`{}`))
+	if strings.Contains(gotPath, "<nil>") {
+		t.Fatalf("optional missing path param injected <nil>: got %s", gotPath)
+	}
+	if !strings.Contains(gotPath, "{id}") {
+		t.Fatalf("expected {id} placeholder to remain in path, got %s", gotPath)
 	}
 }
 

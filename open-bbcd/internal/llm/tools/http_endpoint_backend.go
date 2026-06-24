@@ -120,8 +120,12 @@ func (b *HTTPEndpointBackend) buildRequest(ep HTTPEndpointDef, args map[string]a
 	path := ep.Path
 	for _, p := range ep.PathParams {
 		v, ok := args[p.Name]
-		if !ok && p.Required {
-			return "", nil, fmt.Errorf("missing required path param %s", p.Name)
+		if !ok {
+			if p.Required {
+				return "", nil, fmt.Errorf("missing required path param %s", p.Name)
+			}
+			consumed[p.Name] = true
+			continue
 		}
 		path = strings.ReplaceAll(path, "{"+p.Name+"}", fmt.Sprint(v))
 		consumed[p.Name] = true
