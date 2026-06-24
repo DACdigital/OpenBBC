@@ -4,36 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
-	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/client/transport"
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // MCPBackendCfg is the persisted configuration for an MCP client backend.
 // Stored as JSONB in the tool_backends row.
 type MCPBackendCfg struct {
 	URL            string            `json:"url"`
-	Transport      string            `json:"transport"` // "streamable_http" | "sse" — currently only streamable_http supported
+	Transport      string            `json:"transport"` // "streamable_http" (only supported transport today)
 	DefaultHeaders map[string]string `json:"default_headers,omitempty"`
 }
 
 // MCPClientBackend connects to an external MCP server and exposes its tools
-// to the LLM. Lazy: the connection opens on the first Tools() or Call()
-// within a chat session, and is reused across calls in the same session.
+// to the LLM. Lazy: the session opens on the first Tools() or Call() within
+// a chat session.
 type MCPClientBackend struct {
 	name string
 	id   string
 	cfg  MCPBackendCfg
 
 	mu       sync.Mutex
-	client   *client.Client
-	toolDefs []llm.ToolDef // cached after first list
-	rawTools []mcp.Tool    // cached, indexed by Name for Call routing
-	connErr  error         // sticky: if init fails, the backend is dead for the session
+	session  *mcp.ClientSession
+	toolDefs []llm.ToolDef
+	connErr  error // sticky: if init fails, the backend is dead for the session
 }
 
 func NewMCPClientBackend(name, id string, cfg MCPBackendCfg) *MCPClientBackend {
@@ -42,17 +40,31 @@ func NewMCPClientBackend(name, id string, cfg MCPBackendCfg) *MCPClientBackend {
 
 func (b *MCPClientBackend) Name() string { return b.name }
 
-// ensure connects, initializes, and caches tools list. Idempotent — calling
-// more than once is a no-op unless the previous attempt failed.
+// headerInjectingTransport sets static headers on every outgoing request,
+// since the official SDK's StreamableClientTransport has no headers option.
+type headerInjectingTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (h *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for k, v := range h.headers {
+		req.Header.Set(k, v)
+	}
+	return h.base.RoundTrip(req)
+}
+
+// ensure connects, initializes the session, lists tools, caches the result.
+// Idempotent. Sticky on error.
 func (b *MCPClientBackend) ensure(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.client != nil || b.connErr != nil {
+	if b.session != nil || b.connErr != nil {
 		return b.connErr
 	}
 
-	// Merge: default + session overrides for this backend's id.
+	// Merge headers: default + per-session overrides for this backend's id.
 	headers := map[string]string{}
 	for k, v := range b.cfg.DefaultHeaders {
 		headers[k] = v
@@ -65,40 +77,41 @@ func (b *MCPClientBackend) ensure(ctx context.Context) error {
 		}
 	}
 
-	trans, err := transport.NewStreamableHTTP(b.cfg.URL, transport.WithHTTPHeaders(headers))
-	if err != nil {
-		b.connErr = fmt.Errorf("mcp %s: transport: %w", b.name, err)
-		return b.connErr
+	httpClient := &http.Client{
+		Transport: &headerInjectingTransport{
+			base:    http.DefaultTransport,
+			headers: headers,
+		},
 	}
-	c := client.NewClient(trans)
-	if err := c.Start(ctx); err != nil {
-		b.connErr = fmt.Errorf("mcp %s: start: %w", b.name, err)
+
+	transport := &mcp.StreamableClientTransport{
+		Endpoint:             b.cfg.URL,
+		HTTPClient:           httpClient,
+		DisableStandaloneSSE: true, // we don't consume server-initiated notifications today
+	}
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "open-bbcd",
+		Version: "0.1",
+	}, nil)
+
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		b.connErr = fmt.Errorf("mcp %s: connect: %w", b.name, err)
 		return b.connErr
 	}
 
-	initReq := mcp.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{Name: "open-bbcd", Version: "0.1"}
-	initReq.Params.Capabilities = mcp.ClientCapabilities{}
-	if _, err := c.Initialize(ctx, initReq); err != nil {
-		_ = c.Close()
-		b.connErr = fmt.Errorf("mcp %s: initialize: %w", b.name, err)
-		return b.connErr
-	}
-
-	toolsResult, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+	result, err := session.ListTools(ctx, &mcp.ListToolsParams{})
 	if err != nil {
-		_ = c.Close()
+		_ = session.Close()
 		b.connErr = fmt.Errorf("mcp %s: list_tools: %w", b.name, err)
 		return b.connErr
 	}
 
-	// Cache prefixed tool defs.
-	defs := make([]llm.ToolDef, 0, len(toolsResult.Tools))
-	for _, t := range toolsResult.Tools {
+	defs := make([]llm.ToolDef, 0, len(result.Tools))
+	for _, t := range result.Tools {
 		schemaBytes, err := json.Marshal(t.InputSchema)
-		if err != nil {
-			// Fall back to permissive schema; don't block the whole backend on one bad schema.
+		if err != nil || len(schemaBytes) == 0 {
 			schemaBytes = []byte(`{"type":"object","additionalProperties":true}`)
 		}
 		defs = append(defs, llm.ToolDef{
@@ -108,9 +121,8 @@ func (b *MCPClientBackend) ensure(ctx context.Context) error {
 		})
 	}
 
-	b.client = c
+	b.session = session
 	b.toolDefs = defs
-	b.rawTools = toolsResult.Tools
 	return nil
 }
 
@@ -126,26 +138,23 @@ func (b *MCPClientBackend) Call(ctx context.Context, unprefixedName string, inpu
 		return errResult(err.Error()), nil
 	}
 
-	// Parse arguments — MCP servers expect map[string]any.
-	var args map[string]any
+	var args any
 	if len(input) > 0 {
-		if err := json.Unmarshal(input, &args); err != nil {
+		var m map[string]any
+		if err := json.Unmarshal(input, &m); err != nil {
 			return errResult(fmt.Sprintf("mcp: invalid arguments json: %s", err)), nil
 		}
+		args = m
 	}
 
-	callReq := mcp.CallToolRequest{}
-	callReq.Params.Name = unprefixedName
-	callReq.Params.Arguments = args
-
-	result, err := b.client.CallTool(ctx, callReq)
+	result, err := b.session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      unprefixedName,
+		Arguments: args,
+	})
 	if err != nil {
 		return errResult(fmt.Sprintf("mcp %s: call %s: %s", b.name, unprefixedName, err)), nil
 	}
 
-	// Flatten content blocks: extract Text from TextContent entries; for
-	// non-text content, marshal the entry verbatim. Wrap everything in a
-	// JSON object so the LLM sees a structured result.
 	flattened := flattenMCPContent(result.Content)
 	out, err := json.Marshal(flattened)
 	if err != nil {
@@ -154,15 +163,17 @@ func (b *MCPClientBackend) Call(ctx context.Context, unprefixedName string, inpu
 	return Result{Output: out, IsError: result.IsError}, nil
 }
 
-// flattenMCPContent reduces []mcp.Content (interface) to a JSON-serializable
-// shape: { "text": "...", "content": [<raw content blocks>] }. The "text"
-// field concatenates TextContent entries (the common case for tool results);
-// the full content list is preserved under "content" for richer consumers.
+// flattenMCPContent reduces []mcp.Content (interface; concrete types are
+// pointers in the official SDK) to a JSON-serializable shape:
+// { "text": "...", "content": [<raw content blocks>] }.
+// The "text" field concatenates TextContent entries (common case for tool
+// results); the full content list is preserved under "content" for richer
+// consumers.
 func flattenMCPContent(blocks []mcp.Content) map[string]any {
 	var textParts []string
 	rawBlocks := make([]any, 0, len(blocks))
 	for _, blk := range blocks {
-		if tc, ok := blk.(mcp.TextContent); ok {
+		if tc, ok := blk.(*mcp.TextContent); ok {
 			textParts = append(textParts, tc.Text)
 		}
 		rawBlocks = append(rawBlocks, blk)
@@ -176,15 +187,15 @@ func flattenMCPContent(blocks []mcp.Content) map[string]any {
 	return out
 }
 
-// Close releases the client connection if open. Safe to call multiple times.
+// Close releases the session if open. Safe to call multiple times.
 func (b *MCPClientBackend) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.client == nil {
+	if b.session == nil {
 		return nil
 	}
-	err := b.client.Close()
-	b.client = nil
+	err := b.session.Close()
+	b.session = nil
 	return err
 }
 
