@@ -108,21 +108,16 @@ func buildWizardForm(t *testing.T, fields map[string]string, fileName string, fi
 	return body, w.FormDataContentType()
 }
 
-func TestWizardHandler_Submit_HappyPath(t *testing.T) {
-	var capturedOpts types.CreateAgentFromWizardOpts
+func TestWizardHandler_Submit_InvalidZipReturns400(t *testing.T) {
 	repo := &mockWizardRepo{
 		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
-			capturedOpts = opts
-			return &types.Agent{ID: opts.ID, Name: opts.Name},
-				&types.AgentVersion{ID: "v-" + opts.ID, AgentID: opts.ID, Status: "INITIALIZING"},
-				nil
+			t.Fatal("repo should not be called when the discovery archive fails to parse")
+			return nil, nil, nil
 		},
 	}
-	var capturedKey string
 	store := &mockStorage{
 		putFn: func(ctx context.Context, key string, r io.Reader) error {
-			capturedKey = key
-			_, _ = io.Copy(io.Discard, r)
+			t.Fatal("store.Put should not be called when the discovery archive fails to parse")
 			return nil
 		},
 	}
@@ -138,30 +133,11 @@ func TestWizardHandler_Submit_HappyPath(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Submit(w, req)
 
-	// 303 redirect goes to the configurator now.
-	if w.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303; body = %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
 	}
-	loc := w.Header().Get("Location")
-	if !strings.HasPrefix(loc, "/agent_versions/") || !strings.HasSuffix(loc, "/configure") {
-		t.Errorf("Location = %q, want /agent_versions/<id>/configure", loc)
-	}
-	if store.calls != 1 {
-		t.Errorf("store.Put called %d times, want 1", store.calls)
-	}
-	if !strings.HasSuffix(capturedKey, ".zip") {
-		t.Errorf("Put key = %q, want <uuid>.zip", capturedKey)
-	}
-	if capturedOpts.DiscoveryFilePath != capturedKey {
-		t.Errorf("DiscoveryFilePath = %q, want %q", capturedOpts.DiscoveryFilePath, capturedKey)
-	}
-	// The zip body in the test is "zip body" — not a real zip — so parse fails.
-	// We expect the row to be created with a non-empty FlowMapParseError and a nil FlowMapConfig.
-	if capturedOpts.FlowMapParseError == "" {
-		t.Error("FlowMapParseError should be set when zip body is invalid")
-	}
-	if capturedOpts.FlowMapConfig != nil {
-		t.Errorf("FlowMapConfig should be nil on parse failure, got %s", string(capturedOpts.FlowMapConfig))
+	if !strings.Contains(w.Body.String(), "could not be parsed") {
+		t.Errorf("body does not mention parse failure: %s", w.Body.String())
 	}
 }
 
@@ -272,7 +248,7 @@ func TestWizardHandler_Submit_StorageFails(t *testing.T) {
 	h := newTestWizardHandler(t, repo, store)
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "X", "scope": "Y"},
-		"flow-map.zip", []byte("zip body"),
+		"flow-map.zip", buildSampleFlowMapZip(t),
 	)
 	req := httptest.NewRequest(http.MethodPost, "/agents/wizard", body)
 	req.Header.Set("Content-Type", ct)
@@ -310,7 +286,7 @@ func TestWizardHandler_Submit_RepoFailLogsOrphan(t *testing.T) {
 	h := NewWizardHandler(repo, &schema, store, testMaxUploadBytes, logger)
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "X", "scope": "Y"},
-		"flow-map.zip", []byte("zip body"),
+		"flow-map.zip", buildSampleFlowMapZip(t),
 	)
 	req := httptest.NewRequest(http.MethodPost, "/agents/wizard", body)
 	req.Header.Set("Content-Type", ct)
