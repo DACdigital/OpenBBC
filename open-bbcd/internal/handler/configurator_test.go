@@ -175,7 +175,7 @@ func newConfigHandler(t *testing.T, getter handler.ConfigStore) *handler.Configu
 	if err := yaml.Unmarshal(schemaBytes, &schema); err != nil {
 		t.Fatalf("parse schema: %v", err)
 	}
-	h, err := handler.NewConfiguratorHandler(getter, &schema, web.Assets)
+	h, err := handler.NewConfiguratorHandler(getter, nil, nil, &schema, web.Assets)
 	if err != nil {
 		t.Fatalf("NewConfiguratorHandler: %v", err)
 	}

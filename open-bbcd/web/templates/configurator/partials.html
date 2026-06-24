@@ -211,7 +211,7 @@
 {{end}}
 
 {{define "endpoint_detail"}}
-<div class="config-detail">
+<div class="config-detail" id="endpoint-detail-{{.Endpoint.ID}}">
   <h2>{{.Endpoint.ID}}</h2>
   <p><code>{{.Endpoint.Method}} {{.Endpoint.Path}}</code></p>
 
@@ -234,6 +234,24 @@
       </ul>
     {{else}}
       <p class="muted">— (general-purpose tool; not bound to a specific skill)</p>
+    {{end}}
+  </div>
+
+  <div class="config-section">
+    <h3>Backend</h3>
+    {{$currentBackend := index .EndpointBackends .Endpoint.ID}}
+    <select name="backend_id"
+            hx-post="/agent_versions/{{.VersionID}}/endpoints/{{.Endpoint.ID}}/backend"
+            hx-trigger="change"
+            hx-target="#endpoint-detail-{{.Endpoint.ID}}"
+            hx-swap="outerHTML">
+      <option value="">— not connected —</option>
+      {{range .AvailableBackends}}
+        <option value="{{.ID}}" {{if eq .ID $currentBackend}}selected{{end}}>{{.Name}}</option>
+      {{end}}
+    </select>
+    {{if not $currentBackend}}
+      <p class="form-hint">Not connected — agent will not be able to call this endpoint.</p>
     {{end}}
   </div>
 

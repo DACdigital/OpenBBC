@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/flowmap"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/yuin/goldmark"
 	"gopkg.in/yaml.v3"
@@ -33,11 +34,19 @@ type ConfigStore interface {
 
 type ConfiguratorHandler struct {
 	repo                                                                            ConfigStore
+	backends                                                                        *repository.ToolBackendRepository
+	wiring                                                                          *repository.VersionWiringRepository
 	schema                                                                          *types.WizardSchema
 	flowsTmpl, skillsTmpl, endpointsTmpl, finalizeTmpl, inputsTmpl, promptsTmpl *template.Template
 }
 
-func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS fs.FS) (*ConfiguratorHandler, error) {
+func NewConfiguratorHandler(
+	repo ConfigStore,
+	backends *repository.ToolBackendRepository,
+	wiring *repository.VersionWiringRepository,
+	schema *types.WizardSchema,
+	webFS fs.FS,
+) (*ConfiguratorHandler, error) {
 	funcs := template.FuncMap{
 		"renderMarkdown": renderMarkdown,
 		"statusClass":    statusClass,
@@ -119,14 +128,16 @@ func NewConfiguratorHandler(repo ConfigStore, schema *types.WizardSchema, webFS 
 		return nil, err
 	}
 	return &ConfiguratorHandler{
-		repo:             repo,
-		schema:           schema,
-		flowsTmpl:        flowsTmpl,
-		skillsTmpl:       skillsTmpl,
+		repo:          repo,
+		backends:      backends,
+		wiring:        wiring,
+		schema:        schema,
+		flowsTmpl:     flowsTmpl,
+		skillsTmpl:    skillsTmpl,
 		endpointsTmpl: endpointsTmpl,
-		finalizeTmpl:     finalizeTmpl,
-		inputsTmpl:       inputsTmpl,
-		promptsTmpl:      promptsTmpl,
+		finalizeTmpl:  finalizeTmpl,
+		inputsTmpl:    inputsTmpl,
+		promptsTmpl:   promptsTmpl,
 	}, nil
 }
 
@@ -407,7 +418,125 @@ func (h *ConfiguratorHandler) Endpoints(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	renderTemplate(w, h.endpointsTmpl, "layout", data)
+
+	// Load available HTTP backends and current endpoint→backend wiring.
+	var httpBackends []*types.ToolBackend
+	var endpointBackends map[string]string
+	if h.backends != nil {
+		allBackends, err := h.backends.List(r.Context())
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		httpBackends = []*types.ToolBackend{}
+		for _, b := range allBackends {
+			if b.Kind == types.ToolBackendKindHTTPEndpoint {
+				httpBackends = append(httpBackends, b)
+			}
+		}
+	}
+	if h.wiring != nil {
+		endpointBackends, err = h.wiring.ListEndpointBackends(r.Context(), data.VersionID)
+		if err != nil {
+			Error(w, err)
+			return
+		}
+	}
+	if endpointBackends == nil {
+		endpointBackends = map[string]string{}
+	}
+
+	unmappedCount := 0
+	for _, ep := range data.Config.Endpoints {
+		if endpointBackends[ep.ID] == "" {
+			unmappedCount++
+		}
+	}
+
+	type endpointsPageData struct {
+		configPageData
+		AvailableBackends []*types.ToolBackend
+		EndpointBackends  map[string]string
+		UnmappedCount     int
+	}
+	renderTemplate(w, h.endpointsTmpl, "layout", endpointsPageData{
+		configPageData:    data,
+		AvailableBackends: httpBackends,
+		EndpointBackends:  endpointBackends,
+		UnmappedCount:     unmappedCount,
+	})
+}
+
+// SetEndpointBackend maps an endpoint to a backend (POST with backend_id="" unmaps).
+// htmx fragment response: re-renders the endpoint_detail partial for the affected endpoint.
+func (h *ConfiguratorHandler) SetEndpointBackend(w http.ResponseWriter, r *http.Request) {
+	vid := r.PathValue("version_id")
+	eid := r.PathValue("endpointID")
+	if err := r.ParseForm(); err != nil {
+		Error(w, err)
+		return
+	}
+	bid := r.FormValue("backend_id")
+
+	if bid == "" {
+		if err := h.wiring.UnsetEndpointBackend(r.Context(), vid, eid); err != nil {
+			Error(w, err)
+			return
+		}
+	} else {
+		if err := h.wiring.SetEndpointBackend(r.Context(), vid, eid, bid); err != nil {
+			Error(w, err)
+			return
+		}
+	}
+
+	// Re-render the endpoint_detail partial for this endpoint.
+	cfgBytes, _, err := h.repo.GetFlowMapConfig(r.Context(), vid)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	var cfg types.FlowMapConfig
+	if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+		Error(w, err)
+		return
+	}
+	var selected *types.Endpoint
+	for i := range cfg.Endpoints {
+		if cfg.Endpoints[i].ID == eid {
+			selected = &cfg.Endpoints[i]
+			break
+		}
+	}
+	if selected == nil {
+		http.Error(w, "endpoint not found", http.StatusNotFound)
+		return
+	}
+
+	var httpBackends []*types.ToolBackend
+	if h.backends != nil {
+		allBackends, _ := h.backends.List(r.Context())
+		httpBackends = []*types.ToolBackend{}
+		for _, b := range allBackends {
+			if b.Kind == types.ToolBackendKindHTTPEndpoint {
+				httpBackends = append(httpBackends, b)
+			}
+		}
+	}
+	var endpointBackends map[string]string
+	if h.wiring != nil {
+		endpointBackends, _ = h.wiring.ListEndpointBackends(r.Context(), vid)
+	}
+	if endpointBackends == nil {
+		endpointBackends = map[string]string{}
+	}
+
+	renderTemplate(w, h.endpointsTmpl, "endpoint_detail", map[string]any{
+		"VersionID":         vid,
+		"Endpoint":          selected,
+		"AvailableBackends": httpBackends,
+		"EndpointBackends":  endpointBackends,
+	})
 }
 
 // tplDict builds a map[string]any from alternating key/value template args.

@@ -83,11 +83,6 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	maxUploadBytes := int64(cfg.Discovery.MaxUploadMB) << 20
 	wizardHandler := NewWizardHandler(agentRepo, &schema, store, maxUploadBytes, logger)
 
-	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, &schema, web.Assets)
-	if err != nil {
-		fatal("init configurator handler", err)
-	}
-
 	agentHandler := NewAgentHandler(agentRepo)
 	resourceHandler := NewResourceHandler(resourceRepo)
 
@@ -95,6 +90,11 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	llmClient := anthropic.New(cfg.Anthropic)
 	backendRepo := repository.NewToolBackendRepository(db)
 	wiringRepo := repository.NewVersionWiringRepository(db)
+
+	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, backendRepo, wiringRepo, &schema, web.Assets)
+	if err != nil {
+		fatal("init configurator handler", err)
+	}
 
 	backendsHandler, err := NewBackendsHandler(backendRepo, wiringRepo, web.Assets)
 	if err != nil {
@@ -160,6 +160,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/{skillId}", configuratorHandler.Skills)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/endpoints", configuratorHandler.Endpoints)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/endpoints/{endpointID}", configuratorHandler.Endpoints)
+	mux.HandleFunc("POST /agent_versions/{version_id}/endpoints/{endpointID}/backend", configuratorHandler.SetEndpointBackend)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/inputs", configuratorHandler.Inputs)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/prompts", configuratorHandler.Prompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)
