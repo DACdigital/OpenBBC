@@ -9,6 +9,7 @@ import (
 	"html"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -1156,6 +1157,42 @@ func (h *ConfiguratorHandler) DownloadYAML(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	// Augment config with operator-attached MCP backends (not persisted on the
+	// FlowMapConfig row — joined at serve time from the wiring tables).
+	if h.wiring != nil && h.backends != nil {
+		atts, err := h.wiring.ListMCPAttachments(r.Context(), version.ID)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		mcps := make([]types.AttachedMCP, 0, len(atts))
+		for _, a := range atts {
+			be, err := h.backends.Get(r.Context(), a.BackendID)
+			if err != nil {
+				// A wiring row references a missing backend — defensive skip,
+				// log and continue. The agent's bundle won't include this MCP.
+				slog.Default().Warn("attached MCP backend missing",
+					slog.String("version", version.ID),
+					slog.String("backend_id", a.BackendID),
+					slog.Any("err", err))
+				continue
+			}
+			var mcpCfg types.MCPBackendConfig
+			_ = json.Unmarshal(be.Config, &mcpCfg)
+			mcps = append(mcps, types.AttachedMCP{
+				Name: be.Name,
+				URL:  mcpCfg.URL,
+				Note: a.Note,
+			})
+		}
+		cfg.AttachedMCPs = mcps
+	}
+
+	// Bump schema_version to 3 for aikdm consumption. The Go-side parser
+	// stores v2 (discovery's emission); the YAML served to aikdm advertises v3
+	// because of the AttachedMCPs additive field.
+	cfg.SchemaVersion = 3
 
 	if r.URL.Query().Get("clean") == "true" {
 		cfg = filterAgentConfig(cfg)

@@ -3,16 +3,21 @@ package handler_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 
+	_ "github.com/lib/pq"
+
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/handler"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/DACdigital/OpenBBC/open-bbcd/web"
 	"gopkg.in/yaml.v3"
@@ -1125,5 +1130,154 @@ func TestConfigurator_Prompts_EmptyStateOnMalformedBundle(t *testing.T) {
 	h.Prompts(w, req)
 	if !strings.Contains(w.Body.String(), "No bundle has been generated") {
 		t.Errorf("expected empty-state copy on malformed bundle; body:\n%s", w.Body.String())
+	}
+}
+
+// --- DB-gated test helpers (configurator package) ---
+
+// openConfiguratorTestDB opens a Postgres connection and truncates all
+// relevant tables. Skips if DATABASE_URL is unset.
+func openConfiguratorTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set — skipping integration test")
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if err := db.Ping(); err != nil {
+		t.Fatalf("db.Ping: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.Exec(`TRUNCATE
+		deployed_messages, deployed_sessions, chat_messages, chat_sessions,
+		resources, agent_versions, agents,
+		tool_backends, agent_version_endpoint_backend, agent_version_mcp_backend
+		RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	return db
+}
+
+// seedConfiguratorAgentVersion creates a minimal agents + agent_versions pair
+// and returns the version id. flow_map_config is seeded as an empty object so
+// loadConfig returns an empty FlowMapConfig without error.
+func seedConfiguratorAgentVersion(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	var versionID string
+	err := db.QueryRow(`
+		WITH a AS (
+			INSERT INTO agents (name) VALUES ('test-' || gen_random_uuid())
+			RETURNING id
+		)
+		INSERT INTO agent_versions (agent_id, status, flow_map_config)
+		SELECT id, 'DRAFT', '{}'::jsonb FROM a
+		RETURNING id
+	`).Scan(&versionID)
+	if err != nil {
+		t.Fatalf("seedConfiguratorAgentVersion: %v", err)
+	}
+	return versionID
+}
+
+// seedConfiguratorMCPBackend creates a tool_backends row of kind mcp_client
+// with a known URL and returns its id.
+func seedConfiguratorMCPBackend(t *testing.T, db *sql.DB, name string) string {
+	t.Helper()
+	var id string
+	cfgJSON, _ := json.Marshal(map[string]string{
+		"url":       "https://mcp.example.com/" + name,
+		"transport": "streamable_http",
+	})
+	err := db.QueryRow(`
+		INSERT INTO tool_backends (name, kind, config)
+		VALUES ($1, 'mcp_client', $2::jsonb)
+		RETURNING id
+	`, name, string(cfgJSON)).Scan(&id)
+	if err != nil {
+		t.Fatalf("seedConfiguratorMCPBackend: %v", err)
+	}
+	return id
+}
+
+// newConfigHandlerWithDB constructs a ConfiguratorHandler backed by real
+// DB repositories.
+func newConfigHandlerWithDB(t *testing.T, db *sql.DB) *handler.ConfiguratorHandler {
+	t.Helper()
+	schemaBytes, err := web.Assets.ReadFile("schemas/wizard-v1.yaml")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	var schema types.WizardSchema
+	if err := yaml.Unmarshal(schemaBytes, &schema); err != nil {
+		t.Fatalf("parse schema: %v", err)
+	}
+	versionRepo := repository.NewAgentVersionRepository(db)
+	backendRepo := repository.NewToolBackendRepository(db)
+	wiringRepo := repository.NewVersionWiringRepository(db)
+	h, err := handler.NewConfiguratorHandler(versionRepo, backendRepo, wiringRepo, &schema, web.Assets)
+	if err != nil {
+		t.Fatalf("NewConfiguratorHandler: %v", err)
+	}
+	return h
+}
+
+// TestDownloadYAML_IncludesAttachedMCPs verifies that DownloadYAML joins the
+// wiring tables at serve time and emits attached_mcps + schema_version 3.
+func TestDownloadYAML_IncludesAttachedMCPs(t *testing.T) {
+	db := openConfiguratorTestDB(t)
+
+	versionID := seedConfiguratorAgentVersion(t, db)
+	backend1 := seedConfiguratorMCPBackend(t, db, "slack-test")
+	backend2 := seedConfiguratorMCPBackend(t, db, "github-test")
+
+	wiringRepo := repository.NewVersionWiringRepository(db)
+	if err := wiringRepo.AttachMCP(context.Background(), versionID, backend1, "use for escalations"); err != nil {
+		t.Fatal(err)
+	}
+	if err := wiringRepo.AttachMCP(context.Background(), versionID, backend2, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	h := newConfigHandlerWithDB(t, db)
+
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/config.yaml", nil)
+	req.SetPathValue("version_id", versionID)
+	w := httptest.NewRecorder()
+	h.DownloadYAML(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+
+	var parsed struct {
+		SchemaVersion int `yaml:"schema_version"`
+		AttachedMCPs  []struct {
+			Name string `yaml:"name"`
+			URL  string `yaml:"url"`
+			Note string `yaml:"note"`
+		} `yaml:"attached_mcps"`
+	}
+	if err := yaml.Unmarshal(w.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, w.Body.String())
+	}
+	if parsed.SchemaVersion != 3 {
+		t.Fatalf("want schema_version 3, got %d", parsed.SchemaVersion)
+	}
+	if len(parsed.AttachedMCPs) != 2 {
+		t.Fatalf("want 2 mcps, got %d: body=%s", len(parsed.AttachedMCPs), w.Body.String())
+	}
+	notes := map[string]string{} // name → note
+	for _, m := range parsed.AttachedMCPs {
+		notes[m.Name] = m.Note
+	}
+	if notes["slack-test"] != "use for escalations" {
+		t.Fatalf("slack-test note mismatch: %q", notes["slack-test"])
+	}
+	if notes["github-test"] != "" {
+		t.Fatalf("github-test note should be empty, got %q", notes["github-test"])
 	}
 }

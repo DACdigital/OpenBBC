@@ -18,6 +18,24 @@ type FlowMapConfig struct {
 	Endpoints []Endpoint    `json:"endpoints" yaml:"endpoints"`
 	Skills    []Skill       `json:"skills" yaml:"skills"`
 	Flows     []Flow        `json:"flows" yaml:"flows"`
+
+	// AttachedMCPs is populated at YAML-serve time only (NOT persisted in
+	// the DB). Drives aikdm's <external_mcps> prompt section.
+	AttachedMCPs []AttachedMCP `json:"attached_mcps,omitempty" yaml:"attached_mcps,omitempty"`
+}
+
+// AttachedMCP is an operator-attached MCP server for this agent version.
+// Carries the server identity + a per-attachment note that aikdm folds into
+// the main prompt as guidance for when to use the server.
+//
+// Sourced at serialization time (DownloadYAML) by joining
+// agent_version_mcp_backend with tool_backends. NOT stored on the
+// FlowMapConfig row in the DB — `attached_mcps` exists only in the YAML
+// served to aikdm.
+type AttachedMCP struct {
+	Name string `json:"name" yaml:"name"`
+	URL  string `json:"url"  yaml:"url"`
+	Note string `json:"note,omitempty" yaml:"note,omitempty"`
 }
 
 type FlowMapSource struct {
