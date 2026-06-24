@@ -78,7 +78,7 @@
     <span class="config-list-row-name">{{.Skill.ID}}</span>
     <span class="config-list-row-meta">
       <span class="badge badge-{{.Skill.Origin}}">{{.Skill.Origin}}</span>
-      {{if .Skill.External}}<span class="badge">external</span>{{else if .Skill.Domain}}<span class="muted">{{.Skill.Domain}}</span>{{end}}
+      {{if .Skill.External}}<span class="badge">external</span>{{end}}
       <span class="muted">{{len .Skill.SuggestedEndpoints}} endpoints</span>
     </span>
   </a>
@@ -107,24 +107,25 @@
        data-value="{{range $i, $p := .Skill.UserPhrases}}{{if $i}},{{end}}{{$p}}{{end}}"></div>
 </label>
 
-<label>External
+<label class="checkbox-row">
   <input type="checkbox" name="external" value="true" {{if .Skill.External}}checked{{end}}
          hx-on:change="
            const isExt = this.checked;
            this.form.querySelector('.external-note-row').style.display = isExt ? '' : 'none';
            this.form.querySelector('.suggested-endpoints-row').style.display = isExt ? 'none' : '';
          ">
+  <span>External skill (no backend endpoint)</span>
 </label>
 
 <div class="suggested-endpoints-row" style="{{if .Skill.External}}display:none{{end}}">
   <label>Suggested endpoints
-    <select name="suggested_endpoints" multiple size="6">
+    <select name="suggested_endpoints" class="endpoint-select" multiple size="6">
       {{range .Endpoints}}
       <option value="{{.ID}}" {{if skillSuggestsEndpoint $.Skill .ID}}selected{{end}}>{{.ID}} — {{.Method}} {{.Path}}</option>
       {{end}}
     </select>
   </label>
-  <p class="hint">Hold ⌘/Ctrl to toggle multiple endpoints. Per-entry role and "when" annotations aren't edited in this UI yet — leave to direct YAML edit if needed.</p>
+  <p class="form-hint">Hold ⌘/Ctrl to toggle multiple endpoints. Per-entry <code>role</code> and <code>when</code> annotations aren't edited in this UI yet — leave to direct YAML edit if needed.</p>
 </div>
 
 <div class="external-note-row" style="{{if not .Skill.External}}display:none{{end}}">
