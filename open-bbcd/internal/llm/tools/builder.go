@@ -73,14 +73,14 @@ func (b *Builder) Build(ctx context.Context, versionID string, bundle json.RawMe
 	for bid, eps := range byBackend {
 		kind, name, cfgJSON, err := b.store.GetBackend(ctx, bid)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("builder: load backend %s: %w", bid, err)
 		}
 		if kind != "http_endpoint" {
 			continue
 		}
 		var cfg HTTPBackendCfg
 		if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("builder: parse config for backend %s: %w", bid, err)
 		}
 		m := map[string]string{}
 		for _, ep := range eps {

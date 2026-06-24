@@ -8,6 +8,7 @@ import (
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -126,3 +127,15 @@ func (f *fakeTools) Call(ctx context.Context, bundle json.RawMessage, c tools.Ca
 	f.results = f.results[1:]
 	return res, nil
 }
+
+// recordingSink collects all sent events (without writing them anywhere).
+type recordingSink struct {
+	events []transport.Event
+}
+
+func (r *recordingSink) Send(_ context.Context, e transport.Event) error {
+	r.events = append(r.events, e)
+	return nil
+}
+
+func (r *recordingSink) Close() error { return nil }

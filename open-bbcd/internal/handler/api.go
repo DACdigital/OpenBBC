@@ -95,6 +95,8 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	llmClient := anthropic.New(cfg.Anthropic)
 	backendRepo := repository.NewToolBackendRepository(db)
 	wiringRepo := repository.NewVersionWiringRepository(db)
+	// Both BO and deployed orchestrators share the same builder: Builder is
+	// stateless (all DB reads happen inside Build, scoped by versionID).
 	builder := tools.NewBuilder(&toolBackendStoreAdapter{backend: backendRepo, wiring: wiringRepo})
 
 	var transportFactory transport.Factory

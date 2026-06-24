@@ -11,21 +11,8 @@ import (
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
-
-// recordingSink collects all sent events (without writing them anywhere).
-type recordingSink struct {
-	events []transport.Event
-}
-
-func (r *recordingSink) Send(_ context.Context, e transport.Event) error {
-	r.events = append(r.events, e)
-	return nil
-}
-
-func (r *recordingSink) Close() error { return nil }
 
 // TestOrchestrator_E2E_HTTPBackend drives one turn end-to-end:
 //   - LLM emits a tool_use for an endpoint mapped to a real HTTPEndpointBackend

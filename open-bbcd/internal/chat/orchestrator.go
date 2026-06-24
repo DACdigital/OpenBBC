@@ -138,7 +138,7 @@ func (o *Orchestrator) Turn(
 
 	toolHandler, err := o.builder.Build(ctx, version.ID, version.Bundle)
 	if err != nil {
-		return failTurn("build_tool_handler", "build_tool_handler", err)
+		return failTurn("tool_handler_init", "build_tool_handler", err)
 	}
 
 	toolDefs, err := toolHandler.Tools(version.Bundle)
