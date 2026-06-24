@@ -60,3 +60,56 @@ func TestToolBackendRepo_DuplicateNameRejected(t *testing.T) {
 		t.Fatalf("want ErrToolBackendNameTaken, got %v", err)
 	}
 }
+
+func TestToolBackendRepo_Get_NotFound(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewToolBackendRepository(db)
+	_, err := repo.Get(context.Background(), "00000000-0000-0000-0000-000000000000")
+	if !errors.Is(err, types.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestToolBackendRepo_Update_NotFound(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewToolBackendRepository(db)
+	be := &types.ToolBackend{
+		ID:     "00000000-0000-0000-0000-000000000000",
+		Name:   "ghost",
+		Kind:   types.ToolBackendKindHTTPEndpoint,
+		Config: json.RawMessage(`{}`),
+	}
+	err := repo.Update(context.Background(), be)
+	if !errors.Is(err, types.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestToolBackendRepo_Delete_NotFound(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewToolBackendRepository(db)
+	err := repo.Delete(context.Background(), "00000000-0000-0000-0000-000000000000")
+	if !errors.Is(err, types.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestToolBackendRepo_Update_HappyPath(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewToolBackendRepository(db)
+	ctx := context.Background()
+	be := &types.ToolBackend{
+		Name:   "api",
+		Kind:   types.ToolBackendKindHTTPEndpoint,
+		Config: json.RawMessage(`{"base_url":"https://before"}`),
+	}
+	if err := repo.Create(ctx, be); err != nil { t.Fatalf("Create: %v", err) }
+	orig := be.UpdatedAt
+	be.Name = "api-renamed"
+	be.Config = json.RawMessage(`{"base_url":"https://after"}`)
+	if err := repo.Update(ctx, be); err != nil { t.Fatalf("Update: %v", err) }
+	if !be.UpdatedAt.After(orig) { t.Fatalf("UpdatedAt did not advance: %v vs %v", orig, be.UpdatedAt) }
+	got, err := repo.Get(ctx, be.ID)
+	if err != nil { t.Fatalf("Get: %v", err) }
+	if got.Name != "api-renamed" { t.Fatalf("name not updated: %s", got.Name) }
+}

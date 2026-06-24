@@ -65,6 +65,9 @@ func (r *ToolBackendRepository) List(ctx context.Context) ([]*types.ToolBackend,
 	return out, rows.Err()
 }
 
+// Update updates the name and config of an existing tool backend.
+// Kind is immutable after creation — changing kind would require a new backend
+// row, since wired endpoints/MCPs are kind-specific.
 func (r *ToolBackendRepository) Update(ctx context.Context, be *types.ToolBackend) error {
 	const q = `UPDATE tool_backends SET name = $1, config = $2, updated_at = now() WHERE id = $3
 		RETURNING updated_at`
