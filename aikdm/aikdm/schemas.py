@@ -178,11 +178,13 @@ class BundleTool(BaseModel):
     (flattened from FlowMapConfig.endpoints[]). Carries the information
     open-bbcd needs to wrap the endpoint as an MCP tool (name, method,
     path, auth) plus runtime context (description, source for provenance,
-    confidence).
+    confidence) and the JSON Schema fragments (path_params, query_params,
+    body_shape) the LLM uses to call it.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    id: str
     name: str
     description: str
     method: str
@@ -190,6 +192,10 @@ class BundleTool(BaseModel):
     auth: str = ""
     confidence: str = ""
     source: str = ""
+    path_params: list[ParamSpec] = Field(default_factory=list)
+    query_params: list[ParamSpec] = Field(default_factory=list)
+    body_shape: Any | None = None
+    response_shape: Any | None = None
 
 
 class Bundle(BaseModel):

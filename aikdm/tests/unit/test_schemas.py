@@ -142,3 +142,20 @@ def test_bundle_round_trips_through_model_validate():
     )
     redumped = Bundle.model_validate(bundle.model_dump())
     assert redumped == bundle
+
+
+def test_bundle_tool_has_endpoint_schema_fields():
+    from aikdm.schemas import BundleTool
+    t = BundleTool(
+        id="orders.create",
+        name="orders_create",
+        description="Create an order",
+        method="POST",
+        path="/api/orders",
+        path_params=[],
+        query_params=[],
+        body_shape={"type": "object"},
+    )
+    assert t.id == "orders.create"
+    assert t.body_shape == {"type": "object"}
+    assert t.response_shape is None  # default
