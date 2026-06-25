@@ -131,7 +131,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 
 	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger)
-	deployHandler := NewDeployHandler(agentRepo, versionRepo)
+	deployHandler := NewDeployHandler(agentRepo, versionRepo, wiringRepo)
 
 	mux := http.NewServeMux()
 

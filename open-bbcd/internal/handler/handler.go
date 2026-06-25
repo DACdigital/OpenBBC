@@ -40,7 +40,8 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrAgentNotRunnable),
 		errors.Is(err, types.ErrAgentNotDeployable),
 		errors.Is(err, types.ErrAgentNotDeployed),
-		errors.Is(err, types.ErrToolBackendInUse):
+		errors.Is(err, types.ErrToolBackendInUse),
+		errors.Is(err, types.ErrUnmappedEndpoints):
 		status = http.StatusConflict
 	case errors.Is(err, types.ErrSessionAgentMismatch):
 		status = http.StatusForbidden

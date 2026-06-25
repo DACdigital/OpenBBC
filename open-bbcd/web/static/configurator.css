@@ -919,3 +919,13 @@
   color: #f85149;
 }
 .obf-modal-btn-danger:hover { background: #2d1418; border-color: #f85149; }
+
+.deploy-modal-error {
+  background: rgba(248, 81, 73, 0.10);
+  border: 1px solid #5f1a18;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #f8b6b3;
+  margin-top: 4px;
+}

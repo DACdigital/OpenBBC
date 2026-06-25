@@ -3,7 +3,9 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -21,13 +23,20 @@ type DeployVersionRepository interface {
 	CurrentDeployedID(ctx context.Context, agentID string) (string, error)
 }
 
+// DeployWiringRepo is the narrow wiring-repo interface DeployHandler needs.
+// Implemented by *repository.VersionWiringRepository.
+type DeployWiringRepo interface {
+	ListEndpointBackends(ctx context.Context, versionID string) (map[string]string, error)
+}
+
 type DeployHandler struct {
 	agents   DeployAgentRepository
 	versions DeployVersionRepository
+	wiring   DeployWiringRepo
 }
 
-func NewDeployHandler(agents DeployAgentRepository, versions DeployVersionRepository) *DeployHandler {
-	return &DeployHandler{agents: agents, versions: versions}
+func NewDeployHandler(agents DeployAgentRepository, versions DeployVersionRepository, wiring DeployWiringRepo) *DeployHandler {
+	return &DeployHandler{agents: agents, versions: versions, wiring: wiring}
 }
 
 type deployBody struct {
@@ -43,7 +52,7 @@ type deployResponse struct {
 // Deploy handles POST /agents/{agent_id}/deploy with body {"version_id":"..."}.
 // Returns 200 with {agent, version, previous_deployed_version_id}.
 // 400 if version_id is missing. 404 if the version doesn't belong to the agent
-// or doesn't exist. 409 if the version is not READY.
+// or doesn't exist. 409 if the version is not READY or has unmapped endpoints.
 func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("agent_id")
 	var body deployBody
@@ -64,6 +73,12 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 	}
 	if version.AgentID != agentID {
 		Error(w, types.ErrNotFound)
+		return
+	}
+
+	// Block deploy if any endpoint in the bundle is unmapped.
+	if err := h.validateAllEndpointsMapped(r.Context(), version); err != nil {
+		Error(w, err)
 		return
 	}
 
@@ -90,6 +105,54 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		Version:                   updatedVersion,
 		PreviousDeployedVersionID: prev,
 	})
+}
+
+// validateAllEndpointsMapped returns ErrUnmappedEndpoints (wrapped with a
+// detail message about which endpoints are missing) if the version's bundle
+// has any tools[].id that isn't present in agent_version_endpoint_backend
+// for this version. Returns nil when every endpoint is mapped.
+func (h *DeployHandler) validateAllEndpointsMapped(ctx context.Context, version *types.AgentVersion) error {
+	if len(version.Bundle) == 0 {
+		// No bundle yet — can't have endpoints to map. The existing flow
+		// already rejects non-READY versions with ErrAgentNotDeployable;
+		// don't double-error here.
+		return nil
+	}
+
+	// Minimal local shape: we only need the endpoint ids.
+	var snap struct {
+		Tools []struct {
+			ID string `json:"id"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(version.Bundle, &snap); err != nil {
+		// Malformed bundle is an internal error, not a deploy-validation
+		// failure. Let it surface as 500.
+		return err
+	}
+
+	if len(snap.Tools) == 0 {
+		return nil // nothing to map
+	}
+
+	mapping, err := h.wiring.ListEndpointBackends(ctx, version.ID)
+	if err != nil {
+		return err
+	}
+
+	var missing []string
+	for _, t := range snap.Tools {
+		if t.ID == "" {
+			continue
+		}
+		if _, ok := mapping[t.ID]; !ok {
+			missing = append(missing, t.ID)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: %s", types.ErrUnmappedEndpoints, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // Undeploy handles POST /agents/{agent_id}/undeploy. Takes the currently-

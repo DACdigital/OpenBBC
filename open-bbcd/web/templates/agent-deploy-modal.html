@@ -9,10 +9,11 @@
       <p>This version will go live at:</p>
       <code>/deployed/{{.AgentID}}</code>
     {{end}}
+    <div id="deploy-modal-error" class="deploy-modal-error" hidden></div>
     <div class="modal-actions">
       <button hx-post="/agents/{{.AgentID}}/deploy"
               hx-vals='{"version_id":"{{.Version.ID}}"}'
-              hx-on::after-request="window.location.reload()">
+              hx-on::after-request="if(event.detail.successful){window.location.reload()}else{var e=document.getElementById('deploy-modal-error');e.textContent=event.detail.xhr.responseText||'Deploy failed';e.hidden=false;}">
         Confirm Deploy
       </button>
       <button onclick="document.getElementById('deploy-modal').remove()">Cancel</button>
