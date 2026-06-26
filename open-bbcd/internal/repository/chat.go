@@ -101,16 +101,30 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, vers
 	return nil
 }
 
-// ListSessions returns all sessions for an agent version, newest first.
-func (r *ChatRepository) ListSessions(ctx context.Context, versionID string) ([]*types.ChatSession, error) {
-	rows, err := r.db.QueryContext(ctx, `
+// ListSessions returns one page of sessions for an agent version, newest
+// first, plus the total row count. limit<=0 fetches everything.
+func (r *ChatRepository) ListSessions(ctx context.Context, versionID string, limit, offset int) ([]*types.ChatSession, int, error) {
+	var total int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM chat_sessions WHERE agent_version_id = $1::uuid`,
+		versionID,
+	).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	q := `
 		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at
 		FROM chat_sessions
 		WHERE agent_version_id = $1::uuid
-		ORDER BY created_at DESC
-	`, versionID)
+		ORDER BY created_at DESC`
+	args := []any{versionID}
+	if limit > 0 {
+		q += " LIMIT $2 OFFSET $3"
+		args = append(args, limit, offset)
+	}
+	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -118,11 +132,11 @@ func (r *ChatRepository) ListSessions(ctx context.Context, versionID string) ([]
 	for rows.Next() {
 		s := &types.ChatSession{}
 		if err := rows.Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 // LoadMessages returns all messages for a session ordered by seq ASC.

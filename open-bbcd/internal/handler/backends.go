@@ -31,6 +31,8 @@ type BackendsHandler struct {
 func NewBackendsHandler(repo *repository.ToolBackendRepository, wiring *repository.VersionWiringRepository, webFS fs.FS) (*BackendsHandler, error) {
 	funcs := template.FuncMap{
 		"statusClass": statusClass,
+		"add":         func(a, b int) int { return a + b },
+		"sub":         func(a, b int) int { return a - b },
 	}
 	listTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
@@ -84,7 +86,7 @@ func primaryURL(b *types.ToolBackend) string {
 	return ""
 }
 
-// List renders GET /mcp — the backends table.
+// List renders GET /mcp — the backends table, paginated.
 func (h *BackendsHandler) List(w http.ResponseWriter, r *http.Request) {
 	all, err := h.repo.List(r.Context())
 	if err != nil {
@@ -100,9 +102,14 @@ func (h *BackendsHandler) List(w http.ResponseWriter, r *http.Request) {
 	for _, b := range all {
 		rows = append(rows, listRow{b, counts[b.ID], primaryURL(b)})
 	}
+	pr := ParsePageRequest(r)
+	total := len(rows)
+	rows = slicePage(rows, pr.Offset(), pr.Limit())
 	renderTemplate(w, h.listTmpl, "layout", map[string]any{
-		"Active": "mcp",
-		"Rows":   rows,
+		"Active":   "mcp",
+		"Rows":     rows,
+		"Page":     NewPageView(pr, total),
+		"BasePath": r.URL.Path,
 	})
 }
 

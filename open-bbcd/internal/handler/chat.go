@@ -33,7 +33,7 @@ type ChatAgentReader interface {
 type ChatSessionStore interface {
 	EnsureSession(ctx context.Context, sessionID, versionID string) error
 	GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error)
-	ListSessions(ctx context.Context, versionID string) ([]*types.ChatSession, error)
+	ListSessions(ctx context.Context, versionID string, limit, offset int) ([]*types.ChatSession, int, error)
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error)
 	UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error
 }
@@ -96,6 +96,9 @@ func NewChatHandler(
 	funcs := template.FuncMap{
 		"statusClass": statusClass,
 		"urlEncode":   url.PathEscape,
+		"add":         func(a, b int) int { return a + b },
+		"sub":         func(a, b int) int { return a - b },
+		"dict":        tplDict,
 	}
 	parse := func(name string) (*template.Template, error) {
 		return template.New("").Funcs(funcs).ParseFS(webFS,
@@ -151,6 +154,8 @@ type sessionListPageData struct {
 	AgentID   string // stable agent ID, used for default back-link to agent listing
 	AgentName string
 	Sessions  []*types.ChatSession
+	Page      PageView
+	BasePath  string // URL path without query string, used by the page template to build prev/next links
 	// BackHref + BackLabel control the "back" link at the top of the
 	// session list. Derived from ?from= so users return to wherever they
 	// came in (configurator view, a specific chat session, or the default
@@ -171,7 +176,8 @@ func (h *ChatHandler) SessionList(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	sessions, err := h.chats.ListSessions(r.Context(), versionID)
+	pr := ParsePageRequest(r)
+	sessions, total, err := h.chats.ListSessions(r.Context(), versionID, pr.Limit(), pr.Offset())
 	if err != nil {
 		Error(w, err)
 		return
@@ -183,6 +189,8 @@ func (h *ChatHandler) SessionList(w http.ResponseWriter, r *http.Request) {
 		AgentID:   agent.ID,
 		AgentName: agent.Name,
 		Sessions:  sessions,
+		Page:      NewPageView(pr, total),
+		BasePath:  r.URL.Path,
 		BackHref:  backHref,
 		BackLabel: backLabel,
 	}

@@ -266,6 +266,59 @@ func (r *AgentVersionRepository) SetPrompts(ctx context.Context, versionID strin
 	return nil
 }
 
+// CreateVersionFromPrompts forks a new agent_versions row from the parent
+// version. The new row carries the submitted prompts and starts in DRAFT
+// status. parent_version_id links the version chain; agent_id stays the
+// same (architecture is shared agent-wide).
+//
+// MCP attachments are copied forward in the same transaction so the new
+// version inherits its predecessor's per-version wiring without manual
+// re-attachment. Endpoint→backend wiring is agent-keyed and doesn't need
+// copying.
+//
+// Returns the new version's id.
+func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var agentID string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT agent_id::text FROM agent_versions WHERE id = $1`, parentVersionID,
+	).Scan(&agentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", types.ErrNotFound
+		}
+		return "", err
+	}
+
+	var newID string
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO agent_versions (agent_id, parent_version_id, status, prompts)
+		VALUES ($1::uuid, $2::uuid, 'DRAFT', $3::jsonb)
+		RETURNING id::text
+	`, agentID, parentVersionID, promptsJSON).Scan(&newID); err != nil {
+		return "", fmt.Errorf("insert new version: %w", err)
+	}
+
+	// Copy MCP attachments forward.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO agent_version_mcp_backend (agent_version_id, backend_id, note)
+		SELECT $2::uuid, backend_id, note
+		FROM agent_version_mcp_backend
+		WHERE agent_version_id = $1::uuid
+	`, parentVersionID, newID); err != nil {
+		return "", fmt.Errorf("copy mcp attachments: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return newID, nil
+}
+
 // UpdateStatus performs a guarded status transition on a version row.
 func (r *AgentVersionRepository) UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error {
 	res, err := r.db.ExecContext(ctx,

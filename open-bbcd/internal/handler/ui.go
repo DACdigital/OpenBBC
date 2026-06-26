@@ -131,20 +131,29 @@ func renderTemplate(w http.ResponseWriter, tmpl *template.Template, name string,
 }
 
 type agentsPageData struct {
-	Active string
-	Groups []types.AgentGroup
+	Active   string
+	Groups   []types.AgentGroup
+	Page     PageView
+	BasePath string
 }
 
 // AgentsPage serves either the agents list or a single agent chain's version
 // history, depending on whether the ?agent= query param is present. The query
 // param value is the chain root agent ID — the stable identifier for a chain
 // across version additions.
+//
+// Both views are paginated via ?page= and ?size= (defaults 1/50). The list
+// view paginates at the agent level; the versions view paginates the
+// version list inside one agent. Slicing happens app-side — repo fetches
+// remain unpaginated, which is fine at BO scale.
 func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 	groups, err := h.agentRepo.ListGrouped(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	pr := ParsePageRequest(r)
 
 	if agentID := r.URL.Query().Get("agent"); agentID != "" {
 		var group *types.AgentGroup
@@ -163,6 +172,8 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 			Error(w, err)
 			return
 		}
+		totalVersions := len(group.Versions)
+		versions := slicePage(group.Versions, pr.Offset(), pr.Limit())
 		data := agentVersionsPageData{
 			Active:            "agents",
 			AgentID:           group.AgentID,
@@ -170,10 +181,15 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 			Description:       agent.Description,
 			DiscoveryFilePath: agent.DiscoveryFilePath,
 			CreatedAt:         agent.CreatedAt,
-			Versions:          group.Versions,
+			Versions:          versions,
+			Page:              NewPageView(pr, totalVersions),
+			BasePath:          r.URL.Path,
+			AgentQS:           "agent=" + agent.ID,
 		}
 		// Versions are returned newest-first by ListGrouped; at most one is DEPLOYED
 		// at a time (enforced by DB partial unique index), so first match wins.
+		// Scan the full version list (not just this page) so the badge is
+		// correct even when the deployed row is on another page.
 		for _, v := range group.Versions {
 			if v.Version != nil && v.Version.Status == "DEPLOYED" {
 				data.CurrentDeployedVersionNum = v.VersionNum
@@ -185,7 +201,27 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderTemplate(w, h.agentsTmpl, "layout", agentsPageData{Active: "agents", Groups: groups})
+	total := len(groups)
+	pageGroups := slicePage(groups, pr.Offset(), pr.Limit())
+	renderTemplate(w, h.agentsTmpl, "layout", agentsPageData{
+		Active:   "agents",
+		Groups:   pageGroups,
+		Page:     NewPageView(pr, total),
+		BasePath: r.URL.Path,
+	})
+}
+
+// slicePage returns the sub-slice of items for one page, with bounds
+// clamped to len(items). Generic helper for app-side pagination.
+func slicePage[T any](items []T, offset, limit int) []T {
+	if offset >= len(items) {
+		return nil
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end]
 }
 
 type agentVersionsPageData struct {
@@ -198,6 +234,9 @@ type agentVersionsPageData struct {
 	CurrentDeployedVersionNum int    // 0 if no version is deployed
 	CurrentDeployedVersionID  string // empty if none
 	Versions                  []types.AgentVersionListItem
+	Page                      PageView
+	BasePath                  string // e.g. "/agents/ui" — pagination links append ?agent=…&page=…
+	AgentQS                   string // e.g. "agent=<id>" — preserved across pagination links
 }
 
 type wizardPageData struct {

@@ -1,23 +1,30 @@
 {{define "tab_content"}}
 <div class="prompts-tab">
   {{if or .MainPrompt .SkillPrompts}}
-    {{if .MainPrompt}}
-    <section class="prompt-block">
-      <h2>Main prompt</h2>
-      <pre class="prompt-pre">{{.MainPrompt}}</pre>
-    </section>
-    {{end}}
-    {{if .SkillPrompts}}
-    <section class="prompt-skills">
-      <h2>Skill prompts</h2>
-      {{range .SkillPrompts}}
-      <details class="prompt-skill">
-        <summary><strong>{{.Name}}</strong>{{if .Description}} — {{.Description}}{{end}}</summary>
-        <pre class="prompt-pre">{{.Prompt}}</pre>
-      </details>
+    <div class="config-banner">
+      Editing prompts creates a new version of this agent (the architecture stays frozen and the previous version remains intact). MCP attachments are copied forward.
+    </div>
+    <form method="post" action="/agent_versions/{{.VersionID}}/configure/prompts" class="prompts-form">
+      <section class="prompt-block">
+        <h2><label for="prompt-main">Main prompt</label></h2>
+        <textarea id="prompt-main" name="main_prompt" rows="14" class="prompt-textarea">{{.MainPrompt}}</textarea>
+      </section>
+      {{if .SkillPrompts}}
+      <section class="prompt-skills">
+        <h2>Skill prompts</h2>
+        {{range .SkillPrompts}}
+        <details class="prompt-skill" {{if .Prompt}}{{else}}open{{end}}>
+          <summary><strong>{{.Name}}</strong>{{if .Description}} — {{.Description}}{{end}}</summary>
+          <textarea name="skill_prompt[{{.Name}}]" rows="8" class="prompt-textarea">{{.Prompt}}</textarea>
+        </details>
+        {{end}}
+      </section>
       {{end}}
-    </section>
-    {{end}}
+      <div class="prompts-form-actions">
+        <button type="submit" class="btn-primary">Save as new version</button>
+        <span class="form-hint muted">A new <strong>DRAFT</strong> version of this agent will be created with these prompts. The current version stays untouched.</span>
+      </div>
+    </form>
   {{else}}
     <p class="empty-state">No bundle has been generated for this version yet.</p>
   {{end}}

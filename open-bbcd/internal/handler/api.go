@@ -51,6 +51,10 @@ func (s *configStore) UpdateFlowMapConfig(ctx context.Context, versionID string,
 	return s.versions.UpdateFlowMapConfig(ctx, versionID, cfg)
 }
 
+func (s *configStore) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error) {
+	return s.versions.CreateVersionFromPrompts(ctx, parentVersionID, promptsJSON)
+}
+
 func (s *configStore) UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error {
 	return s.versions.UpdateStatus(ctx, versionID, expectedFrom, to)
 }
@@ -168,6 +172,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agent_versions/{version_id}/endpoints/{endpointID}/backend", configuratorHandler.SetEndpointBackend)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/inputs", configuratorHandler.Inputs)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/prompts", configuratorHandler.Prompts)
+	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts", configuratorHandler.SavePrompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/new", configuratorHandler.SkillNew)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/skills", configuratorHandler.SkillCreate)

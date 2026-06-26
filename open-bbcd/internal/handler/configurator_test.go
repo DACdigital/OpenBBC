@@ -92,15 +92,18 @@ func TestConfiguratorRouter_ArchitectureIndexRedirectsToFlows(t *testing.T) {
 }
 
 type stubConfigStore struct {
-	cfg           types.FlowMapConfig
-	getErr        error
-	parseErr      string
-	updates       int
-	updateFn      func(cfg []byte) error
-	statusFn      func(versionID, expectedFrom, to string) error
-	currentStatus string // optional override; defaults to "INITIALIZING"
-	architecture  []byte // optional agent-level architecture blob
-	prompts       []byte // optional version-level prompts blob (rendered by the Prompts tab)
+	cfg               types.FlowMapConfig
+	getErr            error
+	parseErr          string
+	updates           int
+	updateFn          func(cfg []byte) error
+	statusFn          func(versionID, expectedFrom, to string) error
+	currentStatus     string // optional override; defaults to "INITIALIZING"
+	architecture      []byte // optional agent-level architecture blob
+	prompts           []byte // optional version-level prompts blob (rendered by the Prompts tab)
+	createVersionFn   func(parentVersionID string, promptsJSON []byte) (string, error)
+	lastPromptsParent string
+	lastPromptsJSON   []byte
 }
 
 func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
@@ -150,6 +153,15 @@ func (s *stubConfigStore) UpdateStatus(ctx context.Context, versionID, expectedF
 	}
 	s.currentStatus = to
 	return nil
+}
+
+func (s *stubConfigStore) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error) {
+	if s.createVersionFn != nil {
+		return s.createVersionFn(parentVersionID, promptsJSON)
+	}
+	s.lastPromptsParent = parentVersionID
+	s.lastPromptsJSON = append([]byte(nil), promptsJSON...)
+	return "new-version-id", nil
 }
 
 func sampleConfig() types.FlowMapConfig {
@@ -1143,6 +1155,42 @@ func TestConfigurator_Prompts_EmptyStateOnMalformedBundle(t *testing.T) {
 	h.Prompts(w, req)
 	if !strings.Contains(w.Body.String(), "No bundle has been generated") {
 		t.Errorf("expected empty-state copy on malformed bundle; body:\n%s", w.Body.String())
+	}
+}
+
+func TestConfigurator_SavePrompts_CreatesNewVersionAndRedirects(t *testing.T) {
+	parentID := "11111111-1111-1111-1111-111111111111"
+	store := makePromptsConfigStore("READY", []byte(`{
+		"main_prompt":"old",
+		"skills":[{"name":"place_order","prompt":"old skill"}]
+	}`))
+	h := newConfigHandler(t, store)
+
+	form := url.Values{}
+	form.Set("main_prompt", "new main")
+	form.Set("skill_prompt[place_order]", "new skill")
+	req := httptest.NewRequest(http.MethodPost, "/agent_versions/"+parentID+"/configure/prompts", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("version_id", parentID)
+	w := httptest.NewRecorder()
+	h.SavePrompts(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status: want 303, got %d body=%s", w.Code, w.Body.String())
+	}
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/agent_versions/new-version-id/configure/prompts") {
+		t.Errorf("redirect target wrong: %q", loc)
+	}
+	if store.lastPromptsParent != parentID {
+		t.Errorf("parent passed to repo: want %q, got %q", parentID, store.lastPromptsParent)
+	}
+	var got types.Prompts
+	if err := json.Unmarshal(store.lastPromptsJSON, &got); err != nil {
+		t.Fatalf("parse persisted prompts: %v", err)
+	}
+	if got.MainPrompt != "new main" || got.SkillPrompts["place_order"] != "new skill" {
+		t.Errorf("persisted prompts wrong: %+v", got)
 	}
 }
 

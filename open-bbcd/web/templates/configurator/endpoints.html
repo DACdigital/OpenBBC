@@ -5,7 +5,7 @@
 </div>
 {{end}}
 <div class="config-banner">
-  Endpoints are derived from the discovery snapshot and cannot be edited here. To change them, re-run discovery.
+  Endpoints are part of this agent's frozen architecture — they cannot change across versions. The backend each endpoint routes to is also agent-scoped: editing it here affects every version of this agent. To change the endpoints themselves, create a new agent from a fresh discovery.
 </div>
 <div class="config-two-pane">
   <aside class="config-list">

@@ -32,6 +32,7 @@ type ConfigStore interface {
 	GetFlowMapConfig(ctx context.Context, versionID string) (cfg []byte, parseErr string, err error)
 	UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error
 	UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error
+	CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error)
 }
 
 // mcpBackendView wraps a ToolBackend and exposes its primary URL for template
@@ -390,6 +391,49 @@ func (h *ConfiguratorHandler) Prompts(w http.ResponseWriter, r *http.Request) {
 	renderTemplate(w, h.promptsTmpl, "layout", page)
 }
 
+// SavePrompts handles the prompts editor's "Save as new version" submit.
+// Parses the main_prompt + per-skill prompts out of the form, marshals them
+// into the agent_versions.prompts JSONB shape, and asks the repository to
+// fork a new DRAFT version (with MCP attachments copied forward). On
+// success, redirects to the new version's Prompts tab.
+func (h *ConfiguratorHandler) SavePrompts(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	main := r.FormValue("main_prompt")
+	skillPrompts := map[string]string{}
+	// Form field naming: skill_prompt[<skill_name>]
+	for key, vals := range r.Form {
+		if !strings.HasPrefix(key, "skill_prompt[") || !strings.HasSuffix(key, "]") {
+			continue
+		}
+		name := key[len("skill_prompt[") : len(key)-1]
+		if name == "" || len(vals) == 0 {
+			continue
+		}
+		skillPrompts[name] = vals[0]
+	}
+
+	promptsJSON, err := json.Marshal(types.Prompts{
+		MainPrompt:   main,
+		SkillPrompts: skillPrompts,
+	})
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	newID, err := h.repo.CreateVersionFromPrompts(r.Context(), versionID, promptsJSON)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	http.Redirect(w, r, "/agent_versions/"+newID+"/configure/prompts", http.StatusSeeOther)
+}
+
 // Index redirects /configure to the default Architecture > Flows sub-tab.
 func (h *ConfiguratorHandler) Index(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
@@ -695,8 +739,8 @@ func (h *ConfiguratorHandler) ToggleMCPBackend(w http.ResponseWriter, r *http.Re
 }
 
 // UpdateMCPNote updates the guidance note for an attached MCP backend.
-// Returns 204 (no content) since the textarea fires on blur and doesn't need
-// a re-render.
+// Returns the re-rendered mcp_row_detail partial with a transient
+// "Saved ✓" indicator so the user gets explicit feedback.
 func (h *ConfiguratorHandler) UpdateMCPNote(w http.ResponseWriter, r *http.Request) {
 	vid := r.PathValue("version_id")
 	bid := r.PathValue("backendID")
@@ -716,7 +760,21 @@ func (h *ConfiguratorHandler) UpdateMCPNote(w http.ResponseWriter, r *http.Reque
 		Error(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+
+	// Re-render the form with Saved=true so the indicator shows up. The
+	// indicator is a one-shot: any subsequent action (further edit, page
+	// reload) re-renders without the flag.
+	be, err := h.backends.Get(r.Context(), bid)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	_ = h.mcpTmpl.ExecuteTemplate(w, "mcp_row_detail", map[string]any{
+		"VersionID":  vid,
+		"Backend":    be,
+		"Attachment": &repository.MCPAttachment{BackendID: bid, Note: note},
+		"Saved":      true,
+	})
 }
 
 // renderMCPRowFragment renders just the #mcp-row-{bid} outer div for htmx
