@@ -193,10 +193,20 @@ RPC call site. Patterns to recognise:
 
 For each call site record: method, path (with templated segments
 preserved as `{param}`), auth source if discernible (header inspection),
-typed body / response shape if statically resolvable, and source
+body / response shape if statically resolvable, and source
 coordinates `<file>:<line>`. If a URL is dynamic enough that you can't
 resolve it (e.g. a variable type segment), capture it as `unresolved`
 with a one-line reason.
+
+**`body_shape` and `response_shape` are JSON Schema, not TypeScript.**
+When you resolve a body or response shape, emit it as an inline JSON
+Schema object — `{ "type": "object", "properties": { ... }, "required":
+[ ... ] }` — never as a TypeScript-style type literal string. Downstream
+consumers wire this value directly into the LLM-visible tool argument
+schema, and a free-form string collapses to "tool takes no arguments",
+which causes the agent to call POST/PUT/PATCH endpoints with empty
+bodies. When the shape isn't statically resolvable, emit `null` (body)
+or `"unknown"` (response).
 
 ### 3. Resolve & group
 
