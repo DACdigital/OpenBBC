@@ -1,0 +1,72 @@
+{{define "content"}}
+<div class="page-header">
+  <a href="/mcp" class="back-link">← Back to backends</a>
+  <h1>Edit backend</h1>
+  {{if gt .UsageCount 0}}<p class="form-hint">Used by {{.UsageCount}} agent version(s).</p>{{end}}
+</div>
+
+<form method="POST" action="/mcp/{{.Backend.ID}}" class="config-form">
+  <label>
+    Name
+    <input type="text" name="name" required value="{{.Backend.Name}}">
+  </label>
+
+  {{if eq (printf "%s" .Backend.Kind) "http_endpoint"}}
+  <label>
+    Base URL
+    <input type="url" name="base_url" required value="{{.Cfg.BaseURL}}">
+  </label>
+  <fieldset>
+    <legend>Default headers</legend>
+    <div class="kv-rows" data-prefix="default_headers">
+      {{range $k, $v := .Cfg.DefaultHeaders}}
+      <div class="kv-row">
+        <input type="text" name="default_headers_key" value="{{$k}}">
+        <input type="text" name="default_headers_value" value="{{$v}}">
+      </div>
+      {{end}}
+      <div class="kv-row">
+        <input type="text" name="default_headers_key" placeholder="Header name">
+        <input type="text" name="default_headers_value" placeholder="Header value">
+      </div>
+    </div>
+  </fieldset>
+  {{end}}
+
+  {{if eq (printf "%s" .Backend.Kind) "mcp_client"}}
+  <label>
+    URL
+    <input type="url" name="url" required value="{{.MCPCfg.URL}}">
+  </label>
+  <fieldset>
+    <legend>Transport</legend>
+    <label class="radio-row"><input type="radio" name="transport" value="streamable_http" {{if eq .MCPCfg.Transport "streamable_http"}}checked{{end}}> Streamable HTTP</label>
+    <label class="radio-row"><input type="radio" name="transport" value="sse" {{if eq .MCPCfg.Transport "sse"}}checked{{end}}> SSE</label>
+  </fieldset>
+  <fieldset>
+    <legend>Default headers</legend>
+    <div class="kv-rows" data-prefix="default_headers">
+      {{range $k, $v := .MCPCfg.DefaultHeaders}}
+      <div class="kv-row">
+        <input type="text" name="default_headers_key" value="{{$k}}">
+        <input type="text" name="default_headers_value" value="{{$v}}">
+      </div>
+      {{end}}
+      <div class="kv-row">
+        <input type="text" name="default_headers_key" placeholder="Header name">
+        <input type="text" name="default_headers_value" placeholder="Header value">
+      </div>
+    </div>
+  </fieldset>
+  {{end}}
+
+  <div class="form-actions">
+    <button type="submit" class="btn-primary">Save</button>
+    <a href="/mcp" class="btn-secondary">Cancel</a>
+  </div>
+</form>
+
+<form method="POST" action="/mcp/{{.Backend.ID}}/delete" class="config-form" style="margin-top:32px">
+  <button type="submit" class="btn-secondary btn-danger" {{if gt .UsageCount 0}}disabled title="Disconnect from {{.UsageCount}} version(s) first"{{end}}>Delete backend</button>
+</form>
+{{end}}

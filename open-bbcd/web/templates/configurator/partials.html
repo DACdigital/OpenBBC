@@ -210,8 +210,25 @@
 </a>
 {{end}}
 
+{{define "mcp_row_detail"}}
+  {{if .Attachment}}
+    <form class="config-mcp-note"
+          hx-post="/agent_versions/{{.VersionID}}/architecture/mcp/{{.Backend.ID}}/note"
+          hx-trigger="blur from:find textarea"
+          hx-swap="none">
+      <label>
+        Guidance note (used by aikdm in main prompt)
+        <textarea name="note" rows="3" placeholder="e.g. Use Slack for escalations when the user reports an issue they want a human to follow up on.">{{.Attachment.Note}}</textarea>
+      </label>
+    </form>
+  {{else}}
+    <p class="form-hint muted">Not attached. Check the box above to enable this MCP server for the agent version.</p>
+  {{end}}
+{{end}}
+
 {{define "endpoint_detail"}}
-<div class="config-detail">
+{{$domID := printf "endpoint-detail-%s" (cssID .Endpoint.ID)}}
+<div class="config-detail" id="{{$domID}}">
   <h2>{{.Endpoint.ID}}</h2>
   <p><code>{{.Endpoint.Method}} {{.Endpoint.Path}}</code></p>
 
@@ -234,6 +251,24 @@
       </ul>
     {{else}}
       <p class="muted">— (general-purpose tool; not bound to a specific skill)</p>
+    {{end}}
+  </div>
+
+  <div class="config-section">
+    <h3>Backend</h3>
+    {{$currentBackend := index .EndpointBackends .Endpoint.ID}}
+    <select name="backend_id"
+            hx-post="/agent_versions/{{.VersionID}}/endpoints/{{.Endpoint.ID}}/backend"
+            hx-trigger="change"
+            hx-target="#{{$domID}}"
+            hx-swap="outerHTML">
+      <option value="">— not connected —</option>
+      {{range .AvailableBackends}}
+        <option value="{{.ID}}" {{if eq .ID $currentBackend}}selected{{end}}>{{.Name}}</option>
+      {{end}}
+    </select>
+    {{if not $currentBackend}}
+      <p class="form-hint">Not connected — agent will not be able to call this endpoint.</p>
     {{end}}
   </div>
 

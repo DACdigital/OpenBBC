@@ -17,6 +17,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// ToolHandlerBuilder constructs the Composite handler for one chat session.
+// The bundle is passed in raw so the builder can derive endpoint definitions
+// without a separate bundle-parse step in the orchestrator.
+type ToolHandlerBuilder interface {
+	Build(ctx context.Context, versionID string, bundle json.RawMessage) (tools.Handler, error)
+}
+
 // AgentReader is the narrow agent-side interface the orchestrator needs.
 // The orchestrator is version-centric: it loads a version row (which carries
 // the bundle) by its id. In BO chat the id is a chat_sessions.agent_version_id;
@@ -40,11 +47,11 @@ type ChatStore interface {
 }
 
 type Orchestrator struct {
-	agents AgentReader
-	chats  ChatStore
-	llm    llm.LLM
-	tools  tools.Handler
-	logger *slog.Logger
+	agents  AgentReader
+	chats   ChatStore
+	llm     llm.LLM
+	builder ToolHandlerBuilder
+	logger  *slog.Logger
 
 	// Tunables; set by NewAPI from config. Sensible defaults baked in.
 	Model         string
@@ -52,7 +59,7 @@ type Orchestrator struct {
 	MaxToolRounds int
 }
 
-func NewOrchestrator(agents AgentReader, chats ChatStore, l llm.LLM, t tools.Handler, logger *slog.Logger) *Orchestrator {
+func NewOrchestrator(agents AgentReader, chats ChatStore, l llm.LLM, b ToolHandlerBuilder, logger *slog.Logger) *Orchestrator {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -60,7 +67,7 @@ func NewOrchestrator(agents AgentReader, chats ChatStore, l llm.LLM, t tools.Han
 		agents:        agents,
 		chats:         chats,
 		llm:           l,
-		tools:         t,
+		builder:       b,
 		logger:        logger,
 		Model:         "claude-sonnet-4-6",
 		MaxTokens:     4096,
@@ -129,7 +136,12 @@ func (o *Orchestrator) Turn(
 		return failTurn("bundle_parse", "parse_bundle", err)
 	}
 
-	toolDefs, err := o.tools.Tools(version.Bundle)
+	toolHandler, err := o.builder.Build(ctx, version.ID, version.Bundle)
+	if err != nil {
+		return failTurn("tool_handler_init", "build_tool_handler", err)
+	}
+
+	toolDefs, err := toolHandler.Tools(version.Bundle)
 	if err != nil {
 		return failTurn("tools_init", "build_tool_defs", err)
 	}
@@ -278,7 +290,7 @@ func (o *Orchestrator) Turn(
 		// Execute the pending tools and build a tool-role message.
 		toolBlocks := make([]llm.Block, 0, len(pendingToolUses))
 		for _, tu := range pendingToolUses {
-			res, err := o.tools.Call(ctx, version.Bundle, tools.Call{
+			res, err := toolHandler.Call(ctx, version.Bundle, tools.Call{
 				ID:    tu.ID,
 				Name:  tu.Name,
 				Input: tu.Input,

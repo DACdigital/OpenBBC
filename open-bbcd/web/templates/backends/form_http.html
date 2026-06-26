@@ -1,0 +1,40 @@
+{{define "content"}}
+<div class="page-header">
+  <a href="/mcp" class="back-link">← Back to backends</a>
+  <h1>New HTTP backend</h1>
+</div>
+
+<form method="POST" action="/mcp" class="config-form">
+  <input type="hidden" name="kind" value="http_endpoint">
+
+  <label>
+    Name
+    <input type="text" name="name" required maxlength="100" placeholder="api / payments / billing">
+  </label>
+
+  <label>
+    Base URL
+    <input type="url" name="base_url" required placeholder="https://api.example.com">
+  </label>
+
+  <fieldset>
+    <legend>Default headers</legend>
+    <p class="form-hint">Headers always sent with every request. Per-session overrides win; live FE headers win over defaults.</p>
+    <div class="kv-rows" data-prefix="default_headers">
+      <div class="kv-row">
+        <input type="text" name="default_headers_key" placeholder="Header name">
+        <input type="text" name="default_headers_value" placeholder="Header value">
+      </div>
+      <div class="kv-row">
+        <input type="text" name="default_headers_key" placeholder="Header name">
+        <input type="text" name="default_headers_value" placeholder="Header value">
+      </div>
+    </div>
+  </fieldset>
+
+  <div class="form-actions">
+    <button type="submit" class="btn-primary">Create backend</button>
+    <a href="/mcp" class="btn-secondary">Cancel</a>
+  </div>
+</form>
+{{end}}

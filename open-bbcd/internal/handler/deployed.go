@@ -9,6 +9,7 @@ import (
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -256,7 +257,19 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 
-	if err := h.orch.Turn(r.Context(), versionID, sessionID, input, sink); err != nil {
+	// Build ctx: stash live FE headers, then parse routing envelope.
+	turnCtx := tools.WithForwardedHeaders(r.Context(), r.Header)
+	if raw := r.Header.Get(tools.RoutingEnvelopeHeader); raw != "" {
+		routing, err := tools.ParseBackendHeaderRouting(raw)
+		if err != nil {
+			h.logger.Warn("malformed backend header routing envelope; ignoring",
+				slog.String("err", err.Error()))
+		} else {
+			turnCtx = tools.WithBackendHeaderRouting(turnCtx, routing)
+		}
+	}
+
+	if err := h.orch.Turn(turnCtx, versionID, sessionID, input, sink); err != nil {
 		h.logger.Error("deployed turn failed",
 			slog.String("agent_id", agentID),
 			slog.String("version_id", versionID),

@@ -29,6 +29,7 @@ def render_main_prompt_scaffold(config: FlowMapConfig) -> str:
         external_skills=[s for s in config.skills if s.external],
         included_flows=[f for f in config.flows if f.included],
         general_purpose_endpoints=general_purpose_endpoints,
+        attached_mcps=config.attached_mcps,
     )
 
 

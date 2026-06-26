@@ -1,0 +1,274 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+)
+
+func TestHTTPBackend_Tools_SkipsUnmappedEndpoints(t *testing.T) {
+	be := newHTTPTest(t, "https://api.example.com",
+		[]HTTPEndpointDef{
+			{ID: "orders.create", Name: "orders_create", Method: "POST", Path: "/api/orders"},
+		},
+		map[string]string{"orders.create": "backend-id-1"},
+		"backend-id-1",
+	)
+	defs, err := be.Tools(context.Background())
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	if len(defs) != 1 || defs[0].Name != "orders_create" {
+		t.Fatalf("want 1 tool orders_create, got %+v", defs)
+	}
+}
+
+func TestHTTPBackend_Call_SubstitutesPathParams_AndForwardsHeaders(t *testing.T) {
+	var gotURL string
+	var gotHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		gotHeader = r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{
+		ID: "orders.show", Name: "orders_show", Method: "GET", Path: "/api/orders/{id}",
+		PathParams: []ParamSpec{{Name: "id", Type: "string", Required: true}},
+	}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"orders.show": "b1"}, "b1")
+	be.cfg.DefaultHeaders = map[string]string{"Authorization": "Bearer default"}
+
+	res, err := be.Call(context.Background(), "orders_show", json.RawMessage(`{"id":"42"}`))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("got error: %s", string(res.Output))
+	}
+	if gotURL != "/api/orders/42" {
+		t.Fatalf("URL %s", gotURL)
+	}
+	if gotHeader != "Bearer default" {
+		t.Fatalf("Auth %s", gotHeader)
+	}
+}
+
+func TestHTTPBackend_Call_LiveFEHeadersOverrideDefaults(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+	be.cfg.DefaultHeaders = map[string]string{"Authorization": "Bearer default"}
+
+	// Opt "test" backend into _all so live FE headers are forwarded.
+	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
+	ctx = WithBackendHeaderRouting(ctx, BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{
+			"test": {All: true},
+		},
+	})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotAuth != "Bearer LIVE" {
+		t.Fatalf("want LIVE, got %s", gotAuth)
+	}
+}
+
+func TestHTTPBackend_Call_Returns4xxAsIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		_, _ = io.WriteString(w, `{"detail":"not found"}`)
+	}))
+	defer srv.Close()
+	ep := HTTPEndpointDef{ID: "x", Name: "x", Method: "GET", Path: "/x"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"x": "b1"}, "b1")
+	res, _ := be.Call(context.Background(), "x", json.RawMessage(`{}`))
+	if !res.IsError {
+		t.Fatal("expected IsError")
+	}
+}
+
+// newHTTPTest is a test helper that constructs an HTTPEndpointBackend
+// with a literal endpoint list + endpoint→backend mapping.
+func newHTTPTest(t *testing.T, baseURL string, endpoints []HTTPEndpointDef, mapping map[string]string, selfID string) *HTTPEndpointBackend {
+	return &HTTPEndpointBackend{
+		name:      "test",
+		id:        selfID,
+		cfg:       HTTPBackendCfg{BaseURL: baseURL},
+		endpoints: endpoints,
+		mapping:   mapping,
+		client:    &http.Client{},
+	}
+}
+
+func TestHTTPBackend_Call_MissingOptionalPathParam_DoesNotInjectNilString(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(404)  // backend will 404 on the unsubstituted path
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{
+		ID: "orders.show", Name: "orders_show", Method: "GET",
+		Path: "/api/orders/{id}",
+		PathParams: []ParamSpec{{Name: "id", Type: "string", Required: false}},
+	}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"orders.show": "b1"}, "b1")
+
+	// Caller omits the id arg. The placeholder should remain as the literal
+	// {id} (not "<nil>") so the failure is debuggable, not silent.
+	_, _ = be.Call(context.Background(), "orders_show", json.RawMessage(`{}`))
+	if strings.Contains(gotPath, "<nil>") {
+		t.Fatalf("optional missing path param injected <nil>: got %s", gotPath)
+	}
+	if !strings.Contains(gotPath, "{id}") {
+		t.Fatalf("expected {id} placeholder to remain in path, got %s", gotPath)
+	}
+}
+
+func TestHTTPBackend_Call_SessionOverrideWinsOverLiveAndDefault(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+	be.cfg.DefaultHeaders = map[string]string{"Authorization": "Bearer default"}
+
+	// Opt "test" into _all so live FE headers are forwarded, then session
+	// override must win over everything.
+	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
+	ctx = WithBackendHeaderRouting(ctx, BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{
+			"test": {All: true},
+		},
+	})
+	ctx = WithSessionHeaderOverrides(ctx, SessionHeaderOverrides{
+		"b1": {"Authorization": "Bearer SESSION"},
+	})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotAuth != "Bearer SESSION" {
+		t.Fatalf("want SESSION, got %s", gotAuth)
+	}
+}
+
+func TestHTTPBackend_Call_NoEnvelope_DoesNotForwardLiveHeaders(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+
+	// Live FE has Authorization but envelope is absent → must not be forwarded.
+	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotAuth != "" {
+		t.Fatalf("Authorization leaked without envelope: %s", gotAuth)
+	}
+}
+
+func TestHTTPBackend_Call_EnvelopeExplicitHeaderForwarded(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+	// newHTTPTest sets be.name = "test"
+
+	ctx := WithBackendHeaderRouting(context.Background(), BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{
+			"test": {Headers: map[string]string{"Authorization": "Bearer ROUTED"}},
+		},
+	})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotAuth != "Bearer ROUTED" {
+		t.Fatalf("want ROUTED, got %s", gotAuth)
+	}
+}
+
+func TestHTTPBackend_Call_EnvelopeNotMatched_NoLiveHeaders(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+
+	// Envelope addresses a different backend; "test" gets nothing.
+	ctx := WithForwardedHeaders(context.Background(), http.Header{"Authorization": {"Bearer LIVE"}})
+	ctx = WithBackendHeaderRouting(ctx, BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{"other": {All: true}},
+	})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotAuth != "" {
+		t.Fatalf("Authorization leaked despite no envelope match: %s", gotAuth)
+	}
+}
+
+func TestHTTPBackend_Call_RoutingEnvelopeHeaderExcludedFromAllForwarding(t *testing.T) {
+	var gotEnvHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEnvHeader = r.Header.Get(RoutingEnvelopeHeader)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	ep := HTTPEndpointDef{ID: "ping", Name: "ping", Method: "GET", Path: "/ping"}
+	be := newHTTPTest(t, srv.URL, []HTTPEndpointDef{ep},
+		map[string]string{"ping": "b1"}, "b1")
+
+	// Live FE request includes the routing header itself — it must NOT be
+	// forwarded to the backend even with _all: true.
+	ctx := WithForwardedHeaders(context.Background(), http.Header{
+		RoutingEnvelopeHeader: {"somebase64value"},
+		"X-Other":             {"pass-me-through"},
+	})
+	ctx = WithBackendHeaderRouting(ctx, BackendHeaderRouting{
+		ByName: map[string]BackendRoutingBlock{
+			"test": {All: true},
+		},
+	})
+	_, _ = be.Call(ctx, "ping", json.RawMessage(`{}`))
+	if gotEnvHeader != "" {
+		t.Fatalf("routing envelope header must not be forwarded to backends, got: %s", gotEnvHeader)
+	}
+}
+
+// Compile-time check: the package satisfies the runtime interface.
+var _ Backend = (*HTTPEndpointBackend)(nil)
+var _ llm.ToolDef = llm.ToolDef{}

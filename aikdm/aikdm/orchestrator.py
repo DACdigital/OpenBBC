@@ -296,6 +296,7 @@ def _assemble_bundle(
         first_line = e.prose_md.splitlines()[0] if e.prose_md else ""
         tools.append(
             BundleTool(
+                id=e.id,
                 name=e.id,
                 description=first_line,
                 method=e.method,
@@ -303,6 +304,10 @@ def _assemble_bundle(
                 auth=e.auth,
                 confidence=e.confidence,
                 source=e.source,
+                path_params=e.path_params,
+                query_params=e.query_params,
+                body_shape=e.body_shape,
+                response_shape=e.response_shape,
             )
         )
 

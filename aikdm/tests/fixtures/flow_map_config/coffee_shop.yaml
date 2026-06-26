@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 name: coffee_shop_agent
 scope: "Help customers order coffee and track loyalty rewards."
 should_do: "Take orders, modify orders, look up rewards balance."
@@ -90,3 +90,4 @@ flows:
     workflow:
       mermaid: "graph TD; A-->B"
     prose_md: "Standard order placement flow."
+attached_mcps: []

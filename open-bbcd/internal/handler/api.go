@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -82,17 +83,26 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	maxUploadBytes := int64(cfg.Discovery.MaxUploadMB) << 20
 	wizardHandler := NewWizardHandler(agentRepo, &schema, store, maxUploadBytes, logger)
 
-	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, &schema, web.Assets)
-	if err != nil {
-		fatal("init configurator handler", err)
-	}
-
 	agentHandler := NewAgentHandler(agentRepo)
 	resourceHandler := NewResourceHandler(resourceRepo)
 
 	chatRepo := repository.NewChatRepository(db)
 	llmClient := anthropic.New(cfg.Anthropic)
-	toolHandler := tools.NewMockHandler()
+	backendRepo := repository.NewToolBackendRepository(db)
+	wiringRepo := repository.NewVersionWiringRepository(db)
+
+	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, backendRepo, wiringRepo, &schema, web.Assets)
+	if err != nil {
+		fatal("init configurator handler", err)
+	}
+
+	backendsHandler, err := NewBackendsHandler(backendRepo, wiringRepo, web.Assets)
+	if err != nil {
+		fatal("init backends handler", err)
+	}
+	// Both BO and deployed orchestrators share the same builder: Builder is
+	// stateless (all DB reads happen inside Build, scoped by versionID).
+	builder := tools.NewBuilder(&toolBackendStoreAdapter{backend: backendRepo, wiring: wiringRepo})
 
 	var transportFactory transport.Factory
 	switch cfg.Chat.Transport {
@@ -104,24 +114,24 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("unknown chat transport", fmt.Errorf("%q", cfg.Chat.Transport))
 	}
 
-	orchestrator := chat.NewOrchestrator(versionRepo, chatRepo, llmClient, toolHandler, logger)
+	orchestrator := chat.NewOrchestrator(versionRepo, chatRepo, llmClient, builder, logger)
 	orchestrator.Model = cfg.Anthropic.DefaultModel
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 
-	chatHandler, err := NewChatHandler(versionRepo, chatRepo, orchestrator, transportFactory, web.Assets, logger)
+	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, wiringRepo, orchestrator, transportFactory, web.Assets, logger)
 	if err != nil {
 		fatal("init chat handler", err)
 	}
 
 	deployedChatStore := chat.NewDeployedChatStore(deployedRepo)
-	deployedOrchestrator := chat.NewOrchestrator(versionRepo, deployedChatStore, llmClient, toolHandler, logger)
+	deployedOrchestrator := chat.NewOrchestrator(versionRepo, deployedChatStore, llmClient, builder, logger)
 	deployedOrchestrator.Model = cfg.Anthropic.DefaultModel
 	deployedOrchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 
 	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger)
-	deployHandler := NewDeployHandler(agentRepo, versionRepo)
+	deployHandler := NewDeployHandler(agentRepo, versionRepo, wiringRepo)
 
 	mux := http.NewServeMux()
 
@@ -150,6 +160,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/{skillId}", configuratorHandler.Skills)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/endpoints", configuratorHandler.Endpoints)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/endpoints/{endpointID}", configuratorHandler.Endpoints)
+	mux.HandleFunc("POST /agent_versions/{version_id}/endpoints/{endpointID}/backend", configuratorHandler.SetEndpointBackend)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/inputs", configuratorHandler.Inputs)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/prompts", configuratorHandler.Prompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)
@@ -161,7 +172,19 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/finalize", configuratorHandler.FinalizeConfirm)
 	mux.HandleFunc("POST /agent_versions/{version_id}/finalize", configuratorHandler.Finalize)
 	mux.HandleFunc("GET /agent_versions/{version_id}/config.yaml", configuratorHandler.DownloadYAML)
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/mcp", configuratorHandler.MCPSubtab)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/toggle", configuratorHandler.ToggleMCPBackend)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/note", configuratorHandler.UpdateMCPNote)
 	RegisterConfiguratorRedirects(mux)
+
+	// MCP / tool backends CRUD
+	mux.HandleFunc("GET /mcp", backendsHandler.List)
+	mux.HandleFunc("GET /mcp/new", backendsHandler.New)
+	mux.HandleFunc("POST /mcp", backendsHandler.Create)
+	mux.HandleFunc("POST /mcp/test", backendsHandler.TestConnection)
+	mux.HandleFunc("GET /mcp/{id}", backendsHandler.Edit)
+	mux.HandleFunc("POST /mcp/{id}", backendsHandler.Update)
+	mux.HandleFunc("POST /mcp/{id}/delete", backendsHandler.Delete)
 
 	// Per-version BO chat
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/sessions", chatHandler.NewSession)
@@ -169,6 +192,8 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}", chatHandler.ChatView)
 	mux.HandleFunc("PATCH /agent_versions/{version_id}/chat/{session_id}/title", chatHandler.UpdateSessionTitle)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/turn", chatHandler.Turn)
+	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.ShowHeaderOverridesModal)
+	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.UpdateHeaderOverrides)
 
 	// Per-agent deploy/undeploy + confirm modals
 	mux.HandleFunc("POST /agents/{agent_id}/deploy", deployHandler.Deploy)
@@ -202,4 +227,35 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 
 	return RequestLogger(logger, mux)
+}
+
+// toolBackendStoreAdapter implements tools.BackendStore by delegating to the
+// two repo types. Lives here to keep the tools package free of handler deps.
+type toolBackendStoreAdapter struct {
+	backend *repository.ToolBackendRepository
+	wiring  *repository.VersionWiringRepository
+}
+
+func (a *toolBackendStoreAdapter) GetBackend(ctx context.Context, id string) (string, string, json.RawMessage, error) {
+	be, err := a.backend.Get(ctx, id)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return string(be.Kind), be.Name, be.Config, nil
+}
+
+func (a *toolBackendStoreAdapter) EndpointBackends(ctx context.Context, versionID string) (map[string]string, error) {
+	return a.wiring.ListEndpointBackends(ctx, versionID)
+}
+
+func (a *toolBackendStoreAdapter) MCPAttachments(ctx context.Context, versionID string) (map[string]string, error) {
+	atts, err := a.wiring.ListMCPAttachments(ctx, versionID)
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]string{}
+	for _, att := range atts {
+		m[att.BackendID] = att.Note
+	}
+	return m, nil
 }

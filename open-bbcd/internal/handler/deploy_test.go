@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -59,8 +60,22 @@ func (s *stubDeployVersionRepo) CurrentDeployedID(ctx context.Context, agentID s
 	return s.currentID, s.currentErr
 }
 
-func newDeployMux(agents DeployAgentRepository, versions DeployVersionRepository) *http.ServeMux {
-	h := NewDeployHandler(agents, versions)
+type stubDeployWiringRepo struct {
+	mapping map[string]string
+}
+
+func (s *stubDeployWiringRepo) ListEndpointBackends(ctx context.Context, versionID string) (map[string]string, error) {
+	if s.mapping == nil {
+		return map[string]string{}, nil
+	}
+	return s.mapping, nil
+}
+
+func newDeployMux(agents DeployAgentRepository, versions DeployVersionRepository, wiring DeployWiringRepo) *http.ServeMux {
+	if wiring == nil {
+		wiring = &stubDeployWiringRepo{}
+	}
+	h := NewDeployHandler(agents, versions, wiring)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /agents/{agent_id}/deploy", h.Deploy)
 	mux.HandleFunc("POST /agents/{agent_id}/undeploy", h.Undeploy)
@@ -69,10 +84,12 @@ func newDeployMux(agents DeployAgentRepository, versions DeployVersionRepository
 
 func TestDeployHandler_HappyPath(t *testing.T) {
 	agent := &types.Agent{ID: "a1", Name: "test"}
+	// No bundle — validation trivially passes (empty bundle early-return).
 	version := &types.AgentVersion{ID: "v1", AgentID: "a1", Status: "READY"}
 	mux := newDeployMux(
 		&stubDeployAgentRepo{agent: agent},
 		&stubDeployVersionRepo{version: version},
+		nil, // empty wiring stub — no endpoints to validate
 	)
 	body, _ := json.Marshal(deployBody{VersionID: "v1"})
 	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader(body))
@@ -89,7 +106,7 @@ func TestDeployHandler_HappyPath(t *testing.T) {
 }
 
 func TestDeployHandler_MissingVersionID_400(t *testing.T) {
-	mux := newDeployMux(&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}}, &stubDeployVersionRepo{})
+	mux := newDeployMux(&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}}, &stubDeployVersionRepo{}, nil)
 	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader([]byte(`{}`)))
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -100,7 +117,7 @@ func TestDeployHandler_MissingVersionID_400(t *testing.T) {
 
 func TestDeployHandler_WrongAgent_404(t *testing.T) {
 	version := &types.AgentVersion{ID: "v1", AgentID: "a2", Status: "READY"} // different agent
-	mux := newDeployMux(&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}}, &stubDeployVersionRepo{version: version})
+	mux := newDeployMux(&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}}, &stubDeployVersionRepo{version: version}, nil)
 	body, _ := json.Marshal(deployBody{VersionID: "v1"})
 	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
@@ -115,6 +132,7 @@ func TestDeployHandler_NotDeployable_409(t *testing.T) {
 	mux := newDeployMux(
 		&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}},
 		&stubDeployVersionRepo{version: version, deployErr: types.ErrAgentNotDeployable},
+		nil,
 	)
 	body, _ := json.Marshal(deployBody{VersionID: "v1"})
 	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader(body))
@@ -131,6 +149,7 @@ func TestDeployHandler_ReportsPreviousDeployed(t *testing.T) {
 	mux := newDeployMux(
 		&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}},
 		&stubDeployVersionRepo{version: version, prev: &prev},
+		nil,
 	)
 	body, _ := json.Marshal(deployBody{VersionID: "v2"})
 	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader(body))
@@ -149,6 +168,7 @@ func TestUndeployHandler_HappyPath(t *testing.T) {
 	mux := newDeployMux(
 		&stubDeployAgentRepo{agent: agent},
 		&stubDeployVersionRepo{version: version, currentID: "v1"},
+		nil,
 	)
 	req := httptest.NewRequest("POST", "/agents/a1/undeploy", nil)
 	rr := httptest.NewRecorder()
@@ -162,11 +182,74 @@ func TestUndeployHandler_NoneDeployed_409(t *testing.T) {
 	mux := newDeployMux(
 		&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}},
 		&stubDeployVersionRepo{currentID: ""}, // none deployed
+		nil,
 	)
 	req := httptest.NewRequest("POST", "/agents/a1/undeploy", nil)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("got %d", rr.Code)
+	}
+}
+
+func TestDeployHandler_BlocksWhenEndpointsUnmapped(t *testing.T) {
+	bundleJSON := `{"tools":[{"id":"orders.create"},{"id":"orders.list"}]}`
+	agentRepo := &stubDeployAgentRepo{
+		agent: &types.Agent{ID: "a1", Name: "test"},
+	}
+	versionRepo := &stubDeployVersionRepo{
+		version: &types.AgentVersion{
+			ID:      "v1",
+			AgentID: "a1",
+			Status:  string(types.AgentStatusReady),
+			Bundle:  json.RawMessage(bundleJSON),
+		},
+	}
+	wiring := &stubDeployWiringRepo{
+		mapping: map[string]string{
+			"orders.create": "backend-1",
+			// orders.list is missing → deploy must fail
+		},
+	}
+	mux := newDeployMux(agentRepo, versionRepo, wiring)
+
+	body, _ := json.Marshal(map[string]string{"version_id": "v1"})
+	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "orders.list") {
+		t.Fatalf("error should name the missing endpoint, got %s", w.Body.String())
+	}
+}
+
+func TestDeployHandler_AllowsWhenAllEndpointsMapped(t *testing.T) {
+	bundleJSON := `{"tools":[{"id":"orders.create"}]}`
+	agentRepo := &stubDeployAgentRepo{
+		agent: &types.Agent{ID: "a1", Name: "test"},
+	}
+	versionRepo := &stubDeployVersionRepo{
+		version: &types.AgentVersion{
+			ID:      "v1",
+			AgentID: "a1",
+			Status:  string(types.AgentStatusReady),
+			Bundle:  json.RawMessage(bundleJSON),
+		},
+	}
+	wiring := &stubDeployWiringRepo{
+		mapping: map[string]string{"orders.create": "backend-1"},
+	}
+	mux := newDeployMux(agentRepo, versionRepo, wiring)
+
+	body, _ := json.Marshal(map[string]string{"version_id": "v1"})
+	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
 	}
 }

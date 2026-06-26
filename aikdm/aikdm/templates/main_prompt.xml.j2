@@ -39,6 +39,16 @@
 {%- endfor %}
 </external_actions>
 {%- endif %}
+{%- if attached_mcps %}
+<external_mcps>
+  <!-- Operator-supplied guidance for the MCP servers attached to this agent
+       version. Use these as a hint for when to reach for each server's
+       tools (which arrive at runtime via tools/list — not enumerated here). -->
+{%- for m in attached_mcps %}
+  - {{ m.name }} ({{ m.url }}){% if m.note %}: {{ m.note }}{% endif %}
+{%- endfor %}
+</external_mcps>
+{%- endif %}
 <tools>
   <!-- LLM: list ONLY general-purpose tools - endpoints whose used_by_skills is empty
        in the input. Tools that belong to a skill are described inside that skill,

@@ -289,7 +289,7 @@
     const details = document.createElement('details');
     details.className = 'tool-call';
     const summary = document.createElement('summary');
-    summary.textContent = `▸ ${name}(...)`;
+    summary.textContent = `▸ ${name}(…)`;
     const args = document.createElement('pre');
     args.className = 'args';
     details.appendChild(summary);
@@ -308,9 +308,9 @@
   function finishToolCall(id) {
     const el = toolCallElements.get(id);
     if (!el) return;
-    let short = el.args.textContent;
-    if (short.length > 60) short = short.slice(0, 60) + '...';
-    el.summary.textContent = `▸ ${el.name}(${short})`;
+    // Hide args in summary; user expands details to inspect. Matches the
+    // persisted-view rendering in chat/view.html.
+    el.summary.textContent = `▸ ${el.name}(…)`;
   }
 
   function appendToolResult(id, content) {

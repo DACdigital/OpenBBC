@@ -39,7 +39,9 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrBundleAlreadySet),
 		errors.Is(err, types.ErrAgentNotRunnable),
 		errors.Is(err, types.ErrAgentNotDeployable),
-		errors.Is(err, types.ErrAgentNotDeployed):
+		errors.Is(err, types.ErrAgentNotDeployed),
+		errors.Is(err, types.ErrToolBackendInUse),
+		errors.Is(err, types.ErrUnmappedEndpoints):
 		status = http.StatusConflict
 	case errors.Is(err, types.ErrSessionAgentMismatch):
 		status = http.StatusForbidden
@@ -53,7 +55,10 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrCapabilityReadOnly),
 		errors.Is(err, types.ErrInvalidSkillRole),
 		errors.Is(err, types.ErrCustomSkillNameRequired),
-		errors.Is(err, types.ErrUserIDRequired):
+		errors.Is(err, types.ErrUserIDRequired),
+		errors.Is(err, types.ErrToolBackendNameRequired),
+		errors.Is(err, types.ErrToolBackendKindInvalid),
+		errors.Is(err, types.ErrToolBackendNameTaken):
 		status = http.StatusBadRequest
 	case errors.Is(err, types.ErrLLMUnavailable),
 		errors.Is(err, types.ErrToolHandlerFailed):

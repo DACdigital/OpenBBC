@@ -75,9 +75,10 @@ func (s *stubTurnRunner) Turn(ctx context.Context, agentID, sessionID string, in
 // templates are NOT exercised by the Turn endpoint, so empty bodies are fine.
 func emptyTemplateFS() fs.FS {
 	return fstest.MapFS{
-		"templates/layout.html":        {Data: []byte(`{{define "layout"}}{{end}}`)},
-		"templates/chat/sessions.html": {Data: []byte(`{{define "content"}}{{end}}`)},
-		"templates/chat/view.html":     {Data: []byte(`{{define "content"}}{{end}}`)},
+		"templates/layout.html":             {Data: []byte(`{{define "layout"}}{{end}}`)},
+		"templates/chat/sessions.html":      {Data: []byte(`{{define "content"}}{{end}}`)},
+		"templates/chat/view.html":          {Data: []byte(`{{define "content"}}{{end}}`)},
+		"templates/chat/headers_modal.html": {Data: []byte(`{{define "headers_modal"}}{{end}}`)},
 	}
 }
 
@@ -89,6 +90,8 @@ func newTestChatHandler(t *testing.T, runner *stubTurnRunner) *ChatHandler {
 			agent:   &types.Agent{ID: "a", Name: "test"},
 		},
 		&stubChatStore{},
+		nil, // headerOvr — not exercised in basic turn tests
+		nil, // backends — not exercised in basic turn tests
 		runner,
 		jsonl.NewFactory(),
 		emptyTemplateFS(),

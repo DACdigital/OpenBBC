@@ -8,6 +8,7 @@ import (
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -93,6 +94,18 @@ func (f *fakeLLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.E
 	}
 }
 
+// fakeBuilder wraps a fakeTools (or any tools.Handler) so existing tests can
+// satisfy the new ToolHandlerBuilder dependency without rewriting per-test
+// fixture setup.
+type fakeBuilder struct {
+	handler tools.Handler
+	err     error
+}
+
+func (f *fakeBuilder) Build(ctx context.Context, versionID string, bundle json.RawMessage) (tools.Handler, error) {
+	return f.handler, f.err
+}
+
 // fakeTools returns one canned tool def and logs all calls.
 type fakeTools struct {
 	callLog []tools.Call
@@ -114,3 +127,15 @@ func (f *fakeTools) Call(ctx context.Context, bundle json.RawMessage, c tools.Ca
 	f.results = f.results[1:]
 	return res, nil
 }
+
+// recordingSink collects all sent events (without writing them anywhere).
+type recordingSink struct {
+	events []transport.Event
+}
+
+func (r *recordingSink) Send(_ context.Context, e transport.Event) error {
+	r.events = append(r.events, e)
+	return nil
+}
+
+func (r *recordingSink) Close() error { return nil }

@@ -1,0 +1,55 @@
+{{define "content"}}
+<div class="page-header">
+  <h1>MCP / Tool Backends</h1>
+  <button type="button" class="btn-primary"
+          onclick="document.getElementById('new-backend-modal').style.display='flex'">+ New backend</button>
+</div>
+
+<div class="modal" id="new-backend-modal" style="display:none">
+  <div class="modal-content">
+    <h2>New backend</h2>
+    <p>Pick the kind of backend you want to create.</p>
+    <div class="backend-kind-choices">
+      <a href="/mcp/new?kind=http_endpoint" class="backend-kind-card">
+        <div class="backend-kind-name">HTTP</div>
+        <div class="backend-kind-desc">Wraps your existing REST endpoints as agent tools.</div>
+      </a>
+      <a href="/mcp/new?kind=mcp_client" class="backend-kind-card">
+        <div class="backend-kind-name">MCP</div>
+        <div class="backend-kind-desc">Connects to an external MCP server (Slack, GitHub, etc.).</div>
+      </a>
+    </div>
+    <div class="modal-actions">
+      <button type="button"
+              onclick="document.getElementById('new-backend-modal').style.display='none'">Cancel</button>
+    </div>
+  </div>
+</div>
+
+{{if .Rows}}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Kind</th>
+      <th>Endpoint / URL</th>
+      <th class="col-count">Used by</th>
+      <th class="col-date">Updated</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rows}}
+    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/mcp/{{.ID}}">
+      <td><a class="agent-link" href="/mcp/{{.ID}}">{{.Name}}</a></td>
+      <td><span class="badge badge-{{.Kind}}">{{.Kind}}</span></td>
+      <td>{{.PrimaryURL}}</td>
+      <td class="col-count">{{.UsageCount}}</td>
+      <td class="col-date">{{.UpdatedAt.Format "Jan 2, 2006"}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty-state">No backends configured yet. Create an HTTP backend to wire up your agent's endpoints.</p>
+{{end}}
+{{end}}

@@ -40,4 +40,14 @@ var (
 	// ErrUserIDRequired is returned by deployed-runtime endpoints when the
 	// integrator-supplied user_id is missing from the request.
 	ErrUserIDRequired = errors.New("deployed: user_id is required")
+
+	ErrToolBackendNameRequired = errors.New("tool backend name is required")
+	ErrToolBackendNameTaken    = errors.New("tool backend name already exists")
+	ErrToolBackendKindInvalid  = errors.New("tool backend kind must be http_endpoint or mcp_client")
+	ErrToolBackendInUse        = errors.New("tool backend is in use by one or more agent versions")
+
+	// ErrUnmappedEndpoints is returned when /deploy is called but the version's
+	// bundle contains tool endpoints that have no backend assigned in
+	// agent_version_endpoint_backend.
+	ErrUnmappedEndpoints = errors.New("agent has endpoints not mapped to a backend")
 )

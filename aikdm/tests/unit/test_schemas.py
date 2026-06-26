@@ -23,7 +23,7 @@ def test_flow_map_config_parses_canonical_fixture():
     data = yaml.safe_load(FIXTURE.read_text())
     config = FlowMapConfig.model_validate(data)
 
-    assert config.schema_version == 2
+    assert config.schema_version == 3
     assert config.name == "coffee_shop_agent"
     assert config.business_domain.startswith("Independent")
     assert len(config.endpoints) == 2
@@ -57,13 +57,13 @@ def test_flowmapconfig_rejects_v1():
         )
 
 
-def test_flowmapconfig_accepts_v2():
+def test_flowmapconfig_accepts_v3():
     cfg = FlowMapConfig(
-        schema_version=2,
+        schema_version=3,
         name="x",
         source=FlowMapSource(compiler_schema_version=2, generated_from_sha="x", app_name="x"),
     )
-    assert cfg.schema_version == 2
+    assert cfg.schema_version == 3
 
 
 def test_endpoint_minimal():
@@ -142,3 +142,53 @@ def test_bundle_round_trips_through_model_validate():
     )
     redumped = Bundle.model_validate(bundle.model_dump())
     assert redumped == bundle
+
+
+def test_bundle_tool_has_endpoint_schema_fields():
+    from aikdm.schemas import BundleTool
+    t = BundleTool(
+        id="orders.create",
+        name="orders_create",
+        description="Create an order",
+        method="POST",
+        path="/api/orders",
+        path_params=[],
+        query_params=[],
+        body_shape={"type": "object"},
+    )
+    assert t.id == "orders.create"
+    assert t.body_shape == {"type": "object"}
+    assert t.response_shape is None  # default
+
+
+def test_attached_mcps_round_trips():
+    from aikdm.schemas import FlowMapConfig, FlowMapSource, AttachedMCP
+    cfg = FlowMapConfig(
+        schema_version=3,
+        name="x",
+        source=FlowMapSource(compiler_schema_version=2, generated_from_sha="x", app_name="x"),
+        attached_mcps=[AttachedMCP(name="Slack", url="https://slack", note="use it")],
+    )
+    assert cfg.attached_mcps[0].note == "use it"
+    assert cfg.attached_mcps[0].url == "https://slack"
+
+
+def test_schema_version_3_required():
+    import pytest
+    from aikdm.schemas import FlowMapConfig, FlowMapSource
+    with pytest.raises(ValueError, match="schema_version 2 not supported"):
+        FlowMapConfig(
+            schema_version=2,
+            name="x",
+            source=FlowMapSource(compiler_schema_version=2, generated_from_sha="x", app_name="x"),
+        )
+
+
+def test_attached_mcps_defaults_empty():
+    from aikdm.schemas import FlowMapConfig, FlowMapSource
+    cfg = FlowMapConfig(
+        schema_version=3,
+        name="x",
+        source=FlowMapSource(compiler_schema_version=2, generated_from_sha="x", app_name="x"),
+    )
+    assert cfg.attached_mcps == []

@@ -1,5 +1,5 @@
 metadata:
-  config_schema_version: 2
+  config_schema_version: 3
   prompt_schema_version: v4
   model_generator: claude-haiku-4-5
   model_critic: claude-haiku-4-5
@@ -12,20 +12,33 @@ metadata:
     critic_out: 3
 main_prompt: <role>r</role>
 tools:
-  - name: orders.create
+  - id: orders.create
+    name: orders.create
     description: Create a new order with a list of line items.
     method: POST
     path: /api/orders
     auth: bearer
     confidence: high
     source: src/api/orders.ts:14
-  - name: rewards.get
+    path_params: []
+    query_params: []
+    body_shape: "{ items: Array<...> }"
+    response_shape: "Order"
+  - id: rewards.get
+    name: rewards.get
     description: Return the current loyalty points balance and tier for a customer.
     method: GET
     path: /api/rewards/{customer_id}
     auth: bearer
     confidence: high
     source: src/api/rewards.ts:8
+    path_params:
+      - name: customer_id
+        type: string
+        required: true
+    query_params: []
+    body_shape: null
+    response_shape: "{ points: number, tier: string }"
 skills:
   - name: place_order
     description: Guide the user through choosing items and placing an order.

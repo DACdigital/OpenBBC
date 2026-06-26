@@ -1,4 +1,9 @@
 {{define "tab_content"}}
+{{if gt .UnmappedCount 0}}
+<div class="config-banner config-banner-warning">
+  {{.UnmappedCount}} of {{len .Config.Endpoints}} endpoints not connected to a backend — agent won't be able to call them yet. Use the dropdown on each endpoint.
+</div>
+{{end}}
 <div class="config-banner">
   Endpoints are derived from the discovery snapshot and cannot be edited here. To change them, re-run discovery.
 </div>
@@ -13,7 +18,7 @@
   </aside>
   <main class="config-detail-pane">
     {{if .SelectedEndpoint}}
-      {{template "endpoint_detail" (dict "VersionID" .VersionID "Endpoint" .SelectedEndpoint)}}
+      {{template "endpoint_detail" (dict "VersionID" .VersionID "Endpoint" .SelectedEndpoint "AvailableBackends" .AvailableBackends "EndpointBackends" .EndpointBackends)}}
     {{else}}
       <p class="config-detail-empty">Select an endpoint on the left.</p>
     {{end}}
