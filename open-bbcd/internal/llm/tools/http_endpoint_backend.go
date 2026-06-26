@@ -28,10 +28,14 @@ type HTTPEndpointDef struct {
 	BodyShape   any
 }
 
+// HTTPBackendCfg mirrors types.HTTPBackendConfig at the runtime boundary.
+// Field tags MUST match the persisted JSONB shape (base_url, default_headers,
+// forwarded_headers) so json.Unmarshal in Builder.Build populates them from
+// the tool_backends.config column.
 type HTTPBackendCfg struct {
-	BaseURL          string
-	DefaultHeaders   map[string]string
-	ForwardedHeaders []string
+	BaseURL          string            `json:"base_url"`
+	DefaultHeaders   map[string]string `json:"default_headers,omitempty"`
+	ForwardedHeaders []string          `json:"forwarded_headers,omitempty"`
 }
 
 type HTTPEndpointBackend struct {
