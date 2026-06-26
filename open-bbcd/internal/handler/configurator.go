@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"html/template"
 	"io/fs"
 	"log/slog"
@@ -702,8 +701,9 @@ func (h *ConfiguratorHandler) mcpSubtabData(ctx context.Context, version *types.
 		"VersionID":      version.ID,
 		"AgentName":      agent.Name,
 		"AgentID":        agent.ID,
-		"Tab":            "architecture",
-		"SubTab":         "mcp",
+		"AgentStatus":    version.Status,
+		"ReadOnly":       version.Status != "INITIALIZING",
+		"Tab":            "mcp",
 		"Active":         "agents",
 		"AllMCPBackends": allBackends,
 		"Attachments":    attMap,
@@ -740,43 +740,68 @@ func (h *ConfiguratorHandler) ToggleMCPBackend(w http.ResponseWriter, r *http.Re
 	h.renderMCPRowFragment(w, r.Context(), vid, bid)
 }
 
-// UpdateMCPNote updates the guidance note for an attached MCP backend.
-// Returns the re-rendered mcp_row_detail partial with a transient
-// "Saved ✓" indicator so the user gets explicit feedback.
-func (h *ConfiguratorHandler) UpdateMCPNote(w http.ResponseWriter, r *http.Request) {
-	vid := r.PathValue("version_id")
-	bid := r.PathValue("backendID")
+// UpdateAllMCPNotes processes the single bulk form on the MCP tab — one
+// textarea per currently-attached backend, all submitted together. Form
+// fields are named note[<backend_id>]. We upsert only currently-attached
+// rows (silently ignore note[*] entries whose backend isn't attached) so a
+// stale form can't accidentally re-attach a detached backend.
+//
+// Re-renders the whole MCP form via htmx outerHTML swap with Saved=true so
+// the user sees a single "Saved ✓" pill next to the Save button.
+func (h *ConfiguratorHandler) UpdateAllMCPNotes(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
 	if err := r.ParseForm(); err != nil {
-		Error(w, err)
+		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
-	note := r.FormValue("note")
-
 	if h.wiring == nil {
 		http.Error(w, "wiring repo not configured", http.StatusInternalServerError)
 		return
 	}
 
-	// AttachMCP upserts — re-attaching with the new note updates it.
-	if err := h.wiring.AttachMCP(r.Context(), vid, bid, note); err != nil {
-		Error(w, err)
-		return
-	}
-
-	// Re-render the form with Saved=true so the indicator shows up. The
-	// indicator is a one-shot: any subsequent action (further edit, page
-	// reload) re-renders without the flag.
-	be, err := h.backends.Get(r.Context(), bid)
+	version, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	_ = h.mcpTmpl.ExecuteTemplate(w, "mcp_row_detail", map[string]any{
-		"VersionID":  vid,
-		"Backend":    be,
-		"Attachment": &repository.MCPAttachment{BackendID: bid, Note: note},
-		"Saved":      true,
-	})
+
+	// Pull the current attachment set — we only update notes for backends
+	// actually attached. The form may carry stale fields for backends the
+	// user just unchecked via the htmx toggle.
+	atts, err := h.wiring.ListMCPAttachments(r.Context(), versionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	attached := map[string]bool{}
+	for _, a := range atts {
+		attached[a.BackendID] = true
+	}
+
+	const prefix = "note["
+	for key, vals := range r.Form {
+		if !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, "]") {
+			continue
+		}
+		bid := key[len(prefix) : len(key)-1]
+		if !attached[bid] || len(vals) == 0 {
+			continue
+		}
+		if err := h.wiring.AttachMCP(r.Context(), versionID, bid, vals[0]); err != nil {
+			Error(w, err)
+			return
+		}
+	}
+
+	data, err := h.mcpSubtabData(r.Context(), version, agent)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	data["Saved"] = true
+	// Re-render just the form (tab_content), not the layout — htmx swap
+	// is outerHTML on the form element.
+	_ = h.mcpTmpl.ExecuteTemplate(w, "tab_content", data)
 }
 
 // renderMCPRowFragment renders just the #mcp-row-{bid} outer div for htmx
@@ -805,14 +830,21 @@ func (h *ConfiguratorHandler) renderMCPRowFragment(w http.ResponseWriter, ctx co
 		}
 	}
 
+	// Resolve PrimaryURL for the header — same projection mcpSubtabData uses.
+	var primaryURL string
+	if be.Kind == types.ToolBackendKindMCPClient {
+		var cfg types.MCPBackendConfig
+		_ = json.Unmarshal(be.Config, &cfg)
+		primaryURL = cfg.URL
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="mcp-row-%s" class="config-mcp-detail">`, html.EscapeString(bid))
-	_ = h.mcpTmpl.ExecuteTemplate(w, "mcp_row_detail", map[string]any{
+	_ = h.mcpTmpl.ExecuteTemplate(w, "mcp_card", map[string]any{
 		"VersionID":  vid,
 		"Backend":    be,
 		"Attachment": att,
+		"PrimaryURL": primaryURL,
 	})
-	fmt.Fprint(w, `</div>`)
 }
 
 // tplDict builds a map[string]any from alternating key/value template args.

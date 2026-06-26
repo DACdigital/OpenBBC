@@ -212,22 +212,35 @@
 
 {{define "mcp_row_detail"}}
   {{if .Attachment}}
-    <form class="config-mcp-note"
-          hx-post="/agent_versions/{{.VersionID}}/architecture/mcp/{{.Backend.ID}}/note"
-          hx-swap="outerHTML"
-          hx-target="this">
-      <label>
-        Guidance note (used by aikdm in main prompt)
-        <textarea name="note" rows="3" placeholder="e.g. Use Slack for escalations when the user reports an issue they want a human to follow up on.">{{.Attachment.Note}}</textarea>
-      </label>
-      <div class="config-mcp-note-actions">
-        <button type="submit" class="btn-secondary">Save</button>
-        {{if .Saved}}<span class="config-mcp-note-saved">Saved ✓</span>{{end}}
-      </div>
-    </form>
+    <div class="config-mcp-note">
+      <label class="config-mcp-note-label" for="note-{{.Backend.ID}}">Guidance note (used by aikdm in main prompt)</label>
+      <textarea id="note-{{.Backend.ID}}"
+                name="note[{{.Backend.ID}}]"
+                rows="3"
+                placeholder="e.g. Use Slack for escalations when the user reports an issue they want a human to follow up on.">{{.Attachment.Note}}</textarea>
+    </div>
   {{else}}
-    <p class="form-hint muted">Not attached. Check the box above to enable this MCP server for the agent version.</p>
+    <p class="config-mcp-detached muted">Not attached. Check the box above to enable this MCP server for the agent version.</p>
   {{end}}
+{{end}}
+
+{{define "mcp_card"}}
+{{$bid := .Backend.ID}}
+{{$attached := ne .Attachment nil}}
+<div class="config-mcp-row" id="mcp-row-{{$bid}}">
+  <div class="config-mcp-header">
+    <label class="config-mcp-toggle">
+      <input type="checkbox" name="attached" value="1" {{if $attached}}checked{{end}}
+             hx-trigger="change"
+             hx-post="/agent_versions/{{.VersionID}}/architecture/mcp/{{$bid}}/toggle"
+             hx-include="[name=attached]"
+             hx-target="#mcp-row-{{$bid}}" hx-swap="outerHTML">
+      <span class="config-mcp-name">{{.Backend.Name}}</span>
+    </label>
+    <span class="config-mcp-url muted">{{.PrimaryURL}}</span>
+  </div>
+  {{template "mcp_row_detail" .}}
+</div>
 {{end}}
 
 {{define "endpoint_detail"}}

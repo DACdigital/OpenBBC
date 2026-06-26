@@ -4,28 +4,22 @@
 </div>
 
 {{if .AllMCPBackends}}
-<div class="config-mcp-list">
-  {{range .AllMCPBackends}}
-    {{$bid := .ID}}
-    {{$att := index $.Attachments $bid}}
-    {{$attached := ne $att nil}}
-    <div class="config-mcp-row">
-      <div class="config-mcp-header">
-        <label class="checkbox-row">
-          <input type="checkbox" name="attached" value="1" {{if $attached}}checked{{end}}
-                 hx-trigger="change"
-                 hx-post="/agent_versions/{{$.VersionID}}/architecture/mcp/{{$bid}}/toggle"
-                 hx-include="[name=attached]"
-                 hx-target="#mcp-row-{{$bid}}" hx-swap="outerHTML">
-          <span><strong>{{.Name}}</strong> <span class="muted">— {{.PrimaryURL}}</span></span>
-        </label>
-      </div>
-      <div id="mcp-row-{{$bid}}" class="config-mcp-detail">
-        {{template "mcp_row_detail" (dict "VersionID" $.VersionID "Backend" . "Attachment" $att)}}
-      </div>
-    </div>
-  {{end}}
-</div>
+<form class="config-mcp-form"
+      hx-post="/agent_versions/{{.VersionID}}/architecture/mcp/notes"
+      hx-swap="outerHTML"
+      hx-target="this">
+  <div class="config-mcp-list">
+    {{range .AllMCPBackends}}
+      {{$bid := .ID}}
+      {{$att := index $.Attachments $bid}}
+      {{template "mcp_card" (dict "VersionID" $.VersionID "Backend" . "Attachment" $att "PrimaryURL" .PrimaryURL)}}
+    {{end}}
+  </div>
+  <div class="config-mcp-form-actions">
+    <button type="submit" class="btn-primary">Save guidance notes</button>
+    {{if .Saved}}<span class="config-mcp-note-saved">Saved ✓</span>{{end}}
+  </div>
+</form>
 {{else}}
 <p class="empty-state">No MCP backends registered yet. <a href="/mcp/new?kind=mcp_client">Create one</a>.</p>
 {{end}}

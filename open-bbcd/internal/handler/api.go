@@ -192,7 +192,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/config.yaml", configuratorHandler.DownloadYAML)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/mcp", configuratorHandler.MCPSubtab)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/toggle", configuratorHandler.ToggleMCPBackend)
-	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/note", configuratorHandler.UpdateMCPNote)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/notes", configuratorHandler.UpdateAllMCPNotes)
 	// Convenience alias under the new top-level "MCP" version tab.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/mcp", configuratorHandler.MCPSubtab)
 	RegisterConfiguratorRedirects(mux)
