@@ -214,8 +214,12 @@
   {{if .Attachment}}
     <div class="config-mcp-note">
       <label class="config-mcp-note-label" for="note-{{.Backend.ID}}">Guidance note (used by aikdm in main prompt)</label>
+      {{/* form="mcp-notes-form" lets this textarea participate in the
+           bulk Save form even though it sits outside the <form> tag —
+           keeping checkboxes free of any enclosing form. */}}
       <textarea id="note-{{.Backend.ID}}"
                 name="note[{{.Backend.ID}}]"
+                form="mcp-notes-form"
                 rows="3"
                 placeholder="e.g. Use Slack for escalations when the user reports an issue they want a human to follow up on.">{{.Attachment.Note}}</textarea>
     </div>

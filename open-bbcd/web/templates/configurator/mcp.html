@@ -1,13 +1,10 @@
 {{define "tab_content"}}
-<div class="config-banner">
-  Attach MCP servers to this agent version. Each attached server's tools become available at runtime. The note (optional) is folded into the main prompt by aikdm as guidance for when to use the server.
-</div>
+<div class="config-mcp-form" id="mcp-form-block">
+  <div class="config-banner">
+    Attach MCP servers to this agent version. Each attached server's tools become available at runtime. The note (optional) is folded into the main prompt by aikdm as guidance for when to use the server.
+  </div>
 
-{{if .AllMCPBackends}}
-<form class="config-mcp-form"
-      hx-post="/agent_versions/{{.VersionID}}/architecture/mcp/notes"
-      hx-swap="outerHTML"
-      hx-target="this">
+  {{if .AllMCPBackends}}
   <div class="config-mcp-list">
     {{range .AllMCPBackends}}
       {{$bid := .ID}}
@@ -15,12 +12,24 @@
       {{template "mcp_card" (dict "VersionID" $.VersionID "Backend" . "Attachment" $att "PrimaryURL" .PrimaryURL)}}
     {{end}}
   </div>
-  <div class="config-mcp-form-actions">
+
+  {{/*
+    The Save flow uses the HTML `form` attribute on each textarea
+    (rendered by mcp_card) to attach to this off-list form. That keeps
+    the attach/detach checkboxes OUTSIDE any <form>, so htmx's automatic
+    "include enclosing form's data" behaviour doesn't smuggle other
+    rows' attached=1 values into the per-row toggle POST.
+  */}}
+  <form id="mcp-notes-form"
+        hx-post="/agent_versions/{{.VersionID}}/architecture/mcp/notes"
+        hx-swap="outerHTML"
+        hx-target="#mcp-form-block"
+        class="config-mcp-form-actions">
     <button type="submit" class="btn-primary">Save guidance notes</button>
     {{if .Saved}}<span class="config-mcp-note-saved">Saved ✓</span>{{end}}
-  </div>
-</form>
-{{else}}
-<p class="empty-state">No MCP backends registered yet. <a href="/mcp/new?kind=mcp_client">Create one</a>.</p>
-{{end}}
+  </form>
+  {{else}}
+  <p class="empty-state">No MCP backends registered yet. <a href="/mcp/new?kind=mcp_client">Create one</a>.</p>
+  {{end}}
+</div>
 {{end}}
