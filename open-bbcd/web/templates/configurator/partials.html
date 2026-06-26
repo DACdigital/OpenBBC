@@ -233,7 +233,7 @@
       <input type="checkbox" name="attached" value="1" {{if $attached}}checked{{end}}
              hx-trigger="change"
              hx-post="/agent_versions/{{.VersionID}}/architecture/mcp/{{$bid}}/toggle"
-             hx-include="[name=attached]"
+             hx-include="this"
              hx-target="#mcp-row-{{$bid}}" hx-swap="outerHTML">
       <span class="config-mcp-name">{{.Backend.Name}}</span>
     </label>
