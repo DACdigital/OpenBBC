@@ -1,0 +1,55 @@
+{{define "prompts_confirm_modal"}}
+<div class="modal" id="prompts-confirm-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content prompts-confirm-modal-content">
+    {{if .NoChanges}}
+      <h2>Nothing to save</h2>
+      <p>Your prompts match the current version's saved state. Edit something first, then try again.</p>
+      <div class="modal-actions">
+        <button type="button" onclick="document.getElementById('prompts-confirm-modal').remove()">Close</button>
+      </div>
+    {{else}}
+      <h2>Confirm: save as new version</h2>
+      <p>
+        {{.ChangedCount}} prompt{{if ne .ChangedCount 1}}s{{end}} changed.
+        Confirming will create a new <strong>DRAFT</strong> version with parent <code>{{.ParentVersionShort}}</code>.
+        MCP attachments are copied forward; the current version stays untouched.
+      </p>
+
+      <div class="prompts-diff-list">
+        {{range .Diffs}}
+        <details class="prompts-diff" open>
+          <summary><strong>{{.Field}}</strong> <span class="muted">— {{.OldBytes}} B → {{.NewBytes}} B</span></summary>
+          <div class="prompts-diff-pane">
+            <div class="prompts-diff-side">
+              <div class="prompts-diff-label">Before</div>
+              <pre class="prompt-pre prompts-diff-before">{{.Old}}</pre>
+            </div>
+            <div class="prompts-diff-side">
+              <div class="prompts-diff-label">After</div>
+              <pre class="prompt-pre prompts-diff-after">{{.New}}</pre>
+            </div>
+          </div>
+        </details>
+        {{end}}
+      </div>
+
+      {{/* Hidden form that actually submits to the save endpoint when the
+           user clicks "Confirm". Holds the same payload as the original
+           prompts form so the server doesn't have to re-parse anything
+           from the modal trigger. */}}
+      <form method="post"
+            action="/agent_versions/{{.VersionID}}/configure/prompts"
+            class="prompts-confirm-submit">
+        <input type="hidden" name="main_prompt" value="{{.MainPrompt}}">
+        {{range $name, $body := .SkillPromptsMap}}
+          <input type="hidden" name="skill_prompt[{{$name}}]" value="{{$body}}">
+        {{end}}
+        <div class="modal-actions">
+          <button type="button" onclick="document.getElementById('prompts-confirm-modal').remove()">Cancel</button>
+          <button type="submit" class="btn-primary">Confirm and create new version</button>
+        </div>
+      </form>
+    {{end}}
+  </div>
+</div>
+{{end}}

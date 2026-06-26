@@ -4,7 +4,11 @@
     <div class="config-banner">
       Editing prompts creates a new version of this agent (the architecture stays frozen and the previous version remains intact). MCP attachments are copied forward.
     </div>
-    <form method="post" action="/agent_versions/{{.VersionID}}/configure/prompts" class="prompts-form">
+    <form id="prompts-form"
+          hx-post="/agent_versions/{{.VersionID}}/configure/prompts/confirm"
+          hx-target="body"
+          hx-swap="beforeend"
+          class="prompts-form">
       <section class="prompt-block">
         <h2><label for="prompt-main">Main prompt</label></h2>
         <textarea id="prompt-main" name="main_prompt" rows="14" class="prompt-textarea">{{.MainPrompt}}</textarea>
@@ -22,7 +26,7 @@
       {{end}}
       <div class="prompts-form-actions">
         <button type="submit" class="btn-primary">Save as new version</button>
-        <span class="form-hint muted">A new <strong>DRAFT</strong> version of this agent will be created with these prompts. The current version stays untouched.</span>
+        <span class="form-hint muted">Click to preview the changes; nothing is persisted until you confirm.</span>
       </div>
     </form>
   {{else}}

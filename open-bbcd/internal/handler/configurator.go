@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/flowmap"
@@ -153,7 +154,13 @@ func NewConfiguratorHandler(
 	if err != nil {
 		return nil, err
 	}
-	promptsTmpl, err := parse("prompts")
+	promptsTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/layout.html",
+		"templates/configurator/layout.html",
+		"templates/configurator/partials.html",
+		"templates/configurator/prompts.html",
+		"templates/configurator/prompts_confirm_modal.html",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -390,21 +397,14 @@ func (h *ConfiguratorHandler) Prompts(w http.ResponseWriter, r *http.Request) {
 	renderTemplate(w, h.promptsTmpl, "layout", page)
 }
 
-// SavePrompts handles the prompts editor's "Save as new version" submit.
-// Parses the main_prompt + per-skill prompts out of the form, marshals them
-// into the agent_versions.prompts JSONB shape, and asks the repository to
-// fork a new DRAFT version (with MCP attachments copied forward). On
-// success, redirects to the new version's Prompts tab.
-func (h *ConfiguratorHandler) SavePrompts(w http.ResponseWriter, r *http.Request) {
-	versionID := r.PathValue("version_id")
+// parsePromptsForm extracts main_prompt + skill_prompt[<name>] from a
+// posted form. Used by both the confirmation modal handler and the
+// final save handler.
+func parsePromptsForm(r *http.Request) (types.Prompts, error) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
-		return
+		return types.Prompts{}, err
 	}
-
-	main := r.FormValue("main_prompt")
 	skillPrompts := map[string]string{}
-	// Form field naming: skill_prompt[<skill_name>]
 	for key, vals := range r.Form {
 		if !strings.HasPrefix(key, "skill_prompt[") || !strings.HasSuffix(key, "]") {
 			continue
@@ -415,16 +415,138 @@ func (h *ConfiguratorHandler) SavePrompts(w http.ResponseWriter, r *http.Request
 		}
 		skillPrompts[name] = vals[0]
 	}
-
-	promptsJSON, err := json.Marshal(types.Prompts{
-		MainPrompt:   main,
+	return types.Prompts{
+		MainPrompt:   r.FormValue("main_prompt"),
 		SkillPrompts: skillPrompts,
-	})
+	}, nil
+}
+
+// promptDiffEntry is one row in the confirm modal: a field that
+// differs between the loaded version's prompts and what the user
+// submitted.
+type promptDiffEntry struct {
+	Field    string
+	Old      string
+	New      string
+	OldBytes int
+	NewBytes int
+}
+
+// ConfirmSavePrompts renders the "Save as new version" confirmation
+// modal. It diffs the submitted form against the current version's
+// stored prompts; if nothing changed, the modal says so and offers
+// only Close. If anything changed, the modal lists the affected
+// fields and provides a Confirm button that posts the same payload
+// to SavePrompts (the actual writer).
+func (h *ConfiguratorHandler) ConfirmSavePrompts(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	submitted, err := parsePromptsForm(r)
+	if err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	version, _, err := h.repo.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
+	var current types.Prompts
+	if len(version.Prompts) > 0 {
+		_ = json.Unmarshal(version.Prompts, &current)
+	}
 
+	diffs := diffPrompts(current, submitted)
+
+	parentShort := versionID
+	if len(parentShort) > 8 {
+		parentShort = parentShort[:8]
+	}
+
+	data := map[string]any{
+		"VersionID":          versionID,
+		"ParentVersionShort": parentShort,
+		"NoChanges":          len(diffs) == 0,
+		"ChangedCount":       len(diffs),
+		"Diffs":              diffs,
+		"MainPrompt":         submitted.MainPrompt,
+		"SkillPromptsMap":    submitted.SkillPrompts,
+	}
+	_ = h.promptsTmpl.ExecuteTemplate(w, "prompts_confirm_modal", data)
+}
+
+// normalizePromptText folds CRLF → LF and strips a single trailing
+// newline so values round-tripped through a <textarea> compare equal to
+// the LF-stored DB version. Browsers POST textarea content as CRLF per
+// HTML form spec; without this, an unmodified Save would always show a
+// diff.
+func normalizePromptText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.TrimRight(s, "\n")
+}
+
+// diffPrompts returns one entry per field whose value differs between
+// current and submitted. Skill prompts that exist on one side but not
+// the other are also flagged (using "" for the missing side).
+// Line endings + trailing newlines are normalized before comparison.
+func diffPrompts(current, submitted types.Prompts) []promptDiffEntry {
+	out := []promptDiffEntry{}
+	curMain := normalizePromptText(current.MainPrompt)
+	subMain := normalizePromptText(submitted.MainPrompt)
+	if curMain != subMain {
+		out = append(out, promptDiffEntry{
+			Field:    "main_prompt",
+			Old:      curMain,
+			New:      subMain,
+			OldBytes: len(curMain),
+			NewBytes: len(subMain),
+		})
+	}
+	// Union of skill names from both sides; deterministic order via sort.
+	names := map[string]struct{}{}
+	for n := range current.SkillPrompts {
+		names[n] = struct{}{}
+	}
+	for n := range submitted.SkillPrompts {
+		names[n] = struct{}{}
+	}
+	sorted := make([]string, 0, len(names))
+	for n := range names {
+		sorted = append(sorted, n)
+	}
+	sort.Strings(sorted)
+	for _, name := range sorted {
+		o := normalizePromptText(current.SkillPrompts[name])
+		n := normalizePromptText(submitted.SkillPrompts[name])
+		if o != n {
+			out = append(out, promptDiffEntry{
+				Field:    "skill_prompts." + name,
+				Old:      o,
+				New:      n,
+				OldBytes: len(o),
+				NewBytes: len(n),
+			})
+		}
+	}
+	return out
+}
+
+// SavePrompts handles the prompts editor's "Save as new version" submit
+// (called from the confirmation modal's Confirm button). Forks a new
+// DRAFT version with MCP attachments copied forward, then 303-redirects
+// to the new version's Prompts tab.
+func (h *ConfiguratorHandler) SavePrompts(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	submitted, err := parsePromptsForm(r)
+	if err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	promptsJSON, err := json.Marshal(submitted)
+	if err != nil {
+		Error(w, err)
+		return
+	}
 	newID, err := h.repo.CreateVersionFromPrompts(r.Context(), versionID, promptsJSON)
 	if err != nil {
 		Error(w, err)

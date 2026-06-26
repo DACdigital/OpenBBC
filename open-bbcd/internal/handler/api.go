@@ -180,6 +180,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agent_versions/{version_id}/endpoints/{endpointID}/backend", configuratorHandler.SetEndpointBackend)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/inputs", configuratorHandler.Inputs)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/prompts", configuratorHandler.Prompts)
+	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts/confirm", configuratorHandler.ConfirmSavePrompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts", configuratorHandler.SavePrompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/new", configuratorHandler.SkillNew)
