@@ -35,7 +35,27 @@
     {{end}}
   </tbody>
 </table>
+{{template "pagination" (dict "Page" .Page "BasePath" .BasePath)}}
 {{else}}
 <p class="empty-state">No sessions yet — start a new one.</p>
+{{end}}
+{{end}}
+
+{{define "pagination"}}
+{{$p := .Page}}
+{{if gt $p.TotalPages 1}}
+<nav class="pagination" aria-label="Pagination">
+  {{if $p.HasPrev}}
+    <a href="{{.BasePath}}?page={{sub $p.Page 1}}&size={{$p.Size}}" class="pagination-link">← Prev</a>
+  {{else}}
+    <span class="pagination-link disabled">← Prev</span>
+  {{end}}
+  <span class="pagination-summary">Page {{$p.Page}} of {{$p.TotalPages}} · {{$p.Total}} total</span>
+  {{if $p.HasNext}}
+    <a href="{{.BasePath}}?page={{add $p.Page 1}}&size={{$p.Size}}" class="pagination-link">Next →</a>
+  {{else}}
+    <span class="pagination-link disabled">Next →</span>
+  {{end}}
+</nav>
 {{end}}
 {{end}}

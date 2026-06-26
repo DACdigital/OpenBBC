@@ -75,23 +75,35 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// seedAgentVersion creates a minimal agents + agent_versions pair and returns the version id.
-func seedAgentVersion(t *testing.T, db *sql.DB) string {
+// seedAgent creates a minimal agents + agent_versions pair and returns the
+// (agent_id, version_id) tuple. Use this when the test needs both ids
+// (e.g. endpoint wiring uses agent_id, MCP attachment uses version_id).
+func seedAgent(t *testing.T, db *sql.DB) (string, string) {
 	t.Helper()
-	var versionID string
+	var agentID, versionID string
 	err := db.QueryRow(`
 		WITH a AS (
 			INSERT INTO agents (name) VALUES ('test-' || gen_random_uuid())
 			RETURNING id
+		), v AS (
+			INSERT INTO agent_versions (agent_id, status, flow_map_config)
+			SELECT id, 'INITIALIZING', '{}'::jsonb FROM a
+			RETURNING id, agent_id
 		)
-		INSERT INTO agent_versions (agent_id, status, flow_map_config)
-		SELECT id, 'INITIALIZING', '{}'::jsonb FROM a
-		RETURNING id
-	`).Scan(&versionID)
+		SELECT v.agent_id::text, v.id::text FROM v
+	`).Scan(&agentID, &versionID)
 	if err != nil {
-		t.Fatalf("seedAgentVersion: %v", err)
+		t.Fatalf("seedAgent: %v", err)
 	}
-	return versionID
+	return agentID, versionID
+}
+
+// seedAgentVersion is a back-compat wrapper around seedAgent that returns
+// only the version id (the more common test pre-condition).
+func seedAgentVersion(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	_, vid := seedAgent(t, db)
+	return vid
 }
 
 // seedHTTPBackend creates a tool_backends row of kind http_endpoint and returns its id.

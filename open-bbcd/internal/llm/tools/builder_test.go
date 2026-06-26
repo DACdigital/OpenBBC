@@ -26,7 +26,7 @@ func (f *fakeBackendStore) GetBackend(ctx context.Context, id string) (string, s
 	return b.kind, b.name, b.config, nil
 }
 
-func (f *fakeBackendStore) EndpointBackends(ctx context.Context, versionID string) (map[string]string, error) {
+func (f *fakeBackendStore) EndpointBackends(ctx context.Context, agentID string) (map[string]string, error) {
 	return f.endpointMap, nil
 }
 
@@ -72,7 +72,7 @@ func TestBuilder_Build_ProducesRealJSONSchemaFromEnrichedBundle(t *testing.T) {
 	}`)
 
 	b := NewBuilder(store)
-	handler, err := b.Build(context.Background(), "v1", bundle)
+	handler, err := b.Build(context.Background(), "agent-1", "v1", bundle)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

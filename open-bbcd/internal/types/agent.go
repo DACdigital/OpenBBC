@@ -17,28 +17,33 @@ const (
 	AgentStatusDeployed     AgentStatus = "DEPLOYED"
 )
 
-// Agent is one logical agent (the integrator's stable identity). Only the
-// name, description, and discovery-file pointer live here — everything that
-// changes per regeneration (flow-map source, parse error, status, bundle,
-// parent pointer) lives on AgentVersion.
+// Agent is one logical agent (the integrator's stable identity). Beyond the
+// identity fields (name, description, discovery_file_path), it owns the
+// frozen "architecture" derived from the wizard/aikdm bundle: endpoints,
+// flows, skills metadata, external_mcps metadata. FinalizedAt is stamped
+// when the first version's prompts land; once set, architecture is
+// read-only forever (one-way per agent — re-discovery requires a new agent).
 type Agent struct {
-	ID                string    `json:"id"`
-	Name              string    `json:"name"`
-	Description       string    `json:"description,omitempty"`
-	DiscoveryFilePath string    `json:"discovery_file_path,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
+	ID                string          `json:"id"`
+	Name              string          `json:"name"`
+	Description       string          `json:"description,omitempty"`
+	DiscoveryFilePath string          `json:"discovery_file_path,omitempty"`
+	Architecture      json.RawMessage `json:"architecture,omitempty"`
+	FinalizedAt       *time.Time      `json:"finalized_at,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
 }
 
-// AgentVersion is one version row. It carries lifecycle (status), the flow-map
-// source the version was generated from (FlowMapConfig + FlowMapParseError),
-// the compiled bundle, and the linked-list parent pointer. Per-agent metadata
-// (name, description, discovery file path) is on Agent.
+// AgentVersion is one version row. It carries lifecycle (status), the
+// flow-map source the version was generated from (FlowMapConfig +
+// FlowMapParseError), the editable prompts payload, and the linked-list
+// parent pointer. Architecture moved to Agent in migration 017; editing
+// prompts spawns a new version.
 type AgentVersion struct {
 	ID                string          `json:"id"`
 	AgentID           string          `json:"agent_id"`
 	ParentVersionID   *string         `json:"parent_version_id,omitempty"`
 	Status            string          `json:"status"`
-	Bundle            json.RawMessage `json:"bundle,omitempty"`
+	Prompts           json.RawMessage `json:"prompts,omitempty"`
 	FlowMapConfig     json.RawMessage `json:"flow_map_config,omitempty"`
 	FlowMapParseError string          `json:"flow_map_parse_error,omitempty"`
 	CreatedAt         time.Time       `json:"created_at"`

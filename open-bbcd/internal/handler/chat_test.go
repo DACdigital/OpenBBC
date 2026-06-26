@@ -46,8 +46,8 @@ func (s *stubChatStore) EnsureSession(ctx context.Context, sessionID, versionID 
 func (s *stubChatStore) GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error) {
 	return &types.ChatSession{ID: sessionID, AgentVersionID: versionID}, s.err
 }
-func (s *stubChatStore) ListSessions(ctx context.Context, versionID string) ([]*types.ChatSession, error) {
-	return s.sessions, s.err
+func (s *stubChatStore) ListSessions(ctx context.Context, versionID string, limit, offset int) ([]*types.ChatSession, int, error) {
+	return s.sessions, len(s.sessions), s.err
 }
 func (s *stubChatStore) LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error) {
 	return s.messages, s.err
@@ -86,8 +86,8 @@ func newTestChatHandler(t *testing.T, runner *stubTurnRunner) *ChatHandler {
 	t.Helper()
 	h, err := NewChatHandler(
 		&stubAgentRepo{
-			version: &types.AgentVersion{ID: "v", AgentID: "a", Bundle: []byte(`{}`)},
-			agent:   &types.Agent{ID: "a", Name: "test"},
+			version: &types.AgentVersion{ID: "v", AgentID: "a", Prompts: []byte(`{}`)},
+			agent:   &types.Agent{ID: "a", Name: "test", Architecture: []byte(`{}`)},
 		},
 		&stubChatStore{},
 		nil, // headerOvr — not exercised in basic turn tests

@@ -18,18 +18,18 @@ import (
 )
 
 // ToolHandlerBuilder constructs the Composite handler for one chat session.
-// The bundle is passed in raw so the builder can derive endpoint definitions
-// without a separate bundle-parse step in the orchestrator.
+// agentID resolves the (now agent-level) endpoint→backend wiring; versionID
+// resolves the MCP attachments; architecture is the frozen agent-level
+// architecture blob (endpoints + metadata).
 type ToolHandlerBuilder interface {
-	Build(ctx context.Context, versionID string, bundle json.RawMessage) (tools.Handler, error)
+	Build(ctx context.Context, agentID, versionID string, architecture json.RawMessage) (tools.Handler, error)
 }
 
 // AgentReader is the narrow agent-side interface the orchestrator needs.
-// The orchestrator is version-centric: it loads a version row (which carries
-// the bundle) by its id. In BO chat the id is a chat_sessions.agent_version_id;
-// in deployed runtime it's resolved via DeployedRepository before Turn.
+// Post-017, the orchestrator must load both the version (for prompts) and
+// its owning agent (for the architecture blob). One trip via GetWithAgent.
 type AgentReader interface {
-	GetByID(ctx context.Context, versionID string) (*types.AgentVersion, error)
+	GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error)
 }
 
 // ChatStore is the narrow chat-repo interface the orchestrator needs.
@@ -104,15 +104,17 @@ func (o *Orchestrator) Turn(
 		return err
 	}
 
-	// 1. Load version + verify bundle exists. `agentID` is the orchestrator's
-	// scope identifier — in BO chat it's the version row id, in deployed
-	// runtime it's been resolved to a version id before Turn is invoked.
-	version, err := o.agents.GetByID(ctx, agentID)
+	// 1. Load version + owning agent. `agentID` is the orchestrator's scope
+	// identifier — in BO chat it's the version row id (used to fetch both
+	// rows), in deployed runtime it's been resolved to a version id before
+	// Turn is invoked. The version carries prompts, the agent carries the
+	// frozen architecture (endpoints + metadata).
+	version, agent, err := o.agents.GetWithAgent(ctx, agentID)
 	if err != nil {
 		return failTurn("agent_load", "load_agent", err)
 	}
-	if len(version.Bundle) == 0 {
-		return failTurn("agent_not_runnable", "verify_bundle", types.ErrAgentNotRunnable)
+	if len(agent.Architecture) == 0 || len(version.Prompts) == 0 {
+		return failTurn("agent_not_runnable", "verify_finalized", types.ErrAgentNotRunnable)
 	}
 
 	// 2. Ensure session row exists (lazy-create). The ChatStore impl decides
@@ -128,20 +130,21 @@ func (o *Orchestrator) Turn(
 		return failTurn("history_load", "load_messages", err)
 	}
 
-	// 4. Build LLM request.
-	var bundleHead struct {
+	// 4. Build LLM request. Main prompt lives on the version's prompts blob;
+	// architecture (endpoints + metadata) lives on the agent.
+	var promptsHead struct {
 		MainPrompt string `json:"main_prompt"`
 	}
-	if err := json.Unmarshal(version.Bundle, &bundleHead); err != nil {
-		return failTurn("bundle_parse", "parse_bundle", err)
+	if err := json.Unmarshal(version.Prompts, &promptsHead); err != nil {
+		return failTurn("prompts_parse", "parse_prompts", err)
 	}
 
-	toolHandler, err := o.builder.Build(ctx, version.ID, version.Bundle)
+	toolHandler, err := o.builder.Build(ctx, agent.ID, version.ID, agent.Architecture)
 	if err != nil {
 		return failTurn("tool_handler_init", "build_tool_handler", err)
 	}
 
-	toolDefs, err := toolHandler.Tools(version.Bundle)
+	toolDefs, err := toolHandler.Tools(agent.Architecture)
 	if err != nil {
 		return failTurn("tools_init", "build_tool_defs", err)
 	}
@@ -178,7 +181,7 @@ func (o *Orchestrator) Turn(
 	// then loops. Exits when stop_reason != "tool_use" or MaxToolRounds is hit.
 	req := llm.Request{
 		Model:     o.Model,
-		System:    bundleHead.MainPrompt,
+		System:    promptsHead.MainPrompt,
 		Messages:  msgs,
 		Tools:     toolDefs,
 		MaxTokens: o.MaxTokens,
@@ -290,7 +293,7 @@ func (o *Orchestrator) Turn(
 		// Execute the pending tools and build a tool-role message.
 		toolBlocks := make([]llm.Block, 0, len(pendingToolUses))
 		for _, tu := range pendingToolUses {
-			res, err := toolHandler.Call(ctx, version.Bundle, tools.Call{
+			res, err := toolHandler.Call(ctx, agent.Architecture, tools.Call{
 				ID:    tu.ID,
 				Name:  tu.Name,
 				Input: tu.Input,

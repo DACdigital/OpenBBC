@@ -23,10 +23,12 @@ type BundleToolSnap struct {
 }
 
 // BackendStore is the minimum repo dep the builder needs. Implemented in
-// handler/api.go by toolBackendStoreAdapter wrapping the two repositories.
+// handler/api.go by toolBackendStoreAdapter wrapping the repositories.
+// EndpointBackends is keyed by agent_id (post-017) — endpoint wiring is
+// frozen on the agent, not the version. MCPAttachments is per-version.
 type BackendStore interface {
 	GetBackend(ctx context.Context, id string) (kind string, name string, configJSON json.RawMessage, err error)
-	EndpointBackends(ctx context.Context, versionID string) (map[string]string, error)
+	EndpointBackends(ctx context.Context, agentID string) (map[string]string, error)
 	MCPAttachments(ctx context.Context, versionID string) (map[string]string, error) // backend_id → note
 }
 
@@ -38,8 +40,12 @@ func NewBuilder(store BackendStore) *Builder { return &Builder{store: store} }
 // Build returns a tools.Handler (concretely a *Composite). Returning the
 // interface lets the orchestrator depend only on ToolHandlerBuilder without
 // a leak of the impl type.
-func (b *Builder) Build(ctx context.Context, versionID string, bundle json.RawMessage) (Handler, error) {
-	mapping, err := b.store.EndpointBackends(ctx, versionID)
+//
+// architecture is the agents.architecture JSONB blob (Tools[] live there);
+// versionID scopes the MCP attachments and is recorded on each backend for
+// session-override lookup.
+func (b *Builder) Build(ctx context.Context, agentID, versionID string, architecture json.RawMessage) (Handler, error) {
+	mapping, err := b.store.EndpointBackends(ctx, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("builder: load endpoint mapping: %w", err)
 	}
@@ -49,9 +55,9 @@ func (b *Builder) Build(ctx context.Context, versionID string, bundle json.RawMe
 	}
 
 	var snap BundleSnapshot
-	if len(bundle) > 0 {
-		if err := json.Unmarshal(bundle, &snap); err != nil {
-			return nil, fmt.Errorf("builder: parse bundle: %w", err)
+	if len(architecture) > 0 {
+		if err := json.Unmarshal(architecture, &snap); err != nil {
+			return nil, fmt.Errorf("builder: parse architecture: %w", err)
 		}
 	}
 

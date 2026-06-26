@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"html/template"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/flowmap"
@@ -32,6 +32,7 @@ type ConfigStore interface {
 	GetFlowMapConfig(ctx context.Context, versionID string) (cfg []byte, parseErr string, err error)
 	UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error
 	UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error
+	CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error)
 }
 
 // mcpBackendView wraps a ToolBackend and exposes its primary URL for template
@@ -42,10 +43,11 @@ type mcpBackendView struct {
 }
 
 type ConfiguratorHandler struct {
-	repo                                                                                    ConfigStore
-	backends                                                                                *repository.ToolBackendRepository
-	wiring                                                                                  *repository.VersionWiringRepository
-	schema                                                                                  *types.WizardSchema
+	repo                                                                                 ConfigStore
+	backends                                                                             *repository.ToolBackendRepository
+	wiring                                                                               *repository.VersionWiringRepository
+	agentWiring                                                                          *repository.AgentWiringRepository
+	schema                                                                               *types.WizardSchema
 	flowsTmpl, skillsTmpl, endpointsTmpl, finalizeTmpl, inputsTmpl, promptsTmpl, mcpTmpl *template.Template
 }
 
@@ -53,6 +55,7 @@ func NewConfiguratorHandler(
 	repo ConfigStore,
 	backends *repository.ToolBackendRepository,
 	wiring *repository.VersionWiringRepository,
+	agentWiring *repository.AgentWiringRepository,
 	schema *types.WizardSchema,
 	webFS fs.FS,
 ) (*ConfiguratorHandler, error) {
@@ -151,7 +154,13 @@ func NewConfiguratorHandler(
 	if err != nil {
 		return nil, err
 	}
-	promptsTmpl, err := parse("prompts")
+	promptsTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/layout.html",
+		"templates/configurator/layout.html",
+		"templates/configurator/partials.html",
+		"templates/configurator/prompts.html",
+		"templates/configurator/prompts_confirm_modal.html",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +172,7 @@ func NewConfiguratorHandler(
 		repo:          repo,
 		backends:      backends,
 		wiring:        wiring,
+		agentWiring:   agentWiring,
 		schema:        schema,
 		flowsTmpl:     flowsTmpl,
 		skillsTmpl:    skillsTmpl,
@@ -201,22 +211,23 @@ func renderMarkdown(versionID, md string) template.HTML {
 }
 
 type configPageData struct {
-	Active            string
-	VersionID         string // URL path param value (a version row's ID)
-	AgentID           string // stable agent ID, used for back-link to the version list
-	AgentName         string
-	AgentStatus       string // version's status (lives on AgentVersion now)
-	ReadOnly          bool   // true for non-INITIALIZING versions (DRAFT, TRAINING, READY, DEPLOYED)
-	HasBundle         bool   // true when this version has a generated bundle (Run is enabled)
-	Tab               string // primary tab: "inputs" | "architecture" | "prompts" | "finalize"
-	SubTab            string // architecture sub-tab: "flows" | "skills" | "endpoints" (empty for other primary tabs)
-	Config            types.FlowMapConfig
-	ParseError        string
-	Bundle            json.RawMessage   // raw bundle bytes; len()>0 ↔ HasBundle
-	WizardFields      []wizardFieldView // populated for the Inputs tab
-	SelectedFlow      *types.Flow
-	SelectedSkill     *types.Skill
-	SelectedEndpoint  *types.Endpoint
+	Active           string
+	VersionID        string // URL path param value (a version row's ID)
+	AgentID          string // stable agent ID, used for back-link to the version list
+	AgentName        string
+	AgentStatus      string // version's status (lives on AgentVersion now)
+	ReadOnly         bool   // true for non-INITIALIZING versions (DRAFT, TRAINING, READY, DEPLOYED)
+	HasBundle        bool   // true when the agent has architecture AND this version has prompts (Run is enabled)
+	Tab              string // primary tab: "inputs" | "architecture" | "prompts" | "finalize"
+	SubTab           string // architecture sub-tab: "flows" | "skills" | "endpoints" (empty for other primary tabs)
+	Config           types.FlowMapConfig
+	ParseError       string
+	Architecture     json.RawMessage // agent-level architecture blob (endpoints/flows/skills_meta); len()>0 once finalized
+	Prompts          json.RawMessage // version-level prompts blob (main_prompt + skill_prompts)
+	WizardFields     []wizardFieldView // populated for the Inputs tab
+	SelectedFlow     *types.Flow
+	SelectedSkill    *types.Skill
+	SelectedEndpoint *types.Endpoint
 }
 
 // wizardFieldView is the read-only projection of a wizard answer for the
@@ -246,16 +257,17 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 		}
 	}
 	return configPageData{
-		Active:            "agents",
-		VersionID:         versionID,
-		AgentID:           agent.ID,
-		AgentName:         agent.Name,
-		AgentStatus:       version.Status,
-		ReadOnly:          version.Status != "INITIALIZING",
-		HasBundle:         len(version.Bundle) > 0,
-		Config:            cfg,
-		ParseError:        parseErr,
-		Bundle:            version.Bundle,
+		Active:       "agents",
+		VersionID:    versionID,
+		AgentID:      agent.ID,
+		AgentName:    agent.Name,
+		AgentStatus:  version.Status,
+		ReadOnly:     version.Status != "INITIALIZING",
+		HasBundle:    len(agent.Architecture) > 0 && len(version.Prompts) > 0,
+		Config:       cfg,
+		ParseError:   parseErr,
+		Architecture: agent.Architecture,
+		Prompts:      version.Prompts,
 	}, nil
 }
 
@@ -351,14 +363,32 @@ func (h *ConfiguratorHandler) Prompts(w http.ResponseWriter, r *http.Request) {
 	data.Tab = "prompts"
 
 	page := promptsPageData{configPageData: data}
-	if len(data.Bundle) > 0 {
-		var raw struct {
-			MainPrompt string            `json:"main_prompt"`
-			Skills     []skillPromptView `json:"skills"`
-		}
-		if err := json.Unmarshal(data.Bundle, &raw); err == nil {
-			page.MainPrompt = raw.MainPrompt
-			page.SkillPrompts = raw.Skills
+	if len(data.Prompts) > 0 {
+		var p types.Prompts
+		if err := json.Unmarshal(data.Prompts, &p); err == nil {
+			page.MainPrompt = p.MainPrompt
+			// Cross-reference skill_prompts with skills_meta from the agent's
+			// architecture to keep the display ordered by skill, with
+			// description alongside the prompt.
+			var arch types.Architecture
+			if uerr := json.Unmarshal(data.Architecture, &arch); uerr == nil {
+				for _, s := range arch.SkillsMeta {
+					page.SkillPrompts = append(page.SkillPrompts, skillPromptView{
+						Name:        s.Name,
+						Description: s.Description,
+						Prompt:      p.SkillPrompts[s.Name],
+					})
+				}
+			} else {
+				// No architecture available: emit prompts in map-iteration
+				// order so something still renders for debugging.
+				for name, body := range p.SkillPrompts {
+					page.SkillPrompts = append(page.SkillPrompts, skillPromptView{
+						Name:   name,
+						Prompt: body,
+					})
+				}
+			}
 		}
 		// Malformed JSON falls through with both fields empty — template
 		// renders empty state.
@@ -367,10 +397,170 @@ func (h *ConfiguratorHandler) Prompts(w http.ResponseWriter, r *http.Request) {
 	renderTemplate(w, h.promptsTmpl, "layout", page)
 }
 
-// Index redirects /configure to the default Architecture > Flows sub-tab.
+// parsePromptsForm extracts main_prompt + skill_prompt[<name>] from a
+// posted form. Used by both the confirmation modal handler and the
+// final save handler.
+func parsePromptsForm(r *http.Request) (types.Prompts, error) {
+	if err := r.ParseForm(); err != nil {
+		return types.Prompts{}, err
+	}
+	skillPrompts := map[string]string{}
+	for key, vals := range r.Form {
+		if !strings.HasPrefix(key, "skill_prompt[") || !strings.HasSuffix(key, "]") {
+			continue
+		}
+		name := key[len("skill_prompt[") : len(key)-1]
+		if name == "" || len(vals) == 0 {
+			continue
+		}
+		skillPrompts[name] = vals[0]
+	}
+	return types.Prompts{
+		MainPrompt:   r.FormValue("main_prompt"),
+		SkillPrompts: skillPrompts,
+	}, nil
+}
+
+// promptDiffEntry is one row in the confirm modal: a field that
+// differs between the loaded version's prompts and what the user
+// submitted.
+type promptDiffEntry struct {
+	Field    string
+	Old      string
+	New      string
+	OldBytes int
+	NewBytes int
+}
+
+// ConfirmSavePrompts renders the "Save as new version" confirmation
+// modal. It diffs the submitted form against the current version's
+// stored prompts; if nothing changed, the modal says so and offers
+// only Close. If anything changed, the modal lists the affected
+// fields and provides a Confirm button that posts the same payload
+// to SavePrompts (the actual writer).
+func (h *ConfiguratorHandler) ConfirmSavePrompts(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	submitted, err := parsePromptsForm(r)
+	if err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	version, _, err := h.repo.GetWithAgent(r.Context(), versionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	var current types.Prompts
+	if len(version.Prompts) > 0 {
+		_ = json.Unmarshal(version.Prompts, &current)
+	}
+
+	diffs := diffPrompts(current, submitted)
+
+	parentShort := versionID
+	if len(parentShort) > 8 {
+		parentShort = parentShort[:8]
+	}
+
+	data := map[string]any{
+		"VersionID":          versionID,
+		"ParentVersionShort": parentShort,
+		"NoChanges":          len(diffs) == 0,
+		"ChangedCount":       len(diffs),
+		"Diffs":              diffs,
+		"MainPrompt":         submitted.MainPrompt,
+		"SkillPromptsMap":    submitted.SkillPrompts,
+	}
+	_ = h.promptsTmpl.ExecuteTemplate(w, "prompts_confirm_modal", data)
+}
+
+// normalizePromptText folds CRLF → LF and strips a single trailing
+// newline so values round-tripped through a <textarea> compare equal to
+// the LF-stored DB version. Browsers POST textarea content as CRLF per
+// HTML form spec; without this, an unmodified Save would always show a
+// diff.
+func normalizePromptText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.TrimRight(s, "\n")
+}
+
+// diffPrompts returns one entry per field whose value differs between
+// current and submitted. Skill prompts that exist on one side but not
+// the other are also flagged (using "" for the missing side).
+// Line endings + trailing newlines are normalized before comparison.
+func diffPrompts(current, submitted types.Prompts) []promptDiffEntry {
+	out := []promptDiffEntry{}
+	curMain := normalizePromptText(current.MainPrompt)
+	subMain := normalizePromptText(submitted.MainPrompt)
+	if curMain != subMain {
+		out = append(out, promptDiffEntry{
+			Field:    "main_prompt",
+			Old:      curMain,
+			New:      subMain,
+			OldBytes: len(curMain),
+			NewBytes: len(subMain),
+		})
+	}
+	// Union of skill names from both sides; deterministic order via sort.
+	names := map[string]struct{}{}
+	for n := range current.SkillPrompts {
+		names[n] = struct{}{}
+	}
+	for n := range submitted.SkillPrompts {
+		names[n] = struct{}{}
+	}
+	sorted := make([]string, 0, len(names))
+	for n := range names {
+		sorted = append(sorted, n)
+	}
+	sort.Strings(sorted)
+	for _, name := range sorted {
+		o := normalizePromptText(current.SkillPrompts[name])
+		n := normalizePromptText(submitted.SkillPrompts[name])
+		if o != n {
+			out = append(out, promptDiffEntry{
+				Field:    "skill_prompts." + name,
+				Old:      o,
+				New:      n,
+				OldBytes: len(o),
+				NewBytes: len(n),
+			})
+		}
+	}
+	return out
+}
+
+// SavePrompts handles the prompts editor's "Save as new version" submit
+// (called from the confirmation modal's Confirm button). Forks a new
+// DRAFT version with MCP attachments copied forward, then 303-redirects
+// to the new version's Prompts tab.
+func (h *ConfiguratorHandler) SavePrompts(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	submitted, err := parsePromptsForm(r)
+	if err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	promptsJSON, err := json.Marshal(submitted)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	newID, err := h.repo.CreateVersionFromPrompts(r.Context(), versionID, promptsJSON)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	http.Redirect(w, r, "/agent_versions/"+newID+"/configure/prompts", http.StatusSeeOther)
+}
+
+// Index redirects /configure to the version's default tab. Post-PR #34 +
+// the tab restructure: Inputs/Architecture moved to the agent detail page,
+// so the version detail page's default lands on Prompts.
 func (h *ConfiguratorHandler) Index(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
-	http.Redirect(w, r, "/agent_versions/"+versionID+"/configure/architecture/flows", http.StatusFound)
+	http.Redirect(w, r, "/agent_versions/"+versionID+"/configure/prompts", http.StatusFound)
 }
 
 func (h *ConfiguratorHandler) Flows(w http.ResponseWriter, r *http.Request) {
@@ -468,8 +658,8 @@ func (h *ConfiguratorHandler) Endpoints(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
-	if h.wiring != nil {
-		endpointBackends, err = h.wiring.ListEndpointBackends(r.Context(), data.VersionID)
+	if h.agentWiring != nil {
+		endpointBackends, err = h.agentWiring.ListEndpointBackends(r.Context(), data.AgentID)
 		if err != nil {
 			Error(w, err)
 			return
@@ -502,6 +692,10 @@ func (h *ConfiguratorHandler) Endpoints(w http.ResponseWriter, r *http.Request) 
 
 // SetEndpointBackend maps an endpoint to a backend (POST with backend_id="" unmaps).
 // htmx fragment response: re-renders the endpoint_detail partial for the affected endpoint.
+//
+// Endpoint→backend wiring is agent-keyed (post-017), so we resolve the
+// version_id path param to the underlying agent_id once and use that for
+// every wiring call below.
 func (h *ConfiguratorHandler) SetEndpointBackend(w http.ResponseWriter, r *http.Request) {
 	vid := r.PathValue("version_id")
 	eid := r.PathValue("endpointID")
@@ -511,13 +705,19 @@ func (h *ConfiguratorHandler) SetEndpointBackend(w http.ResponseWriter, r *http.
 	}
 	bid := r.FormValue("backend_id")
 
+	_, agent, err := h.repo.GetWithAgent(r.Context(), vid)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
 	if bid == "" {
-		if err := h.wiring.UnsetEndpointBackend(r.Context(), vid, eid); err != nil {
+		if err := h.agentWiring.UnsetEndpointBackend(r.Context(), agent.ID, eid); err != nil {
 			Error(w, err)
 			return
 		}
 	} else {
-		if err := h.wiring.SetEndpointBackend(r.Context(), vid, eid, bid); err != nil {
+		if err := h.agentWiring.SetEndpointBackend(r.Context(), agent.ID, eid, bid); err != nil {
 			Error(w, err)
 			return
 		}
@@ -557,8 +757,8 @@ func (h *ConfiguratorHandler) SetEndpointBackend(w http.ResponseWriter, r *http.
 		}
 	}
 	var endpointBackends map[string]string
-	if h.wiring != nil {
-		endpointBackends, _ = h.wiring.ListEndpointBackends(r.Context(), vid)
+	if h.agentWiring != nil {
+		endpointBackends, _ = h.agentWiring.ListEndpointBackends(r.Context(), agent.ID)
 	}
 	if endpointBackends == nil {
 		endpointBackends = map[string]string{}
@@ -623,8 +823,9 @@ func (h *ConfiguratorHandler) mcpSubtabData(ctx context.Context, version *types.
 		"VersionID":      version.ID,
 		"AgentName":      agent.Name,
 		"AgentID":        agent.ID,
-		"Tab":            "architecture",
-		"SubTab":         "mcp",
+		"AgentStatus":    version.Status,
+		"ReadOnly":       version.Status != "INITIALIZING",
+		"Tab":            "mcp",
 		"Active":         "agents",
 		"AllMCPBackends": allBackends,
 		"Attachments":    attMap,
@@ -661,29 +862,68 @@ func (h *ConfiguratorHandler) ToggleMCPBackend(w http.ResponseWriter, r *http.Re
 	h.renderMCPRowFragment(w, r.Context(), vid, bid)
 }
 
-// UpdateMCPNote updates the guidance note for an attached MCP backend.
-// Returns 204 (no content) since the textarea fires on blur and doesn't need
-// a re-render.
-func (h *ConfiguratorHandler) UpdateMCPNote(w http.ResponseWriter, r *http.Request) {
-	vid := r.PathValue("version_id")
-	bid := r.PathValue("backendID")
+// UpdateAllMCPNotes processes the single bulk form on the MCP tab — one
+// textarea per currently-attached backend, all submitted together. Form
+// fields are named note[<backend_id>]. We upsert only currently-attached
+// rows (silently ignore note[*] entries whose backend isn't attached) so a
+// stale form can't accidentally re-attach a detached backend.
+//
+// Re-renders the whole MCP form via htmx outerHTML swap with Saved=true so
+// the user sees a single "Saved ✓" pill next to the Save button.
+func (h *ConfiguratorHandler) UpdateAllMCPNotes(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
 	if err := r.ParseForm(); err != nil {
-		Error(w, err)
+		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
-	note := r.FormValue("note")
-
 	if h.wiring == nil {
 		http.Error(w, "wiring repo not configured", http.StatusInternalServerError)
 		return
 	}
 
-	// AttachMCP upserts — re-attaching with the new note updates it.
-	if err := h.wiring.AttachMCP(r.Context(), vid, bid, note); err != nil {
+	version, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
+	if err != nil {
 		Error(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+
+	// Pull the current attachment set — we only update notes for backends
+	// actually attached. The form may carry stale fields for backends the
+	// user just unchecked via the htmx toggle.
+	atts, err := h.wiring.ListMCPAttachments(r.Context(), versionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	attached := map[string]bool{}
+	for _, a := range atts {
+		attached[a.BackendID] = true
+	}
+
+	const prefix = "note["
+	for key, vals := range r.Form {
+		if !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, "]") {
+			continue
+		}
+		bid := key[len(prefix) : len(key)-1]
+		if !attached[bid] || len(vals) == 0 {
+			continue
+		}
+		if err := h.wiring.AttachMCP(r.Context(), versionID, bid, vals[0]); err != nil {
+			Error(w, err)
+			return
+		}
+	}
+
+	data, err := h.mcpSubtabData(r.Context(), version, agent)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	data["Saved"] = true
+	// Re-render just the form (tab_content), not the layout — htmx swap
+	// is outerHTML on the form element.
+	_ = h.mcpTmpl.ExecuteTemplate(w, "tab_content", data)
 }
 
 // renderMCPRowFragment renders just the #mcp-row-{bid} outer div for htmx
@@ -712,14 +952,21 @@ func (h *ConfiguratorHandler) renderMCPRowFragment(w http.ResponseWriter, ctx co
 		}
 	}
 
+	// Resolve PrimaryURL for the header — same projection mcpSubtabData uses.
+	var primaryURL string
+	if be.Kind == types.ToolBackendKindMCPClient {
+		var cfg types.MCPBackendConfig
+		_ = json.Unmarshal(be.Config, &cfg)
+		primaryURL = cfg.URL
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="mcp-row-%s" class="config-mcp-detail">`, html.EscapeString(bid))
-	_ = h.mcpTmpl.ExecuteTemplate(w, "mcp_row_detail", map[string]any{
+	_ = h.mcpTmpl.ExecuteTemplate(w, "mcp_card", map[string]any{
 		"VersionID":  vid,
 		"Backend":    be,
 		"Attachment": att,
+		"PrimaryURL": primaryURL,
 	})
-	fmt.Fprint(w, `</div>`)
 }
 
 // tplDict builds a map[string]any from alternating key/value template args.

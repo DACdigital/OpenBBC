@@ -1,0 +1,37 @@
+{{define "content"}}
+<link rel="stylesheet" href="/static/configurator.css">
+<div class="config-page">
+  <div class="config-header">
+    <a href="/agents/ui" class="config-back">← Back to Agents</a>
+    <h1>{{.Agent.Name}}</h1>
+    {{if .Agent.FinalizedAt}}<span class="badge badge-ready">FINALIZED</span>{{end}}
+  </div>
+
+  <nav class="config-tabs">
+    <a href="/agents/{{.Agent.ID}}/configure/versions"
+       class="config-tab {{if eq .Tab "versions"}}active{{end}}">Versions</a>
+    <a href="/agents/{{.Agent.ID}}/configure/inputs"
+       class="config-tab {{if eq .Tab "inputs"}}active{{end}}">Inputs</a>
+    <a href="/agents/{{.Agent.ID}}/configure/architecture/flows"
+       class="config-tab {{if eq .Tab "architecture"}}active{{end}}">Architecture</a>
+  </nav>
+
+  {{if eq .Tab "architecture"}}
+  <nav class="config-subtabs">
+    <a href="/agents/{{.Agent.ID}}/configure/architecture/flows"
+       class="config-subtab {{if eq .SubTab "flows"}}active{{end}}">Flows</a>
+    <a href="/agents/{{.Agent.ID}}/configure/architecture/skills"
+       class="config-subtab {{if eq .SubTab "skills"}}active{{end}}">Skills</a>
+    <a href="/agents/{{.Agent.ID}}/configure/architecture/endpoints"
+       class="config-subtab {{if eq .SubTab "endpoints"}}active{{end}}">Endpoints</a>
+  </nav>
+  {{end}}
+
+  <div class="config-body">
+    {{if eq .Tab "versions"}}{{template "agent-versions-tab" .}}
+    {{else if eq .Tab "inputs"}}{{template "agent-inputs-tab" .}}
+    {{else if eq .Tab "architecture"}}{{template "agent-architecture-tab" .}}
+    {{end}}
+  </div>
+</div>
+{{end}}

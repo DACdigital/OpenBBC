@@ -51,6 +51,10 @@ func (s *configStore) UpdateFlowMapConfig(ctx context.Context, versionID string,
 	return s.versions.UpdateFlowMapConfig(ctx, versionID, cfg)
 }
 
+func (s *configStore) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error) {
+	return s.versions.CreateVersionFromPrompts(ctx, parentVersionID, promptsJSON)
+}
+
 func (s *configStore) UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error {
 	return s.versions.UpdateStatus(ctx, versionID, expectedFrom, to)
 }
@@ -90,10 +94,19 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	llmClient := anthropic.New(cfg.Anthropic)
 	backendRepo := repository.NewToolBackendRepository(db)
 	wiringRepo := repository.NewVersionWiringRepository(db)
+	agentWiringRepo := repository.NewAgentWiringRepository(db)
 
-	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, backendRepo, wiringRepo, &schema, web.Assets)
+	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, backendRepo, wiringRepo, agentWiringRepo, &schema, web.Assets)
 	if err != nil {
 		fatal("init configurator handler", err)
+	}
+
+	agentDetailHandler, err := NewAgentDetailHandler(
+		&agentDetailStoreAdapter{agents: agentRepo, versions: versionRepo},
+		backendRepo, agentWiringRepo, &schema, web.Assets,
+	)
+	if err != nil {
+		fatal("init agent detail handler", err)
 	}
 
 	backendsHandler, err := NewBackendsHandler(backendRepo, wiringRepo, web.Assets)
@@ -101,8 +114,12 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("init backends handler", err)
 	}
 	// Both BO and deployed orchestrators share the same builder: Builder is
-	// stateless (all DB reads happen inside Build, scoped by versionID).
-	builder := tools.NewBuilder(&toolBackendStoreAdapter{backend: backendRepo, wiring: wiringRepo})
+	// stateless (all DB reads happen inside Build, scoped by agent + version).
+	builder := tools.NewBuilder(&toolBackendStoreAdapter{
+		backend:     backendRepo,
+		wiring:      wiringRepo,
+		agentWiring: agentWiringRepo,
+	})
 
 	var transportFactory transport.Factory
 	switch cfg.Chat.Transport {
@@ -119,7 +136,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 
-	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, wiringRepo, orchestrator, transportFactory, web.Assets, logger)
+	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, web.Assets, logger)
 	if err != nil {
 		fatal("init chat handler", err)
 	}
@@ -131,7 +148,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 
 	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger)
-	deployHandler := NewDeployHandler(agentRepo, versionRepo, wiringRepo)
+	deployHandler := NewDeployHandler(agentRepo, versionRepo, agentWiringRepo)
 
 	mux := http.NewServeMux()
 
@@ -163,6 +180,8 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agent_versions/{version_id}/endpoints/{endpointID}/backend", configuratorHandler.SetEndpointBackend)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/inputs", configuratorHandler.Inputs)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/prompts", configuratorHandler.Prompts)
+	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts/confirm", configuratorHandler.ConfirmSavePrompts)
+	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts", configuratorHandler.SavePrompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/new", configuratorHandler.SkillNew)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/skills", configuratorHandler.SkillCreate)
@@ -174,8 +193,18 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/config.yaml", configuratorHandler.DownloadYAML)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/mcp", configuratorHandler.MCPSubtab)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/toggle", configuratorHandler.ToggleMCPBackend)
-	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/note", configuratorHandler.UpdateMCPNote)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/notes", configuratorHandler.UpdateAllMCPNotes)
+	// Convenience alias under the new top-level "MCP" version tab.
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/mcp", configuratorHandler.MCPSubtab)
 	RegisterConfiguratorRedirects(mux)
+
+	// Agent-level detail page: tabbed Versions / Inputs / Architecture.
+	mux.HandleFunc("GET /agents/{agent_id}/configure", agentDetailHandler.Index)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/versions", agentDetailHandler.Versions)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/inputs", agentDetailHandler.Inputs)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/architecture/{subtab}", agentDetailHandler.Architecture)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/architecture/{subtab}/{selectedID}", agentDetailHandler.Architecture)
+	mux.HandleFunc("POST /agents/{agent_id}/configure/architecture/endpoints/{endpointID}/backend", agentDetailHandler.SetEndpointBackend)
 
 	// MCP / tool backends CRUD
 	mux.HandleFunc("GET /mcp", backendsHandler.List)
@@ -230,10 +259,12 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 }
 
 // toolBackendStoreAdapter implements tools.BackendStore by delegating to the
-// two repo types. Lives here to keep the tools package free of handler deps.
+// repository types. Endpoint wiring is agent-keyed (agentWiring); MCP
+// attachments remain per-version (wiring).
 type toolBackendStoreAdapter struct {
-	backend *repository.ToolBackendRepository
-	wiring  *repository.VersionWiringRepository
+	backend     *repository.ToolBackendRepository
+	wiring      *repository.VersionWiringRepository
+	agentWiring *repository.AgentWiringRepository
 }
 
 func (a *toolBackendStoreAdapter) GetBackend(ctx context.Context, id string) (string, string, json.RawMessage, error) {
@@ -244,8 +275,8 @@ func (a *toolBackendStoreAdapter) GetBackend(ctx context.Context, id string) (st
 	return string(be.Kind), be.Name, be.Config, nil
 }
 
-func (a *toolBackendStoreAdapter) EndpointBackends(ctx context.Context, versionID string) (map[string]string, error) {
-	return a.wiring.ListEndpointBackends(ctx, versionID)
+func (a *toolBackendStoreAdapter) EndpointBackends(ctx context.Context, agentID string) (map[string]string, error) {
+	return a.agentWiring.ListEndpointBackends(ctx, agentID)
 }
 
 func (a *toolBackendStoreAdapter) MCPAttachments(ctx context.Context, versionID string) (map[string]string, error) {
@@ -258,4 +289,38 @@ func (a *toolBackendStoreAdapter) MCPAttachments(ctx context.Context, versionID 
 		m[att.BackendID] = att.Note
 	}
 	return m, nil
+}
+
+// chatBackendLister implements VersionBackendLister. Mixes the two wiring
+// repos because the chat header-overrides modal needs ListBackendsForVersion
+// (per-version union across HTTP+MCP) AND ListEndpointBackends keyed by
+// agent for the unmapped-endpoints banner.
+type chatBackendLister struct {
+	wiring      *repository.VersionWiringRepository
+	agentWiring *repository.AgentWiringRepository
+}
+
+func (c *chatBackendLister) ListBackendsForVersion(ctx context.Context, versionID string) ([]*types.ToolBackend, error) {
+	return c.wiring.ListBackendsForVersion(ctx, versionID)
+}
+func (c *chatBackendLister) ListEndpointBackends(ctx context.Context, agentID string) (map[string]string, error) {
+	return c.agentWiring.ListEndpointBackends(ctx, agentID)
+}
+
+// agentDetailStoreAdapter implements AgentDetailStore by forwarding to the
+// underlying repos. Lives here so handler/agent_detail.go doesn't depend on
+// repository types.
+type agentDetailStoreAdapter struct {
+	agents   *repository.AgentRepository
+	versions *repository.AgentVersionRepository
+}
+
+func (a *agentDetailStoreAdapter) GetByID(ctx context.Context, agentID string) (*types.Agent, error) {
+	return a.agents.GetByID(ctx, agentID)
+}
+func (a *agentDetailStoreAdapter) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
+	return a.agents.ListGrouped(ctx)
+}
+func (a *agentDetailStoreAdapter) GetFlowMapConfigForAgent(ctx context.Context, agentID string) ([]byte, string, error) {
+	return a.versions.GetFlowMapConfigForAgent(ctx, agentID)
 }

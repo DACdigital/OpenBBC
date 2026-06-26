@@ -1,0 +1,24 @@
+{{define "agent-inputs-tab"}}
+<div class="config-banner">
+  Wizard inputs are part of this agent's frozen architecture. They cannot change across versions of the agent.
+</div>
+
+{{if .WizardFields}}
+<dl class="agent-meta" style="flex-direction:column;gap:18px">
+  {{range .WizardFields}}
+  <div class="agent-meta-item">
+    <dt>{{.Label}}</dt>
+    <dd>
+      {{if .Value}}
+        <pre class="prompt-pre" style="margin:6px 0 0 0;white-space:pre-wrap">{{.Value}}</pre>
+      {{else}}
+        <span class="muted">— not set —</span>
+      {{end}}
+    </dd>
+  </div>
+  {{end}}
+</dl>
+{{else}}
+<p class="empty-state">No wizard inputs captured.</p>
+{{end}}
+{{end}}

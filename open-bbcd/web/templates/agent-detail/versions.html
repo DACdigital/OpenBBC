@@ -1,0 +1,69 @@
+{{define "agent-versions-tab"}}
+{{if .Agent.Description}}
+<p class="agent-subtitle">{{.Agent.Description}}</p>
+{{end}}
+
+<dl class="agent-meta">
+  <div class="agent-meta-item">
+    <dt>Created</dt>
+    <dd>{{.Agent.CreatedAt.Format "Jan 2, 2006"}}</dd>
+  </div>
+  {{if .Agent.FinalizedAt}}
+  <div class="agent-meta-item">
+    <dt>Finalized</dt>
+    <dd>{{.Agent.FinalizedAt.Format "Jan 2, 2006 15:04"}}</dd>
+  </div>
+  {{end}}
+  {{if .Agent.DiscoveryFilePath}}
+  <div class="agent-meta-item">
+    <dt>Discovery file</dt>
+    <dd><a href="/agents/{{.Agent.ID}}/discovery">Download</a></dd>
+  </div>
+  {{end}}
+  <div class="agent-meta-item">
+    <dt>Currently deployed</dt>
+    <dd>
+      {{if .CurrentDeployedVersionID}}
+        <a href="/agent_versions/{{.CurrentDeployedVersionID}}/configure">v{{.CurrentDeployedVersionNum}}</a>
+      {{else}}
+        —
+      {{end}}
+    </dd>
+  </div>
+</dl>
+
+<div class="page-header" style="border-top:1px solid #2d333b;padding-top:18px">
+  <h2 class="section-title" style="margin:0">Versions</h2>
+  {{if .CurrentDeployedVersionID}}
+  <button class="btn-secondary btn-danger"
+          hx-get="/agents/{{.Agent.ID}}/undeploy/confirm"
+          hx-target="body" hx-swap="beforeend">Undeploy</button>
+  {{end}}
+</div>
+
+{{if .Versions}}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th class="col-version">Version</th>
+      <th class="col-status">Status</th>
+      <th class="col-date">Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Versions}}
+    {{$href := printf "/agent_versions/%s/configure" .Version.ID}}
+    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="{{$href}}">
+      <td class="col-version {{if gt .VersionNum 1}}old{{end}}">
+        <a class="agent-link" href="{{$href}}">v{{.VersionNum}}</a>
+      </td>
+      <td class="col-status"><span class="badge badge-{{.Version.Status | statusClass}}">{{.Version.Status}}</span></td>
+      <td class="col-date">{{.Version.CreatedAt.Format "Jan 2, 2006"}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty-state">No versions yet for this agent.</p>
+{{end}}
+{{end}}

@@ -19,17 +19,24 @@ func NewAgentRepository(db *sql.DB) *AgentRepository {
 	return &AgentRepository{db: db}
 }
 
-const agentColumns = `id, name, description, discovery_file_path, created_at`
+const agentColumns = `id, name, description, discovery_file_path, architecture, finalized_at, created_at`
 
 func scanAgent(s scanner) (*types.Agent, error) {
 	a := &types.Agent{}
 	var description sql.NullString
 	var disc sql.NullString
-	if err := s.Scan(&a.ID, &a.Name, &description, &disc, &a.CreatedAt); err != nil {
+	var arch []byte
+	var finalized sql.NullTime
+	if err := s.Scan(&a.ID, &a.Name, &description, &disc, &arch, &finalized, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	a.Description = description.String
 	a.DiscoveryFilePath = disc.String
+	a.Architecture = arch
+	if finalized.Valid {
+		t := finalized.Time
+		a.FinalizedAt = &t
+	}
 	return a, nil
 }
 
@@ -127,10 +134,12 @@ func (r *AgentRepository) List(ctx context.Context) ([]*types.Agent, error) {
 }
 
 // ListGrouped returns each Agent with its ordered versions. One LEFT JOIN.
+// Identity-only — architecture is intentionally not loaded here (it can be
+// large and the list view doesn't need it).
 func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT a.id::text, a.name,
-		       av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.bundle, av.created_at, av.updated_at
+		       av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.created_at, av.updated_at
 		FROM agents a
 		LEFT JOIN agent_versions av ON av.agent_id = a.id
 		ORDER BY a.created_at, av.created_at
@@ -148,9 +157,8 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentGroup, 
 		var vAgentID sql.NullString
 		var vParent sql.NullString
 		var vStatus sql.NullString
-		var vBundle []byte
 		var vCreated, vUpdated sql.NullTime
-		if err := rows.Scan(&aID, &aName, &vID, &vAgentID, &vParent, &vStatus, &vBundle, &vCreated, &vUpdated); err != nil {
+		if err := rows.Scan(&aID, &aName, &vID, &vAgentID, &vParent, &vStatus, &vCreated, &vUpdated); err != nil {
 			return nil, err
 		}
 		g, ok := groupsByID[aID]
@@ -166,7 +174,6 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentGroup, 
 			ID:        vID.String,
 			AgentID:   vAgentID.String,
 			Status:    vStatus.String,
-			Bundle:    vBundle,
 			CreatedAt: vCreated.Time,
 			UpdatedAt: vUpdated.Time,
 		}

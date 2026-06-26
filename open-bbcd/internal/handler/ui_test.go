@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -109,116 +108,28 @@ func mustParseAgentVersionsTmpl(t *testing.T) *template.Template {
 	}).Parse(layout + content))
 }
 
-func TestUIHandler_AgentDetail_PopulatesHeader(t *testing.T) {
-	createdAt := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+// TestUIHandler_AgentDetail_RedirectsToTabbedPage covers the legacy
+// /agents/ui?agent=X entry point: post-tab-refactor it 302-redirects to
+// the new tabbed agent detail at /agents/{id}/configure/versions.
+// The previous rendering tests moved to TestAgentDetailHandler_Versions.
+func TestUIHandler_AgentDetail_RedirectsToTabbedPage(t *testing.T) {
 	agentID := "11111111-1111-1111-1111-111111111111"
-	agent := &types.Agent{
-		ID:                agentID,
-		Name:              "Coffee Bot",
-		Description:       "Shop assistant",
-		DiscoveryFilePath: "coffee.zip",
-		CreatedAt:         createdAt,
-	}
-	groups := []types.AgentGroup{{
-		AgentID: agentID,
-		Name:    "Coffee Bot",
-		Versions: []types.AgentVersionListItem{
-			{VersionNum: 2, Version: &types.AgentVersion{ID: "v2", Status: "DEPLOYED"}},
-			{VersionNum: 1, Version: &types.AgentVersion{ID: "v1", Status: "READY"}},
-		},
-	}}
 	h := &UIHandler{
 		agentRepo: &mockGroupedAgentRepo{
-			listGrouped: func(ctx context.Context) ([]types.AgentGroup, error) { return groups, nil },
-			getByID:     func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
+			listGrouped: func(ctx context.Context) ([]types.AgentGroup, error) { return nil, nil },
+			getByID:     func(ctx context.Context, id string) (*types.Agent, error) { return &types.Agent{ID: agentID}, nil },
 		},
-		agentVersionsTmpl: mustParseAgentVersionsTmpl(t),
-		logger:            slog.Default(),
+		logger: slog.Default(),
 	}
 	req := httptest.NewRequest(http.MethodGet, "/agents/ui?agent="+agentID, nil)
 	w := httptest.NewRecorder()
 	h.AgentsPage(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302; body=%s", w.Code, w.Body.String())
 	}
-	body := w.Body.String()
-	for _, want := range []string{
-		"Coffee Bot",
-		"Shop assistant",
-		"coffee.zip",
-		`<p class="deployed">v2</p>`,
-		`<div class="v">v2:DEPLOYED</div>`,
-		`<div class="v">v1:READY</div>`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing %q\n--- body ---\n%s", want, body)
-		}
-	}
-}
-
-func TestUIHandler_AgentDetail_RealTemplateRenders(t *testing.T) {
-	agentID := "00000000-0000-0000-0000-000000000000"
-	agent := &types.Agent{ID: agentID, Name: "Bot", Description: "Desc", DiscoveryFilePath: "bot.zip", CreatedAt: time.Now()}
-	groups := []types.AgentGroup{{
-		AgentID: agentID, Name: "Bot",
-		Versions: []types.AgentVersionListItem{
-			{VersionNum: 1, Version: &types.AgentVersion{ID: "v1", Status: "READY", CreatedAt: time.Now()}},
-		},
-	}}
-	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"statusClass": statusClass,
-		"add":         func(a, b int) int { return a + b },
-		"sub":         func(a, b int) int { return a - b },
-		"urlEncode":   func(s string) string { return s },
-	}).ParseFiles("../../web/templates/layout.html", "../../web/templates/agent-versions.html")
-	if err != nil {
-		t.Fatalf("ParseFiles: %v", err)
-	}
-	h := &UIHandler{
-		agentRepo: &mockGroupedAgentRepo{
-			listGrouped: func(ctx context.Context) ([]types.AgentGroup, error) { return groups, nil },
-			getByID:     func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
-		},
-		agentVersionsTmpl: tmpl,
-		logger:            slog.Default(),
-	}
-	req := httptest.NewRequest(http.MethodGet, "/agents/ui?agent="+agentID, nil)
-	w := httptest.NewRecorder()
-	h.AgentsPage(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	body := w.Body.String()
-	for _, want := range []string{"agent-meta", "Bot", "Desc", "bot.zip", `v1`} {
-		if !strings.Contains(body, want) {
-			t.Errorf("real template missing %q", want)
-		}
-	}
-}
-
-func TestUIHandler_AgentDetail_NoneDeployed(t *testing.T) {
-	agentID := "22222222-2222-2222-2222-222222222222"
-	agent := &types.Agent{ID: agentID, Name: "X", DiscoveryFilePath: "x.zip"}
-	groups := []types.AgentGroup{{
-		AgentID: agentID, Name: "X",
-		Versions: []types.AgentVersionListItem{
-			{VersionNum: 1, Version: &types.AgentVersion{ID: "v1", Status: "READY"}},
-		},
-	}}
-	h := &UIHandler{
-		agentRepo: &mockGroupedAgentRepo{
-			listGrouped: func(ctx context.Context) ([]types.AgentGroup, error) { return groups, nil },
-			getByID:     func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
-		},
-		agentVersionsTmpl: mustParseAgentVersionsTmpl(t),
-		logger:            slog.Default(),
-	}
-	req := httptest.NewRequest(http.MethodGet, "/agents/ui?agent="+agentID, nil)
-	w := httptest.NewRecorder()
-	h.AgentsPage(w, req)
-	if !strings.Contains(w.Body.String(), `<p class="deployed">—</p>`) {
-		t.Errorf("expected em-dash for no-deploy:\n%s", w.Body.String())
+	want := "/agents/" + agentID + "/configure/versions"
+	if got := w.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
 	}
 }
 

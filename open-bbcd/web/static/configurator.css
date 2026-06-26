@@ -186,6 +186,64 @@
 .prompt-skill[open] { background: #1c2230; }
 .prompt-skill[open] summary { margin-bottom: 8px; }
 
+.prompt-textarea {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #e6edf3;
+  resize: vertical;
+  min-height: 120px;
+}
+.prompt-textarea:focus {
+  outline: none;
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, .15);
+}
+.prompts-form { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
+.prompts-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-top: 8px;
+  border-top: 1px solid #21262d;
+}
+.prompts-form-actions .form-hint { margin: 0; }
+
+/* Prompts save-confirmation modal — overrides .modal-content's max-width
+   so the side-by-side diff fits, and styles the per-field diff list. */
+.prompts-confirm-modal-content {
+  max-width: 1100px;
+  width: 92vw;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+.prompts-diff-list { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.prompts-diff {
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  background: #161b22;
+  padding: 10px 12px;
+}
+.prompts-diff summary { cursor: pointer; color: #e6edf3; font-size: 13px; }
+.prompts-diff[open] summary { margin-bottom: 10px; }
+.prompts-diff-pane { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.prompts-diff-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #8b949e;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.prompts-diff-before { border-color: #5f1a18; background: rgba(248, 81, 73, .04); }
+.prompts-diff-after  { border-color: #1e6b2e; background: rgba(46, 160, 67, .06); }
+.prompts-confirm-submit { margin: 0; }
+
 /* Read-only preview tweaks. */
 .config-readonly .config-list-row-toggle { cursor: not-allowed; opacity: .5; }
 .config-readonly .config-list-row-toggle:hover { box-shadow: none; }
@@ -928,4 +986,89 @@
   font-size: 13px;
   color: #f8b6b3;
   margin-top: 4px;
+}
+
+/* MCP tab layout — one card per registered MCP backend, single bulk-save
+   form at the bottom. The header row carries the attach checkbox + name;
+   the URL pins to the right. When attached, the textarea sits below in a
+   labeled block. */
+.config-mcp-form { display: flex; flex-direction: column; gap: 18px; padding: 18px 4px 24px; }
+.config-mcp-list { display: flex; flex-direction: column; gap: 14px; }
+.config-mcp-row {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.config-mcp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.config-mcp-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.config-mcp-toggle input[type=checkbox] { margin: 0; flex-shrink: 0; }
+.config-mcp-name { font-weight: 600; color: #e6edf3; font-size: 14px; }
+.config-mcp-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #8b949e;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+.config-mcp-note { display: flex; flex-direction: column; gap: 6px; }
+.config-mcp-note-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #8b949e;
+  font-weight: 600;
+}
+.config-mcp-note textarea {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #e6edf3;
+  resize: vertical;
+  min-height: 80px;
+}
+.config-mcp-note textarea:focus {
+  outline: none;
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, .15);
+}
+.config-mcp-detached { margin: 0; font-size: 13px; }
+
+.config-mcp-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #21262d;
+}
+.config-mcp-note-saved {
+  font-size: 13px;
+  color: #3fb950;
+  animation: config-mcp-note-fade 2.4s ease-out forwards;
+}
+@keyframes config-mcp-note-fade {
+  0%, 60% { opacity: 1; }
+  100% { opacity: 0; }
 }

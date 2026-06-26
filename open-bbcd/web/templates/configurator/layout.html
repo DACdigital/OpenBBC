@@ -1,8 +1,8 @@
 {{define "content"}}
 <div class="config-page {{if .ReadOnly}}config-readonly{{end}}">
   <div class="config-header">
-    <a href="/agents/ui?agent={{.AgentID}}" class="config-back">← Back to versions</a>
-    <h1>{{.AgentName}}</h1>
+    <a href="/agents/{{.AgentID}}/configure/versions" class="config-back">← {{.AgentName}}</a>
+    <h1>Version detail</h1>
     {{if .AgentStatus}}<span class="badge badge-{{.AgentStatus | statusClass}}">{{.AgentStatus}}</span>{{end}}
     {{if .ReadOnly}}
     <span class="config-spacer"></span>
@@ -35,16 +35,10 @@
   </div>
 
   <nav class="config-tabs">
-    {{if .ReadOnly}}
-    <a href="/agent_versions/{{.VersionID}}/configure/inputs"
-       class="config-tab {{if eq .Tab "inputs"}}active{{end}}">Inputs</a>
-    {{end}}
-    <a href="/agent_versions/{{.VersionID}}/configure/architecture/flows"
-       class="config-tab {{if eq .Tab "architecture"}}active{{end}}">Architecture</a>
-    {{if .ReadOnly}}
     <a href="/agent_versions/{{.VersionID}}/configure/prompts"
        class="config-tab {{if eq .Tab "prompts"}}active{{end}}">Prompts</a>
-    {{end}}
+    <a href="/agent_versions/{{.VersionID}}/configure/mcp"
+       class="config-tab {{if eq .Tab "mcp"}}active{{end}}">MCP</a>
     {{if not .ReadOnly}}
     <span class="config-spacer"></span>
     <a href="/agent_versions/{{.VersionID}}/configure/finalize"
@@ -52,23 +46,9 @@
     {{end}}
   </nav>
 
-  {{if eq .Tab "architecture"}}
-  <nav class="config-subtabs">
-    <a href="/agent_versions/{{.VersionID}}/configure/architecture/flows"
-       class="config-subtab {{if eq .SubTab "flows"}}active{{end}}">Flows</a>
-    <a href="/agent_versions/{{.VersionID}}/configure/architecture/skills"
-       class="config-subtab {{if eq .SubTab "skills"}}active{{end}}">Skills</a>
-    <a href="/agent_versions/{{.VersionID}}/configure/architecture/endpoints"
-       class="config-subtab {{if eq .SubTab "endpoints"}}active{{end}}">Endpoints</a>
-    <a href="/agent_versions/{{.VersionID}}/configure/architecture/mcp"
-       class="config-subtab {{if eq .SubTab "mcp"}}active{{end}}">MCP</a>
-  </nav>
-  {{end}}
-
   {{if .ReadOnly}}
-  <div class="config-banner config-banner-readonly">
-    <strong>Read-only preview.</strong> This agent is {{.AgentStatus}}; the configurator is locked.
-    Re-run the wizard to start a new version.
+  <div class="config-banner">
+    Inputs and Architecture are agent-scoped — they live on the <a href="/agents/{{.AgentID}}/configure">agent detail page</a>. This page only shows what's editable per-version.
   </div>
   {{end}}
 
