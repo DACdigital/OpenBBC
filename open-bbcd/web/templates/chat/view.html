@@ -21,10 +21,11 @@
   </div>
   <div class="chat-actions">
     <a href="#"
-       class="link-muted"
+       class="btn-secondary"
        hx-get="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/headers"
        hx-target="#modal-host"
-       hx-swap="innerHTML">Edit test headers</a>
+       hx-swap="innerHTML"
+       onclick="event.preventDefault()">Edit test headers</a>
     <a href="/agent_versions/{{.VersionID}}/chat?from=chat:{{.SessionID}}" class="btn-secondary">Sessions</a>
     <form method="post" action="/agent_versions/{{.VersionID}}/chat/sessions" style="display:inline">
       <button type="submit" class="btn-primary">+ New Session</button>

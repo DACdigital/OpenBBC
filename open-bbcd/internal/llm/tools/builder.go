@@ -62,8 +62,11 @@ func (b *Builder) Build(ctx context.Context, versionID string, bundle json.RawMe
 	byBackend := map[string][]HTTPEndpointDef{}
 	var unmapped []HTTPEndpointDef
 	for _, t := range snap.Tools {
+		// Sanitize the LLM-visible name to the Anthropic-required charset
+		// (^[a-zA-Z0-9_-]{1,128}$). The stable id (t.ID) is preserved
+		// separately for FK lookup against the wiring table.
 		ep := HTTPEndpointDef{
-			ID: t.ID, Name: t.Name, Description: t.Description,
+			ID: t.ID, Name: sanitizeToolName(t.Name), Description: t.Description,
 			Method: t.Method, Path: t.Path,
 			PathParams: t.PathParams, QueryParams: t.QueryParams, BodyShape: t.BodyShape,
 		}
