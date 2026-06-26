@@ -117,12 +117,12 @@ func TestToolBackendRepo_Update_HappyPath(t *testing.T) {
 func TestToolBackendRepo_Delete_BlockedByWiring(t *testing.T) {
 	db := openTestDB(t)
 	backendRepo := NewToolBackendRepository(db)
-	wiringRepo := NewVersionWiringRepository(db)
+	agentWiring := NewAgentWiringRepository(db)
 	ctx := context.Background()
 
 	backendID := seedHTTPBackend(t, db, "wired-backend")
-	versionID := seedAgentVersion(t, db)
-	if err := wiringRepo.SetEndpointBackend(ctx, versionID, "ep.foo", backendID); err != nil {
+	agentID, _ := seedAgent(t, db)
+	if err := agentWiring.SetEndpointBackend(ctx, agentID, "ep.foo", backendID); err != nil {
 		t.Fatalf("SetEndpointBackend: %v", err)
 	}
 	err := backendRepo.Delete(ctx, backendID)

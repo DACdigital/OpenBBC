@@ -86,8 +86,8 @@ func newTestChatHandler(t *testing.T, runner *stubTurnRunner) *ChatHandler {
 	t.Helper()
 	h, err := NewChatHandler(
 		&stubAgentRepo{
-			version: &types.AgentVersion{ID: "v", AgentID: "a", Bundle: []byte(`{}`)},
-			agent:   &types.Agent{ID: "a", Name: "test"},
+			version: &types.AgentVersion{ID: "v", AgentID: "a", Prompts: []byte(`{}`)},
+			agent:   &types.Agent{ID: "a", Name: "test", Architecture: []byte(`{}`)},
 		},
 		&stubChatStore{},
 		nil, // headerOvr — not exercised in basic turn tests

@@ -46,15 +46,16 @@ type HeaderOverridesStore interface {
 }
 
 // VersionBackendLister lists all tool backends wired to a version (HTTP via
-// endpoint_backend mapping, MCP via mcp_backend attachment). Used by the
-// header overrides modal so the form shows one row per backend.
+// the agent's endpoint_backend mapping resolved through agent_id, MCP via
+// the version's own mcp_backend attachment). Used by the header overrides
+// modal so the form shows one row per backend.
 //
-// ListEndpointBackends returns the per-endpoint→backend wiring map; the
-// chat view uses it to surface a warning when the version has endpoints
+// ListEndpointBackends returns the agent-level endpoint→backend wiring map;
+// the chat view uses it to surface a warning when the agent has endpoints
 // without a backend assigned (the LLM otherwise has no way to call them).
 type VersionBackendLister interface {
 	ListBackendsForVersion(ctx context.Context, versionID string) ([]*types.ToolBackend, error)
-	ListEndpointBackends(ctx context.Context, versionID string) (map[string]string, error)
+	ListEndpointBackends(ctx context.Context, agentID string) (map[string]string, error)
 }
 
 // TurnRunner is the orchestrator dependency. Implemented by *chat.Orchestrator.
@@ -124,15 +125,15 @@ func NewChatHandler(
 }
 
 // NewSession creates a new chat_sessions row and 303-redirects to the chat view.
-// Returns 409 if the version has no bundle yet.
+// Returns 409 if the agent isn't finalized yet (no architecture / no prompts).
 func (h *ChatHandler) NewSession(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
-	version, _, err := h.agents.GetWithAgent(r.Context(), versionID)
+	version, agent, err := h.agents.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	if len(version.Bundle) == 0 {
+	if len(agent.Architecture) == 0 || len(version.Prompts) == 0 {
 		Error(w, types.ErrAgentNotRunnable)
 		return
 	}
@@ -377,19 +378,20 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		SessionID:    sessionID,
 		SessionTitle: sessionTitle,
 		Messages:     buildMessageViews(msgs),
-		HasBundle:    len(version.Bundle) > 0,
+		HasBundle:    len(agent.Architecture) > 0 && len(version.Prompts) > 0,
 	}
 	// Count unmapped endpoints so the view can show a warning banner.
 	// Best-effort: errors here don't block the chat page from rendering.
+	// Endpoints live on the agent (post-017); wiring is also agent-keyed.
 	if data.HasBundle && h.backends != nil {
 		var snap struct {
 			Tools []struct {
 				ID string `json:"id"`
 			} `json:"tools"`
 		}
-		if err := json.Unmarshal(version.Bundle, &snap); err == nil {
+		if err := json.Unmarshal(agent.Architecture, &snap); err == nil {
 			data.TotalEndpoints = len(snap.Tools)
-			if mapping, err := h.backends.ListEndpointBackends(r.Context(), versionID); err == nil {
+			if mapping, err := h.backends.ListEndpointBackends(r.Context(), agent.ID); err == nil {
 				for _, t := range snap.Tools {
 					if t.ID == "" {
 						continue

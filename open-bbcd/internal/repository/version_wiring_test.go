@@ -5,44 +5,6 @@ import (
 	"testing"
 )
 
-func TestVersionWiring_EndpointBackend(t *testing.T) {
-	db := openTestDB(t)
-	repo := NewVersionWiringRepository(db)
-	ctx := context.Background()
-
-	versionID := seedAgentVersion(t, db)
-	backendID := seedHTTPBackend(t, db, "api")
-
-	if err := repo.SetEndpointBackend(ctx, versionID, "orders.create", backendID); err != nil {
-		t.Fatalf("SetEndpointBackend: %v", err)
-	}
-	m, err := repo.ListEndpointBackends(ctx, versionID)
-	if err != nil {
-		t.Fatalf("ListEndpointBackends: %v", err)
-	}
-	if got := m["orders.create"]; got != backendID {
-		t.Fatalf("want %s, got %s", backendID, got)
-	}
-
-	// Upsert: setting again with a different backend updates the row, no error.
-	backend2 := seedHTTPBackend(t, db, "api2")
-	if err := repo.SetEndpointBackend(ctx, versionID, "orders.create", backend2); err != nil {
-		t.Fatalf("SetEndpointBackend (upsert): %v", err)
-	}
-	m, _ = repo.ListEndpointBackends(ctx, versionID)
-	if got := m["orders.create"]; got != backend2 {
-		t.Fatalf("upsert failed: want %s, got %s", backend2, got)
-	}
-
-	if err := repo.UnsetEndpointBackend(ctx, versionID, "orders.create"); err != nil {
-		t.Fatalf("UnsetEndpointBackend: %v", err)
-	}
-	m, _ = repo.ListEndpointBackends(ctx, versionID)
-	if _, ok := m["orders.create"]; ok {
-		t.Fatalf("expected unset")
-	}
-}
-
 func TestVersionWiring_MCPAttachment(t *testing.T) {
 	db := openTestDB(t)
 	repo := NewVersionWiringRepository(db)
@@ -85,16 +47,19 @@ func TestVersionWiring_MCPAttachment(t *testing.T) {
 func TestVersionWiring_UsageCounts(t *testing.T) {
 	db := openTestDB(t)
 	repo := NewVersionWiringRepository(db)
+	agentWiring := NewAgentWiringRepository(db)
 	ctx := context.Background()
 
 	httpB := seedHTTPBackend(t, db, "api")
 	mcpB := seedMCPBackend(t, db, "slack")
-	v1 := seedAgentVersion(t, db)
-	v2 := seedAgentVersion(t, db)
+	a1, v1 := seedAgent(t, db)
+	a2, _ := seedAgent(t, db)
 
-	_ = repo.SetEndpointBackend(ctx, v1, "orders.create", httpB)
-	_ = repo.SetEndpointBackend(ctx, v2, "orders.create", httpB) // 2 versions using httpB
-	_ = repo.AttachMCP(ctx, v1, mcpB, "")                        // 1 version using mcpB
+	// HTTP wiring is per-agent (post-017): two distinct agents → count = 2.
+	_ = agentWiring.SetEndpointBackend(ctx, a1, "orders.create", httpB)
+	_ = agentWiring.SetEndpointBackend(ctx, a2, "orders.create", httpB)
+	// MCP attachment stays per-version.
+	_ = repo.AttachMCP(ctx, v1, mcpB, "")
 
 	counts, err := repo.UsageCounts(ctx)
 	if err != nil {

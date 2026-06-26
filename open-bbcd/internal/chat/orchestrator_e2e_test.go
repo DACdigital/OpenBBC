@@ -61,10 +61,14 @@ func TestOrchestrator_E2E_HTTPBackend(t *testing.T) {
 	}
 
 	version := &types.AgentVersion{
-		ID:     "version-1",
-		Bundle: []byte(`{"main_prompt":"sys","tools":[{"id":"orders.create","name":"orders_create","method":"POST","path":"/api/orders"}]}`),
+		ID:      "version-1",
+		Prompts: []byte(`{"main_prompt":"sys"}`),
 	}
-	fakeAgent := &fakeAgentRepo{version: version}
+	agent := &types.Agent{
+		ID:           "agent-1",
+		Architecture: []byte(`{"tools":[{"id":"orders.create","name":"orders_create","method":"POST","path":"/api/orders"}]}`),
+	}
+	fakeAgent := &fakeAgentRepo{version: version, agent: agent}
 	fakeChat := &fakeChatRepo{}
 
 	o := NewOrchestrator(fakeAgent, fakeChat, flm, &fakeBuilder{handler: composite}, slog.Default())

@@ -99,7 +99,8 @@ type stubConfigStore struct {
 	updateFn      func(cfg []byte) error
 	statusFn      func(versionID, expectedFrom, to string) error
 	currentStatus string // optional override; defaults to "INITIALIZING"
-	bundle        []byte // optional compiled bundle; rendered by the Prompts tab
+	architecture  []byte // optional agent-level architecture blob
+	prompts       []byte // optional version-level prompts blob (rendered by the Prompts tab)
 }
 
 func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
@@ -118,8 +119,8 @@ func (s *stubConfigStore) GetWithAgent(ctx context.Context, versionID string) (*
 	// The stub uses the URL's version_id for both ids — there's only one
 	// config in this fake, and per-version calls (GetFlowMapConfig /
 	// UpdateFlowMapConfig) ignore the id anyway.
-	version := &types.AgentVersion{ID: versionID, AgentID: versionID, Status: status, Bundle: s.bundle}
-	agent := &types.Agent{ID: versionID, Name: s.cfg.Name}
+	version := &types.AgentVersion{ID: versionID, AgentID: versionID, Status: status, Prompts: s.prompts}
+	agent := &types.Agent{ID: versionID, Name: s.cfg.Name, Architecture: s.architecture}
 	return version, agent, nil
 }
 
@@ -180,7 +181,7 @@ func newConfigHandler(t *testing.T, getter handler.ConfigStore) *handler.Configu
 	if err := yaml.Unmarshal(schemaBytes, &schema); err != nil {
 		t.Fatalf("parse schema: %v", err)
 	}
-	h, err := handler.NewConfiguratorHandler(getter, nil, nil, &schema, web.Assets)
+	h, err := handler.NewConfiguratorHandler(getter, nil, nil, nil, &schema, web.Assets)
 	if err != nil {
 		t.Fatalf("NewConfiguratorHandler: %v", err)
 	}
@@ -1065,15 +1066,27 @@ func TestConfigurator_InputsTab_OmitsAgentLevelFields(t *testing.T) {
 	}
 }
 
-// makePromptsConfigStore returns a stubConfigStore wired for the Prompts tab:
-// a non-INITIALIZING status (so ReadOnly is true in the layout) and an
-// optional bundle payload exposed via GetWithAgent.
+// makePromptsConfigStore returns a stubConfigStore wired for the Prompts
+// tab: non-INITIALIZING status (ReadOnly=true in the layout), plus the
+// post-017 split shape — architecture (agent-level skill metadata) and
+// prompts (version-level main + per-skill prompts). The legacy `bundle`
+// argument is split internally so the test surface stays small.
 func makePromptsConfigStore(status string, bundle []byte) *stubConfigStore {
-	return &stubConfigStore{
+	store := &stubConfigStore{
 		cfg:           sampleConfig(),
 		currentStatus: status,
-		bundle:        bundle,
 	}
+	if len(bundle) > 0 {
+		arch, prompts, err := types.SplitBundle(bundle)
+		if err != nil {
+			// Test inputs deliberately include "not json" cases. Leave both
+			// blobs untouched so the empty-state path triggers.
+			return store
+		}
+		store.architecture = arch
+		store.prompts = prompts
+	}
+	return store
 }
 
 func TestConfigurator_Prompts_RendersMainAndSkillPrompts(t *testing.T) {
@@ -1218,7 +1231,8 @@ func newConfigHandlerWithDB(t *testing.T, db *sql.DB) *handler.ConfiguratorHandl
 	versionRepo := repository.NewAgentVersionRepository(db)
 	backendRepo := repository.NewToolBackendRepository(db)
 	wiringRepo := repository.NewVersionWiringRepository(db)
-	h, err := handler.NewConfiguratorHandler(versionRepo, backendRepo, wiringRepo, &schema, web.Assets)
+	agentWiringRepo := repository.NewAgentWiringRepository(db)
+	h, err := handler.NewConfiguratorHandler(versionRepo, backendRepo, wiringRepo, agentWiringRepo, &schema, web.Assets)
 	if err != nil {
 		t.Fatalf("NewConfiguratorHandler: %v", err)
 	}

@@ -14,11 +14,19 @@ import (
 
 type fakeAgentRepo struct {
 	version *types.AgentVersion
+	agent   *types.Agent
 	err     error
 }
 
-func (f *fakeAgentRepo) GetByID(ctx context.Context, id string) (*types.AgentVersion, error) {
-	return f.version, f.err
+func (f *fakeAgentRepo) GetWithAgent(ctx context.Context, id string) (*types.AgentVersion, *types.Agent, error) {
+	if f.err != nil {
+		return nil, nil, f.err
+	}
+	agent := f.agent
+	if agent == nil && f.version != nil {
+		agent = &types.Agent{ID: f.version.AgentID}
+	}
+	return f.version, agent, nil
 }
 
 type fakeChatRepo struct {
@@ -102,7 +110,7 @@ type fakeBuilder struct {
 	err     error
 }
 
-func (f *fakeBuilder) Build(ctx context.Context, versionID string, bundle json.RawMessage) (tools.Handler, error) {
+func (f *fakeBuilder) Build(ctx context.Context, agentID, versionID string, architecture json.RawMessage) (tools.Handler, error) {
 	return f.handler, f.err
 }
 

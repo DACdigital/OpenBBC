@@ -24,9 +24,10 @@ type DeployVersionRepository interface {
 }
 
 // DeployWiringRepo is the narrow wiring-repo interface DeployHandler needs.
-// Implemented by *repository.VersionWiringRepository.
+// Implemented by *repository.AgentWiringRepository — endpoint→backend
+// wiring is agent-keyed (post-017).
 type DeployWiringRepo interface {
-	ListEndpointBackends(ctx context.Context, versionID string) (map[string]string, error)
+	ListEndpointBackends(ctx context.Context, agentID string) (map[string]string, error)
 }
 
 type DeployHandler struct {
@@ -76,8 +77,8 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Block deploy if any endpoint in the bundle is unmapped.
-	if err := h.validateAllEndpointsMapped(r.Context(), version); err != nil {
+	// Block deploy if any endpoint in the agent's architecture is unmapped.
+	if err := h.validateAllEndpointsMapped(r.Context(), version.AgentID); err != nil {
 		Error(w, err)
 		return
 	}
@@ -108,14 +109,18 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 }
 
 // validateAllEndpointsMapped returns ErrUnmappedEndpoints (wrapped with a
-// detail message about which endpoints are missing) if the version's bundle
-// has any tools[].id that isn't present in agent_version_endpoint_backend
-// for this version. Returns nil when every endpoint is mapped.
-func (h *DeployHandler) validateAllEndpointsMapped(ctx context.Context, version *types.AgentVersion) error {
-	if len(version.Bundle) == 0 {
-		// No bundle yet — can't have endpoints to map. The existing flow
-		// already rejects non-READY versions with ErrAgentNotDeployable;
-		// don't double-error here.
+// detail message about which endpoints are missing) if the agent's
+// architecture has any tools[].id that isn't present in
+// agent_endpoint_backend for this agent. Returns nil when every endpoint
+// is mapped.
+func (h *DeployHandler) validateAllEndpointsMapped(ctx context.Context, agentID string) error {
+	agent, err := h.agents.GetByID(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	if len(agent.Architecture) == 0 {
+		// Not finalized yet — the existing flow rejects non-READY versions
+		// with ErrAgentNotDeployable; don't double-error here.
 		return nil
 	}
 
@@ -125,9 +130,9 @@ func (h *DeployHandler) validateAllEndpointsMapped(ctx context.Context, version 
 			ID string `json:"id"`
 		} `json:"tools"`
 	}
-	if err := json.Unmarshal(version.Bundle, &snap); err != nil {
-		// Malformed bundle is an internal error, not a deploy-validation
-		// failure. Let it surface as 500.
+	if err := json.Unmarshal(agent.Architecture, &snap); err != nil {
+		// Malformed architecture is an internal error, not a deploy-
+		// validation failure. Let it surface as 500.
 		return err
 	}
 
@@ -135,7 +140,7 @@ func (h *DeployHandler) validateAllEndpointsMapped(ctx context.Context, version 
 		return nil // nothing to map
 	}
 
-	mapping, err := h.wiring.ListEndpointBackends(ctx, version.ID)
+	mapping, err := h.wiring.ListEndpointBackends(ctx, agentID)
 	if err != nil {
 		return err
 	}

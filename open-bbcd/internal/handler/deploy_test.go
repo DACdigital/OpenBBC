@@ -64,7 +64,7 @@ type stubDeployWiringRepo struct {
 	mapping map[string]string
 }
 
-func (s *stubDeployWiringRepo) ListEndpointBackends(ctx context.Context, versionID string) (map[string]string, error) {
+func (s *stubDeployWiringRepo) ListEndpointBackends(ctx context.Context, agentID string) (map[string]string, error) {
 	if s.mapping == nil {
 		return map[string]string{}, nil
 	}
@@ -193,16 +193,15 @@ func TestUndeployHandler_NoneDeployed_409(t *testing.T) {
 }
 
 func TestDeployHandler_BlocksWhenEndpointsUnmapped(t *testing.T) {
-	bundleJSON := `{"tools":[{"id":"orders.create"},{"id":"orders.list"}]}`
+	architectureJSON := `{"tools":[{"id":"orders.create"},{"id":"orders.list"}]}`
 	agentRepo := &stubDeployAgentRepo{
-		agent: &types.Agent{ID: "a1", Name: "test"},
+		agent: &types.Agent{ID: "a1", Name: "test", Architecture: json.RawMessage(architectureJSON)},
 	}
 	versionRepo := &stubDeployVersionRepo{
 		version: &types.AgentVersion{
 			ID:      "v1",
 			AgentID: "a1",
 			Status:  string(types.AgentStatusReady),
-			Bundle:  json.RawMessage(bundleJSON),
 		},
 	}
 	wiring := &stubDeployWiringRepo{
@@ -227,16 +226,15 @@ func TestDeployHandler_BlocksWhenEndpointsUnmapped(t *testing.T) {
 }
 
 func TestDeployHandler_AllowsWhenAllEndpointsMapped(t *testing.T) {
-	bundleJSON := `{"tools":[{"id":"orders.create"}]}`
+	architectureJSON := `{"tools":[{"id":"orders.create"}]}`
 	agentRepo := &stubDeployAgentRepo{
-		agent: &types.Agent{ID: "a1", Name: "test"},
+		agent: &types.Agent{ID: "a1", Name: "test", Architecture: json.RawMessage(architectureJSON)},
 	}
 	versionRepo := &stubDeployVersionRepo{
 		version: &types.AgentVersion{
 			ID:      "v1",
 			AgentID: "a1",
 			Status:  string(types.AgentStatusReady),
-			Bundle:  json.RawMessage(bundleJSON),
 		},
 	}
 	wiring := &stubDeployWiringRepo{

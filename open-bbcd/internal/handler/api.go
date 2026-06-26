@@ -90,8 +90,9 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	llmClient := anthropic.New(cfg.Anthropic)
 	backendRepo := repository.NewToolBackendRepository(db)
 	wiringRepo := repository.NewVersionWiringRepository(db)
+	agentWiringRepo := repository.NewAgentWiringRepository(db)
 
-	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, backendRepo, wiringRepo, &schema, web.Assets)
+	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, backendRepo, wiringRepo, agentWiringRepo, &schema, web.Assets)
 	if err != nil {
 		fatal("init configurator handler", err)
 	}
@@ -101,8 +102,12 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("init backends handler", err)
 	}
 	// Both BO and deployed orchestrators share the same builder: Builder is
-	// stateless (all DB reads happen inside Build, scoped by versionID).
-	builder := tools.NewBuilder(&toolBackendStoreAdapter{backend: backendRepo, wiring: wiringRepo})
+	// stateless (all DB reads happen inside Build, scoped by agent + version).
+	builder := tools.NewBuilder(&toolBackendStoreAdapter{
+		backend:     backendRepo,
+		wiring:      wiringRepo,
+		agentWiring: agentWiringRepo,
+	})
 
 	var transportFactory transport.Factory
 	switch cfg.Chat.Transport {
@@ -119,7 +124,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 
-	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, wiringRepo, orchestrator, transportFactory, web.Assets, logger)
+	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, web.Assets, logger)
 	if err != nil {
 		fatal("init chat handler", err)
 	}
@@ -131,7 +136,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 
 	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger)
-	deployHandler := NewDeployHandler(agentRepo, versionRepo, wiringRepo)
+	deployHandler := NewDeployHandler(agentRepo, versionRepo, agentWiringRepo)
 
 	mux := http.NewServeMux()
 
@@ -230,10 +235,12 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 }
 
 // toolBackendStoreAdapter implements tools.BackendStore by delegating to the
-// two repo types. Lives here to keep the tools package free of handler deps.
+// repository types. Endpoint wiring is agent-keyed (agentWiring); MCP
+// attachments remain per-version (wiring).
 type toolBackendStoreAdapter struct {
-	backend *repository.ToolBackendRepository
-	wiring  *repository.VersionWiringRepository
+	backend     *repository.ToolBackendRepository
+	wiring      *repository.VersionWiringRepository
+	agentWiring *repository.AgentWiringRepository
 }
 
 func (a *toolBackendStoreAdapter) GetBackend(ctx context.Context, id string) (string, string, json.RawMessage, error) {
@@ -244,8 +251,8 @@ func (a *toolBackendStoreAdapter) GetBackend(ctx context.Context, id string) (st
 	return string(be.Kind), be.Name, be.Config, nil
 }
 
-func (a *toolBackendStoreAdapter) EndpointBackends(ctx context.Context, versionID string) (map[string]string, error) {
-	return a.wiring.ListEndpointBackends(ctx, versionID)
+func (a *toolBackendStoreAdapter) EndpointBackends(ctx context.Context, agentID string) (map[string]string, error) {
+	return a.agentWiring.ListEndpointBackends(ctx, agentID)
 }
 
 func (a *toolBackendStoreAdapter) MCPAttachments(ctx context.Context, versionID string) (map[string]string, error) {
@@ -258,4 +265,20 @@ func (a *toolBackendStoreAdapter) MCPAttachments(ctx context.Context, versionID 
 		m[att.BackendID] = att.Note
 	}
 	return m, nil
+}
+
+// chatBackendLister implements VersionBackendLister. Mixes the two wiring
+// repos because the chat header-overrides modal needs ListBackendsForVersion
+// (per-version union across HTTP+MCP) AND ListEndpointBackends keyed by
+// agent for the unmapped-endpoints banner.
+type chatBackendLister struct {
+	wiring      *repository.VersionWiringRepository
+	agentWiring *repository.AgentWiringRepository
+}
+
+func (c *chatBackendLister) ListBackendsForVersion(ctx context.Context, versionID string) ([]*types.ToolBackend, error) {
+	return c.wiring.ListBackendsForVersion(ctx, versionID)
+}
+func (c *chatBackendLister) ListEndpointBackends(ctx context.Context, agentID string) (map[string]string, error) {
+	return c.agentWiring.ListEndpointBackends(ctx, agentID)
 }

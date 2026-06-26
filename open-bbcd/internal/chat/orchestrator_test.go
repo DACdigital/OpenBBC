@@ -17,9 +17,9 @@ import (
 func TestOrchestrator_TurnTextOnly(t *testing.T) {
 	version := &types.AgentVersion{
 		ID:     "agent-1",
-		Bundle: []byte(`{"main_prompt":"sys","skills":[],"capabilities":[]}`),
+		Prompts: []byte(`{"main_prompt":"sys"}`),
 	}
-	fakeAgent := &fakeAgentRepo{version: version}
+	fakeAgent := &fakeAgentRepo{version: version, agent: &types.Agent{ID: "agent-1", Architecture: []byte(`{}`)}}
 	fakeChat := &fakeChatRepo{}
 	flm := &fakeLLM{
 		name: "fake",
@@ -66,8 +66,8 @@ func TestOrchestrator_TurnTextOnly(t *testing.T) {
 }
 
 func TestOrchestrator_NoBundle_ReturnsErrAgentNotRunnable(t *testing.T) {
-	version := &types.AgentVersion{ID: "agent-1", Bundle: nil}
-	fakeAgent := &fakeAgentRepo{version: version}
+	version := &types.AgentVersion{ID: "agent-1"}
+	fakeAgent := &fakeAgentRepo{version: version, agent: &types.Agent{ID: "agent-1", Architecture: []byte(`{}`)}}
 	o := NewOrchestrator(fakeAgent, &fakeChatRepo{}, &fakeLLM{}, &fakeBuilder{handler: &fakeTools{}}, slog.Default())
 
 	var buf bytes.Buffer
@@ -88,7 +88,7 @@ func TestOrchestrator_AssistantTextPersistsConcatenated(t *testing.T) {
 	// before persistence (we shouldn't end up with one-block-per-delta).
 	version := &types.AgentVersion{
 		ID:     "a",
-		Bundle: []byte(`{"main_prompt":"sys","skills":[],"capabilities":[]}`),
+		Prompts: []byte(`{"main_prompt":"sys"}`),
 	}
 	fakeChat := &fakeChatRepo{}
 	flm := &fakeLLM{
@@ -102,7 +102,7 @@ func TestOrchestrator_AssistantTextPersistsConcatenated(t *testing.T) {
 			},
 		},
 	}
-	o := NewOrchestrator(&fakeAgentRepo{version: version}, fakeChat, flm, &fakeBuilder{handler: &fakeTools{}}, slog.Default())
+	o := NewOrchestrator(&fakeAgentRepo{version: version, agent: &types.Agent{ID: "agent-1", Architecture: []byte(`{}`)}}, fakeChat, flm, &fakeBuilder{handler: &fakeTools{}}, slog.Default())
 
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
@@ -135,7 +135,7 @@ func json_unmarshal_test_helper(t *testing.T, raw []byte, dst any) any {
 func TestOrchestrator_OneToolRound(t *testing.T) {
 	version := &types.AgentVersion{
 		ID:     "agent-1",
-		Bundle: []byte(`{"main_prompt":"sys","skills":[],"capabilities":[]}`),
+		Prompts: []byte(`{"main_prompt":"sys"}`),
 	}
 	fakeChat := &fakeChatRepo{}
 	flm := &fakeLLM{
@@ -158,7 +158,7 @@ func TestOrchestrator_OneToolRound(t *testing.T) {
 	ft := &fakeTools{
 		results: []tools.Result{{ToolUseID: "tu_1", Output: []byte(`{"prompt":"X"}`)}},
 	}
-	o := NewOrchestrator(&fakeAgentRepo{version: version}, fakeChat, flm, &fakeBuilder{handler: ft}, slog.Default())
+	o := NewOrchestrator(&fakeAgentRepo{version: version, agent: &types.Agent{ID: "agent-1", Architecture: []byte(`{}`)}}, fakeChat, flm, &fakeBuilder{handler: ft}, slog.Default())
 
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
@@ -193,7 +193,7 @@ func TestOrchestrator_OneToolRound(t *testing.T) {
 func TestOrchestrator_BoundedToolLoop(t *testing.T) {
 	version := &types.AgentVersion{
 		ID:     "a",
-		Bundle: []byte(`{"main_prompt":"x","skills":[],"capabilities":[]}`),
+		Prompts: []byte(`{"main_prompt":"x"}`),
 	}
 	fakeChat := &fakeChatRepo{}
 	toolUseRound := []llm.Event{
@@ -209,7 +209,7 @@ func TestOrchestrator_BoundedToolLoop(t *testing.T) {
 	}
 	flm := &fakeLLM{name: "fake", script: script}
 	ft := &fakeTools{}
-	o := NewOrchestrator(&fakeAgentRepo{version: version}, fakeChat, flm, &fakeBuilder{handler: ft}, slog.Default())
+	o := NewOrchestrator(&fakeAgentRepo{version: version, agent: &types.Agent{ID: "agent-1", Architecture: []byte(`{}`)}}, fakeChat, flm, &fakeBuilder{handler: ft}, slog.Default())
 	o.MaxToolRounds = 3
 
 	var buf bytes.Buffer
