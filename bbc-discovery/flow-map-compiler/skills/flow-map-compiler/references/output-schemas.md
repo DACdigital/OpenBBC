@@ -337,8 +337,8 @@ method: GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS
 path: "<path with {params}>"
 path_params: [{ name: <p>, type: <t>, required: true|false }, ...]
 query_params: [{ name: <q>, type: <t>, required: true|false }, ...]
-body_shape: <typed shape or null>
-response_shape: <typed shape or "unknown">
+body_shape: <JSON Schema object or null>
+response_shape: <JSON Schema object or "unknown">
 auth: bearer|cookie|none
 source: <relative source file>:<line>
 used_by_skills: [<skill-id>, ...]          # may be empty
@@ -357,10 +357,10 @@ openapi_operation_id: <string or null>
 **Auth:** bearer|cookie|none
 **Path params:** <list or none>
 **Query params:** <list or none>
-**Body shape:** <typed shape or `null`>
+**Body shape:** <inline JSON Schema or `null`>
 
 ## Response
-**Response shape:** <typed shape or `unknown`>
+**Response shape:** <inline JSON Schema or `unknown`>
 
 ## Notes
 <2–4 sentences: observed call sites, sample call, edge cases, common failure modes>
@@ -374,3 +374,4 @@ Hard constraints:
 - **`endpoints/` is the complete inventory.** Every discovered backend call appears here whether or not a skill suggests it.
 - **`used_by_skills: []` is valid.** Endpoint-only entries are still callable by the runtime agent directly.
 - **No `tool:` field anywhere in `.flow-map/`.** The endpoint id is the canonical reference; downstream calls it a tool.
+- **`body_shape` and `response_shape` are JSON Schema objects, not type literals.** When the body or response is statically resolvable, emit a JSON Schema fragment shaped like `{ "type": "object", "properties": { "<field>": { "type": "<t>" }, ... }, "required": [ ... ] }`. Free-form TypeScript-style strings (`"{ items: { productId: string }[] }"`) are **not allowed** — downstream consumers (aikdm → open-bbcd) wire body_shape directly into the LLM-visible tool schema, and a non-JSON-Schema value collapses to an empty argument set the LLM can't fill. When the shape cannot be resolved statically, emit `null` (body) or `"unknown"` (response).

@@ -58,6 +58,7 @@ func NewBackendsHandler(repo *repository.ToolBackendRepository, wiring *reposito
 	editTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
 		"templates/backends/edit.html",
+		"templates/backends/delete_confirm_modal.html",
 	)
 	if err != nil {
 		return nil, err
@@ -254,6 +255,26 @@ func (h *BackendsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/mcp", http.StatusSeeOther)
+}
+
+// DeleteConfirm renders the delete-confirmation modal fragment used by the
+// edit page's "Delete backend" button. htmx fetches it and appends to body.
+func (h *BackendsHandler) DeleteConfirm(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	be, err := h.repo.Get(r.Context(), id)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	counts, err := h.wiring.UsageCounts(r.Context())
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, h.editTmpl, "backend_delete_confirm_modal", map[string]any{
+		"Backend":    be,
+		"UsageCount": counts[be.ID],
+	})
 }
 
 // Delete handles POST /mcp/{id}/delete — remove a backend (HTML forms can't DELETE).

@@ -30,6 +30,11 @@
                 hx-get="/agents/{{.AgentID}}/undeploy/confirm"
                 hx-target="body" hx-swap="beforeend">Undeploy</button>
       {{end}}
+      {{if ne .AgentStatus "DEPLOYED"}}
+      <button class="btn-danger"
+              hx-get="/agent_versions/{{.VersionID}}/delete-confirm"
+              hx-target="body" hx-swap="beforeend">Delete version</button>
+      {{end}}
     </div>
     {{end}}
   </div>

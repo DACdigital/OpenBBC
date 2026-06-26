@@ -77,6 +77,17 @@
 <div class="config-banner">
   Endpoints are part of this agent's frozen architecture. The backend each endpoint routes to is also agent-scoped: editing it here affects every version of this agent.
 </div>
+{{if .Architecture.Tools}}
+<div style="display:flex;justify-content:flex-end;margin:6px 0 10px 0">
+  <button type="button"
+          class="btn-secondary"
+          hx-get="/agents/{{.Agent.ID}}/configure/architecture/endpoints/bulk"
+          hx-target="body"
+          hx-swap="beforeend">
+    Connect all endpoints to one backend…
+  </button>
+</div>
+{{end}}
 <div class="config-two-pane">
   <aside class="config-list">
     <div class="config-list-header">Endpoints ({{len .Architecture.Tools}})</div>

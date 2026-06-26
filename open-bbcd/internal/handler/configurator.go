@@ -33,6 +33,7 @@ type ConfigStore interface {
 	UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error
 	UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error
 	CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error)
+	Delete(ctx context.Context, versionID string) error
 }
 
 // mcpBackendView wraps a ToolBackend and exposes its primary URL for template
@@ -48,7 +49,7 @@ type ConfiguratorHandler struct {
 	wiring                                                                               *repository.VersionWiringRepository
 	agentWiring                                                                          *repository.AgentWiringRepository
 	schema                                                                               *types.WizardSchema
-	flowsTmpl, skillsTmpl, endpointsTmpl, finalizeTmpl, inputsTmpl, promptsTmpl, mcpTmpl *template.Template
+	flowsTmpl, skillsTmpl, endpointsTmpl, finalizeTmpl, inputsTmpl, promptsTmpl, mcpTmpl, deleteTmpl *template.Template
 }
 
 func NewConfiguratorHandler(
@@ -160,11 +161,18 @@ func NewConfiguratorHandler(
 		"templates/configurator/partials.html",
 		"templates/configurator/prompts.html",
 		"templates/configurator/prompts_confirm_modal.html",
+		"templates/configurator/delete_confirm_modal.html",
 	)
 	if err != nil {
 		return nil, err
 	}
 	mcpTmpl, err := parse("mcp")
+	if err != nil {
+		return nil, err
+	}
+	deleteTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/configurator/delete_confirm_modal.html",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +189,7 @@ func NewConfiguratorHandler(
 		inputsTmpl:    inputsTmpl,
 		promptsTmpl:   promptsTmpl,
 		mcpTmpl:       mcpTmpl,
+		deleteTmpl:    deleteTmpl,
 	}, nil
 }
 
@@ -553,6 +562,46 @@ func (h *ConfiguratorHandler) SavePrompts(w http.ResponseWriter, r *http.Request
 		return
 	}
 	http.Redirect(w, r, "/agent_versions/"+newID+"/configure/prompts", http.StatusSeeOther)
+}
+
+// DeleteConfirm renders the version-delete confirmation modal fragment.
+// Loaded via htmx and appended to <body>; submit is a plain POST to /delete.
+func (h *ConfiguratorHandler) DeleteConfirm(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	version, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, h.deleteTmpl, "version_delete_confirm_modal", map[string]any{
+		"VersionID": version.ID,
+		"AgentName": agent.Name,
+	})
+}
+
+// Delete drops the version row (and via CASCADE its sessions/messages/MCP
+// attachments). Redirects to the agent detail Versions tab on success.
+func (h *ConfiguratorHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	version, _, err := h.repo.GetWithAgent(r.Context(), versionID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	agentID := version.AgentID
+	if err := h.repo.Delete(r.Context(), versionID); err != nil {
+		Error(w, err)
+		return
+	}
+	http.Redirect(w, r, "/agents/"+agentID+"/configure/versions", http.StatusSeeOther)
 }
 
 // Index redirects /configure to the version's default tab. Post-PR #34 +

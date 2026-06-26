@@ -105,6 +105,30 @@ func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.Creat
 	return agent, version, nil
 }
 
+// Delete removes an agent and (via FK CASCADE) every version, chat session,
+// deployed session, message, and endpoint wiring that belongs to it. Refuses
+// if any version is currently DEPLOYED — undeploy first.
+func (r *AgentRepository) Delete(ctx context.Context, agentID string) error {
+	var hasDeployed bool
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM agent_versions WHERE agent_id = $1::uuid AND status = 'DEPLOYED')
+	`, agentID).Scan(&hasDeployed); err != nil {
+		return err
+	}
+	if hasDeployed {
+		return types.ErrAgentInUse
+	}
+	res, err := r.db.ExecContext(ctx, `DELETE FROM agents WHERE id = $1::uuid`, agentID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return types.ErrNotFound
+	}
+	return nil
+}
+
 // GetByID returns the Agent (per-agent row).
 func (r *AgentRepository) GetByID(ctx context.Context, agentID string) (*types.Agent, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM agents WHERE id = $1`, agentID)

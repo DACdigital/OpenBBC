@@ -30,6 +30,16 @@ class ParamSpec(BaseModel):
 
 
 class Endpoint(BaseModel):
+    """Discovered HTTP endpoint, sourced from a flow-map-compiler wiki.
+
+    ``body_shape`` and ``response_shape`` must be JSON Schema objects
+    or ``None`` / ``"unknown"`` respectively. Free-form TypeScript-style
+    type literal strings are tolerated here for backwards compatibility
+    with older wikis, but they will not produce a usable LLM-visible
+    tool-argument schema downstream; flow-map-compiler v2+ rule 16
+    forbids them.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     id: str
@@ -198,6 +208,15 @@ class BundleTool(BaseModel):
     path, auth) plus runtime context (description, source for provenance,
     confidence) and the JSON Schema fragments (path_params, query_params,
     body_shape) the LLM uses to call it.
+
+    Contract with discovery: ``body_shape`` and ``response_shape`` are
+    JSON Schema objects (``{"type": "object", "properties": {...},
+    "required": [...]}``) or ``None`` / ``"unknown"`` respectively.
+    TypeScript-style type literals (``"{ items: ... }"``) are not a
+    valid shape — open-bbcd's runtime schema builder cannot merge them
+    with the path/query param schema and the LLM ends up with a tool
+    that accepts no arguments. See flow-map-compiler
+    ``references/lint-contract.md`` rule 16.
     """
 
     model_config = ConfigDict(extra="forbid")

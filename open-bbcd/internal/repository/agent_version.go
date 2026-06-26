@@ -48,6 +48,33 @@ func (r *AgentVersionRepository) GetByID(ctx context.Context, versionID string) 
 	return v, err
 }
 
+// Delete removes a single version row. Refuses if the version is currently
+// DEPLOYED or if a newer version was forked from it (chain integrity — the
+// chain is a linked list via parent_version_id and deleting a middle node
+// would orphan the child).
+func (r *AgentVersionRepository) Delete(ctx context.Context, versionID string) error {
+	var status string
+	var hasChild bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT v.status, EXISTS(SELECT 1 FROM agent_versions c WHERE c.parent_version_id = v.id)
+		FROM agent_versions v WHERE v.id = $1::uuid
+	`, versionID).Scan(&status, &hasChild)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if status == "DEPLOYED" {
+		return types.ErrVersionInUse
+	}
+	if hasChild {
+		return types.ErrVersionHasChildren
+	}
+	_, err = r.db.ExecContext(ctx, `DELETE FROM agent_versions WHERE id = $1::uuid`, versionID)
+	return err
+}
+
 // GetWithAgent returns both the AgentVersion and its owning Agent via JOIN.
 // Used by chat/configurator handlers that need both — the agent carries
 // the frozen architecture, the version carries the editable prompts.

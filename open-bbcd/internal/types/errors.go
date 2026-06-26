@@ -50,4 +50,21 @@ var (
 	// bundle contains tool endpoints that have no backend assigned in
 	// agent_version_endpoint_backend.
 	ErrUnmappedEndpoints = errors.New("agent has endpoints not mapped to a backend")
+
+	// ErrAgentInUse is returned when /delete is called on an agent that
+	// still has a DEPLOYED version. Undeploy first.
+	ErrAgentInUse = errors.New("agent: cannot delete; a version is currently deployed (undeploy first)")
+
+	// ErrVersionInUse is returned when /delete is called on a version that
+	// is currently DEPLOYED. Undeploy first.
+	ErrVersionInUse = errors.New("version: cannot delete; this version is currently deployed (undeploy first)")
+
+	// ErrVersionHasChildren is returned when /delete is called on a version
+	// that has a child (a newer version was forked from it). Versioning is a
+	// linked list — deleting a parent would orphan the child's chain.
+	ErrVersionHasChildren = errors.New("version: cannot delete; a newer version was forked from this one")
+
+	// ErrAgentNameMismatch is returned when the user-typed confirmation does
+	// not match the agent's name on the delete-agent endpoint.
+	ErrAgentNameMismatch = errors.New("agent: name confirmation did not match")
 )

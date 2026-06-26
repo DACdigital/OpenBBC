@@ -1,6 +1,6 @@
 # Lint contract
 
-The agent walks these 15 rules as a self-check after rendering and
+The agent walks these 16 rules as a self-check after rendering and
 must not ship a wiki that fails any of them. There is no `lint.mjs` in
 the v2 skill — the agent is the linter. Report failures naming the
 file and the rule number; do not stop on first failure, surface them
@@ -23,6 +23,7 @@ all, fix them, and re-render.
 | 13 | Two-hop integrity: every `skills/<id>.md` link target referenced from a `flows/*.md` exists; every endpoint id referenced from a `skills/*.md` `suggested_endpoints[]` exists in `endpoints/`. |
 | 14 | Round-trip: every `endpoints/<id>.md` `used_by_skills[]` entry names a real `skills/<id>.md`, and that skill's `suggested_endpoints[]` includes this endpoint id. Conversely, every `suggested_endpoints[].endpoint` value appears in the named endpoint's `used_by_skills[]`. |
 | 15 | Every flow file's frontmatter has a `workflow:` field; it is a multiline mermaid `flowchart` block; every `id[<skill-id>]` skill node's label appears in `skills_used[].skill` on the same flow; every node id referenced in an edge appears in the node list; every flowchart parses. |
+| 16 | Every `endpoints/<id>.md` `body_shape` is either `null` or a JSON-Schema-shaped mapping (`type: object` with `properties`); never a free-form TypeScript-style type-literal string. Same constraint on `response_shape` with `unknown` in place of `null`. |
 
 ## Failure messages
 
@@ -91,4 +92,28 @@ Failure messages:
 flows/<id>.md: rule 15 — workflow node "s_foo[do-foo]" references skill "do-foo" not in skills_used[]
 flows/<id>.md: rule 15 — workflow edge from "s_a" to "s_b" but "s_b" is not declared
 flows/<id>.md: rule 15 — workflow field missing from frontmatter
+```
+
+## Body / response shape JSON Schema (rule 16)
+
+`body_shape` and `response_shape` are read by downstream consumers
+(aikdm → open-bbcd) as JSON Schema fragments that become the
+LLM-visible tool-argument schema. A TypeScript-style type literal
+string (`"{ items: { productId: string }[] }"`) cannot be merged with
+path / query params and collapses to "tool takes no arguments", which
+makes POST/PATCH endpoints uncallable.
+
+Allowed values:
+
+- `body_shape`: `null` **or** a mapping with `type: object` and a
+  `properties:` map (optionally `required:`). Any other value — strings,
+  arrays of strings, free-form text — fails the rule.
+- `response_shape`: `unknown` **or** a JSON-Schema-shaped mapping. Same
+  constraint as `body_shape` otherwise.
+
+Failure messages:
+
+```
+endpoints/orders.create.md: rule 16 — body_shape must be JSON Schema (got TypeScript-style string)
+endpoints/users.update.md: rule 16 — body_shape mapping is missing "properties"
 ```

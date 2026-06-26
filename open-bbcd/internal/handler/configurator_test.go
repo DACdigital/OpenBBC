@@ -164,6 +164,10 @@ func (s *stubConfigStore) CreateVersionFromPrompts(ctx context.Context, parentVe
 	return "new-version-id", nil
 }
 
+func (s *stubConfigStore) Delete(ctx context.Context, versionID string) error {
+	return nil
+}
+
 func sampleConfig() types.FlowMapConfig {
 	return types.FlowMapConfig{
 		SchemaVersion: 2, Name: "test-agent",

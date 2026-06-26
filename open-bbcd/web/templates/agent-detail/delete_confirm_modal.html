@@ -1,0 +1,35 @@
+{{define "agent_delete_confirm_modal"}}
+<div class="modal" id="agent-delete-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content">
+    <h2 style="color:#f85149">Delete agent?</h2>
+    <p>
+      About to <strong>permanently</strong> delete the agent
+      <strong>{{.Agent.Name}}</strong>, all of its versions, chat sessions,
+      messages, and backend wirings.
+    </p>
+    <p style="color:#f85149">This cannot be undone.</p>
+    <form method="POST" action="/agents/{{.Agent.ID}}/delete" style="margin:0;display:flex;flex-direction:column;gap:10px">
+      <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#8b949e">
+        Type <code>{{.Agent.Name}}</code> to confirm:
+        <input id="agent-delete-confirm-input"
+               type="text"
+               name="confirm_name"
+               autocomplete="off"
+               required
+               data-expected="{{.Agent.Name}}"
+               style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:8px 10px;font-size:14px;font-family:ui-monospace,monospace"
+               oninput="document.getElementById('agent-delete-confirm-btn').disabled = (this.value !== this.dataset.expected)">
+      </label>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button type="button"
+                class="btn-secondary"
+                onclick="document.getElementById('agent-delete-modal').remove()">Cancel</button>
+        <button id="agent-delete-confirm-btn"
+                type="submit"
+                class="btn-danger-solid"
+                disabled>Delete this agent</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

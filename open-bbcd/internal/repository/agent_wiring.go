@@ -32,6 +32,36 @@ func (r *AgentWiringRepository) UnsetEndpointBackend(ctx context.Context, agentI
 	return err
 }
 
+// SetEndpointBackendBulk upserts the same backend for every endpoint id
+// listed. Runs in a single transaction so the agent's wiring either
+// converges fully or not at all — partial bulk-set leaves a confusing
+// "some endpoints rewired, others not" state on a transient failure.
+func (r *AgentWiringRepository) SetEndpointBackendBulk(ctx context.Context, agentID, backendID string, endpointIDs []string) error {
+	if len(endpointIDs) == 0 {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	const q = `INSERT INTO agent_endpoint_backend (agent_id, endpoint_id, backend_id)
+		VALUES ($1::uuid, $2, $3::uuid)
+		ON CONFLICT (agent_id, endpoint_id)
+		DO UPDATE SET backend_id = EXCLUDED.backend_id`
+	stmt, err := tx.PrepareContext(ctx, q)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, eid := range endpointIDs {
+		if _, err := stmt.ExecContext(ctx, agentID, eid, backendID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // ListEndpointBackends returns endpoint_id → backend_id for the given agent.
 func (r *AgentWiringRepository) ListEndpointBackends(ctx context.Context, agentID string) (map[string]string, error) {
 	const q = `SELECT endpoint_id, backend_id::text FROM agent_endpoint_backend WHERE agent_id = $1::uuid`

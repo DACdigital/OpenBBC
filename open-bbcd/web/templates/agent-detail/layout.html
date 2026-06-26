@@ -7,6 +7,17 @@
     {{if .Agent.FinalizedAt}}<span class="badge badge-ready">FINALIZED</span>{{end}}
   </div>
 
+  <div class="config-actions-bar">
+    <button type="button"
+            class="btn-danger"
+            style="margin-left:auto"
+            hx-get="/agents/{{.Agent.ID}}/delete-confirm"
+            hx-target="body"
+            hx-swap="beforeend">
+      Delete agent
+    </button>
+  </div>
+
   <nav class="config-tabs">
     <a href="/agents/{{.Agent.ID}}/configure/versions"
        class="config-tab {{if eq .Tab "versions"}}active{{end}}">Versions</a>

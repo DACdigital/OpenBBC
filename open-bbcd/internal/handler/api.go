@@ -59,6 +59,10 @@ func (s *configStore) UpdateStatus(ctx context.Context, versionID, expectedFrom,
 	return s.versions.UpdateStatus(ctx, versionID, expectedFrom, to)
 }
 
+func (s *configStore) Delete(ctx context.Context, versionID string) error {
+	return s.versions.Delete(ctx, versionID)
+}
+
 func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.Logger) http.Handler {
 	fatal := func(msg string, err error) {
 		logger.Error(msg, slog.Any("error", err))
@@ -194,6 +198,8 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/mcp", configuratorHandler.MCPSubtab)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/toggle", configuratorHandler.ToggleMCPBackend)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/notes", configuratorHandler.UpdateAllMCPNotes)
+	mux.HandleFunc("GET /agent_versions/{version_id}/delete-confirm", configuratorHandler.DeleteConfirm)
+	mux.HandleFunc("POST /agent_versions/{version_id}/delete", configuratorHandler.Delete)
 	// Convenience alias under the new top-level "MCP" version tab.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/mcp", configuratorHandler.MCPSubtab)
 	RegisterConfiguratorRedirects(mux)
@@ -204,7 +210,11 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agents/{agent_id}/configure/inputs", agentDetailHandler.Inputs)
 	mux.HandleFunc("GET /agents/{agent_id}/configure/architecture/{subtab}", agentDetailHandler.Architecture)
 	mux.HandleFunc("GET /agents/{agent_id}/configure/architecture/{subtab}/{selectedID}", agentDetailHandler.Architecture)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/architecture/endpoints/bulk", agentDetailHandler.BulkBackendModal)
+	mux.HandleFunc("POST /agents/{agent_id}/configure/architecture/endpoints/bulk", agentDetailHandler.SetEndpointBackendBulk)
 	mux.HandleFunc("POST /agents/{agent_id}/configure/architecture/endpoints/{endpointID}/backend", agentDetailHandler.SetEndpointBackend)
+	mux.HandleFunc("GET /agents/{agent_id}/delete-confirm", agentDetailHandler.DeleteConfirm)
+	mux.HandleFunc("POST /agents/{agent_id}/delete", agentDetailHandler.Delete)
 
 	// MCP / tool backends CRUD
 	mux.HandleFunc("GET /mcp", backendsHandler.List)
@@ -213,6 +223,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /mcp/test", backendsHandler.TestConnection)
 	mux.HandleFunc("GET /mcp/{id}", backendsHandler.Edit)
 	mux.HandleFunc("POST /mcp/{id}", backendsHandler.Update)
+	mux.HandleFunc("GET /mcp/{id}/delete-confirm", backendsHandler.DeleteConfirm)
 	mux.HandleFunc("POST /mcp/{id}/delete", backendsHandler.Delete)
 
 	// Per-version BO chat
@@ -323,4 +334,7 @@ func (a *agentDetailStoreAdapter) ListGrouped(ctx context.Context) ([]types.Agen
 }
 func (a *agentDetailStoreAdapter) GetFlowMapConfigForAgent(ctx context.Context, agentID string) ([]byte, string, error) {
 	return a.versions.GetFlowMapConfigForAgent(ctx, agentID)
+}
+func (a *agentDetailStoreAdapter) Delete(ctx context.Context, agentID string) error {
+	return a.agents.Delete(ctx, agentID)
 }
