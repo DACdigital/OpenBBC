@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -95,14 +96,51 @@ func (b *HTTPEndpointBackend) Call(ctx context.Context, name string, input json.
 	if err != nil {
 		return errResult(err.Error()), nil
 	}
-	b.applyHeaders(ctx, req)
+	sources := b.applyHeaders(ctx, req)
+
+	start := time.Now()
+	authHdr := req.Header.Get("Authorization")
+	authNote := "—"
+	if authHdr != "" {
+		authNote = authHdr
+		if len(authNote) > 20 {
+			authNote = authNote[:20] + "…"
+		}
+	}
+	slog.Info("http tool: request",
+		slog.String("backend", b.name),
+		slog.String("backend_id", b.id),
+		slog.String("tool", name),
+		slog.String("method", ep.Method),
+		slog.String("url", urlStr),
+		slog.String("auth", authNote),
+		slog.Int("default_hdrs", sources.defaults),
+		slog.Int("envelope_fe_hdrs", sources.envelopeAll),
+		slog.Int("envelope_explicit_hdrs", sources.envelopeExplicit),
+		slog.Int("session_hdrs", sources.session),
+		slog.Bool("session_ctx_present", sources.sessionCtxPresent),
+		slog.Bool("session_has_my_backend", sources.sessionHasMyBackend),
+	)
 
 	resp, err := b.client.Do(req)
 	if err != nil {
+		slog.Error("http tool: transport error",
+			slog.String("backend", b.name),
+			slog.String("tool", name),
+			slog.String("url", urlStr),
+			slog.Any("err", err),
+		)
 		return errResult(err.Error()), nil
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
+	slog.Info("http tool: response",
+		slog.String("backend", b.name),
+		slog.String("tool", name),
+		slog.Int("status", resp.StatusCode),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+		slog.Int("body_bytes", len(rb)),
+	)
 	out, _ := json.Marshal(map[string]any{
 		"status": resp.StatusCode,
 		"body":   string(rb),
@@ -180,10 +218,25 @@ var hopByHopHeaders = map[string]bool{
 	"content-length":      true, // set by http.Client from body
 }
 
-func (b *HTTPEndpointBackend) applyHeaders(ctx context.Context, req *http.Request) {
+// headerSourceCounts is a per-call tally of which layers contributed headers.
+// Used by Call's slog line so we can debug "why is my Authorization header
+// empty?" without spelunking the modal/db.
+type headerSourceCounts struct {
+	defaults            int
+	envelopeAll         int
+	envelopeExplicit    int
+	session             int
+	sessionCtxPresent   bool
+	sessionHasMyBackend bool
+}
+
+func (b *HTTPEndpointBackend) applyHeaders(ctx context.Context, req *http.Request) headerSourceCounts {
+	c := headerSourceCounts{}
+
 	// 1. Default headers (lowest).
 	for k, v := range b.cfg.DefaultHeaders {
 		req.Header.Set(k, v)
+		c.defaults++
 	}
 
 	// 2/3. Routing-envelope-controlled FE headers + explicit map.
@@ -200,6 +253,7 @@ func (b *HTTPEndpointBackend) applyHeaders(ctx context.Context, req *http.Reques
 						}
 						if len(vals) > 0 {
 							req.Header.Set(name, vals[0])
+							c.envelopeAll++
 						}
 					}
 				}
@@ -207,6 +261,7 @@ func (b *HTTPEndpointBackend) applyHeaders(ctx context.Context, req *http.Reques
 			// 3. Explicit headers (overwrite live-FE on conflict).
 			for k, v := range block.Headers {
 				req.Header.Set(k, v)
+				c.envelopeExplicit++
 			}
 		}
 		// backend not in envelope → no FE headers forwarded
@@ -214,9 +269,12 @@ func (b *HTTPEndpointBackend) applyHeaders(ctx context.Context, req *http.Reques
 
 	// 4. Session overrides (highest).
 	if sess := sessionHeaderOverridesFromContext(ctx); sess != nil {
+		c.sessionCtxPresent = true
 		if mine, ok := sess[b.id]; ok {
+			c.sessionHasMyBackend = true
 			for k, v := range mine {
 				req.Header.Set(k, v)
+				c.session++
 			}
 		}
 	}
@@ -224,6 +282,7 @@ func (b *HTTPEndpointBackend) applyHeaders(ctx context.Context, req *http.Reques
 	if req.Body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	return c
 }
 
 func errResult(msg string) Result {
