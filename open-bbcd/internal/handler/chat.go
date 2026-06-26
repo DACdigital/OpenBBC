@@ -48,8 +48,13 @@ type HeaderOverridesStore interface {
 // VersionBackendLister lists all tool backends wired to a version (HTTP via
 // endpoint_backend mapping, MCP via mcp_backend attachment). Used by the
 // header overrides modal so the form shows one row per backend.
+//
+// ListEndpointBackends returns the per-endpoint→backend wiring map; the
+// chat view uses it to surface a warning when the version has endpoints
+// without a backend assigned (the LLM otherwise has no way to call them).
 type VersionBackendLister interface {
 	ListBackendsForVersion(ctx context.Context, versionID string) ([]*types.ToolBackend, error)
+	ListEndpointBackends(ctx context.Context, versionID string) (map[string]string, error)
 }
 
 // TurnRunner is the orchestrator dependency. Implemented by *chat.Orchestrator.
@@ -212,6 +217,13 @@ type chatViewPageData struct {
 	SessionTitle string
 	Messages     []messageView
 	HasBundle    bool
+	// TotalEndpoints / UnmappedEndpoints surface a warning at the top of
+	// the chat page when bundle.tools[] entries lack an endpoint→backend
+	// row. With no wiring, the LLM has no way to call those endpoints —
+	// it will tend to hallucinate a result in prose rather than emit a
+	// tool_use block, which is highly confusing during testing.
+	TotalEndpoints    int
+	UnmappedEndpoints int
 }
 
 // messageView is a UI-ready projection of a persisted ChatMessage. The raw
@@ -366,6 +378,28 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		SessionTitle: sessionTitle,
 		Messages:     buildMessageViews(msgs),
 		HasBundle:    len(version.Bundle) > 0,
+	}
+	// Count unmapped endpoints so the view can show a warning banner.
+	// Best-effort: errors here don't block the chat page from rendering.
+	if data.HasBundle && h.backends != nil {
+		var snap struct {
+			Tools []struct {
+				ID string `json:"id"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(version.Bundle, &snap); err == nil {
+			data.TotalEndpoints = len(snap.Tools)
+			if mapping, err := h.backends.ListEndpointBackends(r.Context(), versionID); err == nil {
+				for _, t := range snap.Tools {
+					if t.ID == "" {
+						continue
+					}
+					if _, ok := mapping[t.ID]; !ok {
+						data.UnmappedEndpoints++
+					}
+				}
+			}
+		}
 	}
 	renderTemplate(w, h.viewTmpl, "layout", data)
 }

@@ -34,6 +34,14 @@
 
 <div id="modal-host"></div>
 
+{{if gt .UnmappedEndpoints 0}}
+<div class="config-banner config-banner-warning">
+  <strong>{{.UnmappedEndpoints}} of {{.TotalEndpoints}} endpoints not wired to a backend.</strong>
+  The agent will receive an explicit error result when it tries to call any of them.
+  Configure mappings under <a href="/agent_versions/{{.VersionID}}/configure/architecture/endpoints">Endpoints</a>.
+</div>
+{{end}}
+
 <div id="chat-log" class="chat-log" data-version-id="{{.VersionID}}" data-session-id="{{.SessionID}}">
   {{range .Messages}}
     <div class="chat-bubble {{.Role}}">

@@ -55,18 +55,23 @@ func (b *Builder) Build(ctx context.Context, versionID string, bundle json.RawMe
 		}
 	}
 
-	// Group endpoints by their assigned backend.
+	// Group endpoints by their assigned backend. Endpoints with no mapping
+	// go into an "unmapped" bucket and are exposed via a synthetic backend
+	// that fails loudly on call — this surfaces the misconfiguration in the
+	// chat as a real tool_result block instead of silent LLM hallucination.
 	byBackend := map[string][]HTTPEndpointDef{}
+	var unmapped []HTTPEndpointDef
 	for _, t := range snap.Tools {
-		bid, ok := mapping[t.ID]
-		if !ok {
-			continue
-		}
-		byBackend[bid] = append(byBackend[bid], HTTPEndpointDef{
+		ep := HTTPEndpointDef{
 			ID: t.ID, Name: t.Name, Description: t.Description,
 			Method: t.Method, Path: t.Path,
 			PathParams: t.PathParams, QueryParams: t.QueryParams, BodyShape: t.BodyShape,
-		})
+		}
+		if bid, ok := mapping[t.ID]; ok {
+			byBackend[bid] = append(byBackend[bid], ep)
+		} else {
+			unmapped = append(unmapped, ep)
+		}
 	}
 
 	backends := []Backend{}
@@ -103,6 +108,12 @@ func (b *Builder) Build(ctx context.Context, versionID string, bundle json.RawMe
 			return nil, fmt.Errorf("builder: parse mcp config for backend %s: %w", bid, err)
 		}
 		backends = append(backends, NewMCPClientBackend(name, bid, cfg))
+	}
+
+	// Synthetic backend for unmapped endpoints. Always last so explicit
+	// HTTP backends win on prefix-less name routing in Composite.Call.
+	if len(unmapped) > 0 {
+		backends = append(backends, newUnmappedBackend(unmapped))
 	}
 
 	return NewComposite(backends), nil
