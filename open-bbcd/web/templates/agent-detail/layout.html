@@ -5,17 +5,16 @@
     <a href="/agents/ui" class="config-back">← Back to Agents</a>
     <h1>{{.Agent.Name}}</h1>
     {{if .Agent.FinalizedAt}}<span class="badge badge-ready">FINALIZED</span>{{end}}
-  </div>
-
-  <div class="config-actions-bar">
-    <button type="button"
-            class="btn-danger"
-            style="margin-left:auto"
-            hx-get="/agents/{{.Agent.ID}}/delete-confirm"
-            hx-target="body"
-            hx-swap="beforeend">
-      Delete agent
-    </button>
+    <span class="config-spacer"></span>
+    <div class="config-actions">
+      <button type="button"
+              class="btn-danger"
+              hx-get="/agents/{{.Agent.ID}}/delete-confirm"
+              hx-target="body"
+              hx-swap="beforeend">
+        Delete agent
+      </button>
+    </div>
   </div>
 
   <nav class="config-tabs">
