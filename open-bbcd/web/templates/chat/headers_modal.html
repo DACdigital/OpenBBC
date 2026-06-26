@@ -1,40 +1,46 @@
 {{define "headers_modal"}}
-<div id="headers-modal" class="modal-overlay" onclick="if(event.target===this)this.remove()">
-  <div class="modal-box" role="dialog" aria-label="Edit test headers">
-    <div class="modal-header">
-      <h2>Edit test headers</h2>
-      <button type="button" class="modal-close" onclick="document.getElementById('headers-modal').remove()" aria-label="Close">×</button>
-    </div>
-    <div class="modal-body">
-      <p class="modal-hint">Headers set here override backend defaults for this session only.</p>
-      {{if not .Backends}}
-        <p class="empty-state">No backends wired to this version yet.</p>
-      {{else}}
-        <form
-          hx-post="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/headers"
-          hx-target="#headers-modal"
-          hx-swap="outerHTML"
-        >
-          {{range .Backends}}
-          <fieldset class="backend-overrides">
-            <legend>{{.BackendName}} <span class="backend-kind">({{.Kind}})</span></legend>
+<div class="modal" id="headers-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content" style="max-width:640px">
+    <h2>Test headers for this session</h2>
+    <p>Headers set here override backend defaults for this chat session only. They don't affect deployed runtime.</p>
+
+    {{if not .Backends}}
+      <p class="empty-state">No backends wired to this version yet.</p>
+      <div class="modal-actions">
+        <button type="button" onclick="document.getElementById('headers-modal').remove()">Close</button>
+      </div>
+    {{else}}
+      <form class="config-form" style="max-width:none"
+            hx-post="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/headers"
+            hx-target="#headers-modal"
+            hx-swap="outerHTML">
+        {{range .Backends}}
+        <fieldset>
+          <legend>{{.BackendName}} <span class="muted">— {{.Kind}}</span></legend>
+          <div class="kv-rows">
             {{$bid := .BackendID}}
             {{range .Entries}}
-            <div class="override-row">
+            <div class="kv-row">
               <input type="hidden" name="header_backend[]" value="{{$bid}}">
-              <input type="text" name="header_key[]" value="{{.Key}}" placeholder="Header name (e.g. Authorization)" class="override-key">
-              <input type="text" name="header_val[]" value="{{.Value}}" placeholder="Value" class="override-val">
+              <input type="text" name="header_key[]" value="{{.Key}}" placeholder="Header name (e.g. Authorization)">
+              <input type="text" name="header_val[]" value="{{.Value}}" placeholder="Header value">
             </div>
             {{end}}
-          </fieldset>
-          {{end}}
-          <div class="modal-actions">
-            <button type="submit" class="btn-primary">Save</button>
-            <button type="button" class="btn-secondary" onclick="document.getElementById('headers-modal').remove()">Cancel</button>
+            <!-- Empty extra row so operators can add a header without re-rendering. -->
+            <div class="kv-row">
+              <input type="hidden" name="header_backend[]" value="{{$bid}}">
+              <input type="text" name="header_key[]" value="" placeholder="Header name">
+              <input type="text" name="header_val[]" value="" placeholder="Value">
+            </div>
           </div>
-        </form>
-      {{end}}
-    </div>
+        </fieldset>
+        {{end}}
+        <div class="modal-actions">
+          <button type="submit" class="btn-primary">Save</button>
+          <button type="button" class="btn-secondary" onclick="document.getElementById('headers-modal').remove()">Cancel</button>
+        </div>
+      </form>
+    {{end}}
   </div>
 </div>
 {{end}}
