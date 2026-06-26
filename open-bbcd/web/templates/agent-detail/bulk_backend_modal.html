@@ -1,0 +1,36 @@
+{{define "bulk_backend_modal"}}
+<div class="modal" id="bulk-backend-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content">
+    <h2>Connect all endpoints to one backend</h2>
+    <p>
+      This will set the same backend on
+      <strong>{{len .EndpointIDs}}</strong>
+      endpoint{{if ne (len .EndpointIDs) 1}}s{{end}}. Any existing per-endpoint
+      wiring will be overwritten.
+    </p>
+    {{if .HTTPBackends}}
+      <form method="post"
+            action="/agents/{{.Agent.ID}}/configure/architecture/endpoints/bulk">
+        <label style="display:flex;flex-direction:column;gap:6px">
+          <span><strong>Backend</strong></span>
+          <select name="backend_id" required style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:8px 10px;font-size:14px">
+            <option value="">— Select a backend —</option>
+            {{range .HTTPBackends}}
+              <option value="{{.ID}}">{{.Name}}</option>
+            {{end}}
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button type="button" onclick="document.getElementById('bulk-backend-modal').remove()">Cancel</button>
+          <button type="submit" class="btn-primary">Connect all</button>
+        </div>
+      </form>
+    {{else}}
+      <p class="empty-state" style="padding:8px 0">No HTTP backends exist yet — create one in <a href="/mcp" style="color:#79c0ff">MCP</a> first.</p>
+      <div class="modal-actions">
+        <button type="button" onclick="document.getElementById('bulk-backend-modal').remove()">Close</button>
+      </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

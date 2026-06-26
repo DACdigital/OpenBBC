@@ -1,0 +1,27 @@
+{{define "backend_delete_confirm_modal"}}
+<div class="modal" id="backend-delete-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content">
+    <h2>Delete backend?</h2>
+    <p>
+      About to permanently delete <strong>{{.Backend.Name}}</strong>
+      (<code>{{.Backend.Kind}}</code>). This cannot be undone.
+    </p>
+    {{if gt .UsageCount 0}}
+      <p style="color:#f85149">
+        This backend is still attached to {{.UsageCount}} agent version{{if ne .UsageCount 1}}s{{end}};
+        delete will be refused. Disconnect it from those versions first.
+      </p>
+    {{end}}
+    <form method="POST" action="/mcp/{{.Backend.ID}}/delete" style="margin:0">
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+        <button type="button"
+                class="btn-secondary"
+                onclick="document.getElementById('backend-delete-modal').remove()">Cancel</button>
+        <button type="submit"
+                class="btn-danger-solid"
+                {{if gt .UsageCount 0}}disabled{{end}}>Delete backend</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

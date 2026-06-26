@@ -1,0 +1,21 @@
+{{define "version_delete_confirm_modal"}}
+<div class="modal" id="version-delete-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content">
+    <h2>Delete version?</h2>
+    <p>
+      About to permanently delete this version of
+      <strong>{{.AgentName}}</strong>
+      (<code>{{.VersionID}}</code>). All chat sessions and messages tied to
+      this version will be removed too. This cannot be undone.
+    </p>
+    <form method="POST" action="/agent_versions/{{.VersionID}}/delete" style="margin:0">
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+        <button type="button"
+                class="btn-secondary"
+                onclick="document.getElementById('version-delete-modal').remove()">Cancel</button>
+        <button type="submit" class="btn-danger-solid">Delete version</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

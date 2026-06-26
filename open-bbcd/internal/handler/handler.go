@@ -41,7 +41,10 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrAgentNotDeployable),
 		errors.Is(err, types.ErrAgentNotDeployed),
 		errors.Is(err, types.ErrToolBackendInUse),
-		errors.Is(err, types.ErrUnmappedEndpoints):
+		errors.Is(err, types.ErrUnmappedEndpoints),
+		errors.Is(err, types.ErrAgentInUse),
+		errors.Is(err, types.ErrVersionInUse),
+		errors.Is(err, types.ErrVersionHasChildren):
 		status = http.StatusConflict
 	case errors.Is(err, types.ErrSessionAgentMismatch):
 		status = http.StatusForbidden
@@ -58,7 +61,8 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrUserIDRequired),
 		errors.Is(err, types.ErrToolBackendNameRequired),
 		errors.Is(err, types.ErrToolBackendKindInvalid),
-		errors.Is(err, types.ErrToolBackendNameTaken):
+		errors.Is(err, types.ErrToolBackendNameTaken),
+		errors.Is(err, types.ErrAgentNameMismatch):
 		status = http.StatusBadRequest
 	case errors.Is(err, types.ErrLLMUnavailable),
 		errors.Is(err, types.ErrToolHandlerFailed):

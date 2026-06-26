@@ -20,6 +20,7 @@ type AgentDetailStore interface {
 	GetByID(ctx context.Context, agentID string) (*types.Agent, error)
 	ListGrouped(ctx context.Context) ([]types.AgentGroup, error)
 	GetFlowMapConfigForAgent(ctx context.Context, agentID string) ([]byte, string, error)
+	Delete(ctx context.Context, agentID string) error
 }
 
 // AgentDetailHandler serves the tabbed agent detail page at
@@ -51,6 +52,8 @@ func NewAgentDetailHandler(
 		"templates/agent-detail/versions.html",
 		"templates/agent-detail/inputs.html",
 		"templates/agent-detail/architecture.html",
+		"templates/agent-detail/bulk_backend_modal.html",
+		"templates/agent-detail/delete_confirm_modal.html",
 	)
 	if err != nil {
 		return nil, err
@@ -329,6 +332,139 @@ func (h *AgentDetailHandler) Architecture(w http.ResponseWriter, r *http.Request
 	}
 
 	renderTemplate(w, h.tmpl, "layout", data)
+}
+
+// DeleteConfirm renders the agent-delete confirmation modal. The modal
+// requires the user to type the agent's name (GitHub-style) before the
+// confirm button enables — the server re-validates on POST as a backstop.
+func (h *AgentDetailHandler) DeleteConfirm(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	agent, err := h.store.GetByID(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, h.tmpl, "agent_delete_confirm_modal", map[string]any{
+		"Agent": agent,
+	})
+}
+
+// Delete drops the agent and (via FK CASCADE) every version, chat session,
+// deployed session, message, and endpoint wiring that belongs to it.
+// Validates the typed name matches; redirects to /agents/ui on success.
+func (h *AgentDetailHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	agent, err := h.store.GetByID(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		Error(w, err)
+		return
+	}
+	if r.FormValue("confirm_name") != agent.Name {
+		Error(w, types.ErrAgentNameMismatch)
+		return
+	}
+	if err := h.store.Delete(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
+	http.Redirect(w, r, "/agents/ui", http.StatusSeeOther)
+}
+
+// BulkBackendModal renders the "connect all endpoints to one backend"
+// modal fragment. Loaded via htmx and appended to <body>; submit is a
+// plain POST that redirects back to the architecture endpoints view.
+func (h *AgentDetailHandler) BulkBackendModal(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	agent, err := h.store.GetByID(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	var arch archView
+	if len(agent.Architecture) > 0 {
+		_ = json.Unmarshal(agent.Architecture, &arch)
+	}
+	ids := make([]string, 0, len(arch.Tools))
+	for _, ep := range arch.Tools {
+		ids = append(ids, ep.ID)
+	}
+	var httpBackends []*types.ToolBackend
+	if h.backendRepo != nil {
+		all, err := h.backendRepo.List(r.Context())
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		for _, b := range all {
+			if b.Kind == types.ToolBackendKindHTTPEndpoint {
+				httpBackends = append(httpBackends, b)
+			}
+		}
+	}
+	data := map[string]any{
+		"Agent":        agent,
+		"EndpointIDs":  ids,
+		"HTTPBackends": httpBackends,
+	}
+	renderTemplate(w, h.tmpl, "bulk_backend_modal", data)
+}
+
+// SetEndpointBackendBulk applies the chosen backend to every endpoint in
+// the agent's architecture in one transaction, then 303s back to the
+// architecture endpoints view so the dropdowns reflect the new state.
+func (h *AgentDetailHandler) SetEndpointBackendBulk(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	if err := r.ParseForm(); err != nil {
+		Error(w, err)
+		return
+	}
+	backendID := r.FormValue("backend_id")
+	if backendID == "" {
+		http.Error(w, "backend_id is required", http.StatusBadRequest)
+		return
+	}
+	if h.agentWiringRepo == nil {
+		http.Error(w, "wiring repo not configured", http.StatusInternalServerError)
+		return
+	}
+	agent, err := h.store.GetByID(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	var arch archView
+	if len(agent.Architecture) > 0 {
+		_ = json.Unmarshal(agent.Architecture, &arch)
+	}
+	ids := make([]string, 0, len(arch.Tools))
+	for _, ep := range arch.Tools {
+		ids = append(ids, ep.ID)
+	}
+	if err := h.agentWiringRepo.SetEndpointBackendBulk(r.Context(), agentID, backendID, ids); err != nil {
+		Error(w, err)
+		return
+	}
+	http.Redirect(w, r, "/agents/"+agentID+"/configure/architecture/endpoints", http.StatusSeeOther)
 }
 
 // SetEndpointBackend handles the agent-scoped endpoint→backend dropdown
