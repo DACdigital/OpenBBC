@@ -434,10 +434,12 @@ func (h *ConfiguratorHandler) SavePrompts(w http.ResponseWriter, r *http.Request
 	http.Redirect(w, r, "/agent_versions/"+newID+"/configure/prompts", http.StatusSeeOther)
 }
 
-// Index redirects /configure to the default Architecture > Flows sub-tab.
+// Index redirects /configure to the version's default tab. Post-PR #34 +
+// the tab restructure: Inputs/Architecture moved to the agent detail page,
+// so the version detail page's default lands on Prompts.
 func (h *ConfiguratorHandler) Index(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
-	http.Redirect(w, r, "/agent_versions/"+versionID+"/configure/architecture/flows", http.StatusFound)
+	http.Redirect(w, r, "/agent_versions/"+versionID+"/configure/prompts", http.StatusFound)
 }
 
 func (h *ConfiguratorHandler) Flows(w http.ResponseWriter, r *http.Request) {

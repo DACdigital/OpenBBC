@@ -18,8 +18,8 @@
   <tbody>
     {{range .Groups}}
     {{$latest := index .Versions 0}}
-    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agents/ui?agent={{.AgentID}}">
-      <td><a class="agent-link" href="/agents/ui?agent={{.AgentID}}">{{.Name}}</a></td>
+    <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/agents/{{.AgentID}}/configure/versions">
+      <td><a class="agent-link" href="/agents/{{.AgentID}}/configure/versions">{{.Name}}</a></td>
       <td class="col-version">v{{$latest.VersionNum}}</td>
       <td class="col-status"><span class="badge badge-{{$latest.Version.Status | statusClass}}">{{$latest.Version.Status}}</span></td>
       <td class="col-date">{{$latest.Version.CreatedAt.Format "Jan 2, 2006"}}</td>

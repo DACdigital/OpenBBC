@@ -101,6 +101,14 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("init configurator handler", err)
 	}
 
+	agentDetailHandler, err := NewAgentDetailHandler(
+		&agentDetailStoreAdapter{agents: agentRepo, versions: versionRepo},
+		backendRepo, agentWiringRepo, &schema, web.Assets,
+	)
+	if err != nil {
+		fatal("init agent detail handler", err)
+	}
+
 	backendsHandler, err := NewBackendsHandler(backendRepo, wiringRepo, web.Assets)
 	if err != nil {
 		fatal("init backends handler", err)
@@ -185,7 +193,17 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/mcp", configuratorHandler.MCPSubtab)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/toggle", configuratorHandler.ToggleMCPBackend)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/note", configuratorHandler.UpdateMCPNote)
+	// Convenience alias under the new top-level "MCP" version tab.
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/mcp", configuratorHandler.MCPSubtab)
 	RegisterConfiguratorRedirects(mux)
+
+	// Agent-level detail page: tabbed Versions / Inputs / Architecture.
+	mux.HandleFunc("GET /agents/{agent_id}/configure", agentDetailHandler.Index)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/versions", agentDetailHandler.Versions)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/inputs", agentDetailHandler.Inputs)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/architecture/{subtab}", agentDetailHandler.Architecture)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/architecture/{subtab}/{selectedID}", agentDetailHandler.Architecture)
+	mux.HandleFunc("POST /agents/{agent_id}/configure/architecture/endpoints/{endpointID}/backend", agentDetailHandler.SetEndpointBackend)
 
 	// MCP / tool backends CRUD
 	mux.HandleFunc("GET /mcp", backendsHandler.List)
@@ -286,4 +304,22 @@ func (c *chatBackendLister) ListBackendsForVersion(ctx context.Context, versionI
 }
 func (c *chatBackendLister) ListEndpointBackends(ctx context.Context, agentID string) (map[string]string, error) {
 	return c.agentWiring.ListEndpointBackends(ctx, agentID)
+}
+
+// agentDetailStoreAdapter implements AgentDetailStore by forwarding to the
+// underlying repos. Lives here so handler/agent_detail.go doesn't depend on
+// repository types.
+type agentDetailStoreAdapter struct {
+	agents   *repository.AgentRepository
+	versions *repository.AgentVersionRepository
+}
+
+func (a *agentDetailStoreAdapter) GetByID(ctx context.Context, agentID string) (*types.Agent, error) {
+	return a.agents.GetByID(ctx, agentID)
+}
+func (a *agentDetailStoreAdapter) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
+	return a.agents.ListGrouped(ctx)
+}
+func (a *agentDetailStoreAdapter) GetFlowMapConfigForAgent(ctx context.Context, agentID string) ([]byte, string, error) {
+	return a.versions.GetFlowMapConfigForAgent(ctx, agentID)
 }

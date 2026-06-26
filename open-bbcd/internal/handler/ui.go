@@ -156,48 +156,19 @@ func (h *UIHandler) AgentsPage(w http.ResponseWriter, r *http.Request) {
 	pr := ParsePageRequest(r)
 
 	if agentID := r.URL.Query().Get("agent"); agentID != "" {
-		var group *types.AgentGroup
-		for i := range groups {
-			if groups[i].AgentID == agentID {
-				group = &groups[i]
-				break
+		// /agents/ui?agent=X redirects to the new tabbed agent detail page.
+		// Preserve any &page=… and &size=… on the redirect target so deep
+		// links into a specific page of the versions list still land
+		// correctly.
+		qs := ""
+		if r.URL.RawQuery != "" {
+			vals := r.URL.Query()
+			vals.Del("agent")
+			if encoded := vals.Encode(); encoded != "" {
+				qs = "?" + encoded
 			}
 		}
-		if group == nil {
-			http.NotFound(w, r)
-			return
-		}
-		agent, err := h.agentRepo.GetByID(r.Context(), agentID)
-		if err != nil {
-			Error(w, err)
-			return
-		}
-		totalVersions := len(group.Versions)
-		versions := slicePage(group.Versions, pr.Offset(), pr.Limit())
-		data := agentVersionsPageData{
-			Active:            "agents",
-			AgentID:           group.AgentID,
-			Name:              group.Name,
-			Description:       agent.Description,
-			DiscoveryFilePath: agent.DiscoveryFilePath,
-			CreatedAt:         agent.CreatedAt,
-			Versions:          versions,
-			Page:              NewPageView(pr, totalVersions),
-			BasePath:          r.URL.Path,
-			AgentQS:           "agent=" + agent.ID,
-		}
-		// Versions are returned newest-first by ListGrouped; at most one is DEPLOYED
-		// at a time (enforced by DB partial unique index), so first match wins.
-		// Scan the full version list (not just this page) so the badge is
-		// correct even when the deployed row is on another page.
-		for _, v := range group.Versions {
-			if v.Version != nil && v.Version.Status == "DEPLOYED" {
-				data.CurrentDeployedVersionNum = v.VersionNum
-				data.CurrentDeployedVersionID = v.Version.ID
-				break
-			}
-		}
-		renderTemplate(w, h.agentVersionsTmpl, "layout", data)
+		http.Redirect(w, r, "/agents/"+agentID+"/configure/versions"+qs, http.StatusFound)
 		return
 	}
 

@@ -1,0 +1,122 @@
+{{define "agent-architecture-tab"}}
+{{if not .Agent.FinalizedAt}}
+<p class="empty-state">Architecture is empty — this agent hasn't been finalized yet. Run the seed/aikdm pipeline to land a bundle.</p>
+{{else if eq .SubTab "flows"}}
+  {{template "agent-arch-flows" .}}
+{{else if eq .SubTab "skills"}}
+  {{template "agent-arch-skills" .}}
+{{else if eq .SubTab "endpoints"}}
+  {{template "agent-arch-endpoints" .}}
+{{end}}
+{{end}}
+
+{{define "agent-arch-flows"}}
+<div class="config-banner">
+  Flows belong to this agent's frozen architecture. Shared across all versions of the agent.
+</div>
+<div class="config-two-pane">
+  <aside class="config-list">
+    <div class="config-list-header">Flows ({{len .Architecture.Flows}})</div>
+    {{range $i, $f := .Architecture.Flows}}
+      <a href="/agents/{{$.Agent.ID}}/configure/architecture/flows/{{$f.ID}}"
+         class="config-list-row {{if eq $i $.SelectedFlowIdx}}selected{{end}}">
+        <span class="config-list-row-name">{{$f.Name}}</span>
+        {{if not $f.Included}}<span class="muted"> (excluded)</span>{{end}}
+      </a>
+    {{else}}
+      <p class="empty-state">No flows.</p>
+    {{end}}
+  </aside>
+  <main class="config-detail-pane">
+    {{if ge .SelectedFlowIdx 0}}
+      {{with index .Architecture.Flows .SelectedFlowIdx}}
+      <h2>{{.Name}}</h2>
+      {{if .Description}}<p>{{.Description}}</p>{{end}}
+      <dl class="config-meta">
+        <dt>ID</dt> <dd><code>{{.ID}}</code></dd>
+        <dt>Included</dt> <dd>{{if .Included}}yes{{else}}no{{end}}</dd>
+      </dl>
+      {{end}}
+    {{else}}
+      <p class="config-detail-empty">Select a flow on the left.</p>
+    {{end}}
+  </main>
+</div>
+{{end}}
+
+{{define "agent-arch-skills"}}
+<div class="config-banner">
+  Skills (and their descriptions) belong to this agent's frozen architecture. Per-skill prompts are editable on each version's Prompts tab.
+</div>
+<div class="config-two-pane">
+  <aside class="config-list">
+    <div class="config-list-header">Skills ({{len .Architecture.Skills}})</div>
+    {{range $i, $s := .Architecture.Skills}}
+      <a href="/agents/{{$.Agent.ID}}/configure/architecture/skills/{{$s.Name}}"
+         class="config-list-row {{if eq $i $.SelectedSkillIdx}}selected{{end}}">
+        <span class="config-list-row-name">{{$s.Name}}</span>
+      </a>
+    {{else}}
+      <p class="empty-state">No skills.</p>
+    {{end}}
+  </aside>
+  <main class="config-detail-pane">
+    {{if ge .SelectedSkillIdx 0}}
+      {{with index .Architecture.Skills .SelectedSkillIdx}}
+      <h2>{{.Name}}</h2>
+      {{if .Description}}<p>{{.Description}}</p>{{end}}
+      {{end}}
+    {{else}}
+      <p class="config-detail-empty">Select a skill on the left.</p>
+    {{end}}
+  </main>
+</div>
+{{end}}
+
+{{define "agent-arch-endpoints"}}
+<div class="config-banner">
+  Endpoints are part of this agent's frozen architecture. The backend each endpoint routes to is also agent-scoped: editing it here affects every version of this agent.
+</div>
+<div class="config-two-pane">
+  <aside class="config-list">
+    <div class="config-list-header">Endpoints ({{len .Architecture.Tools}})</div>
+    {{range $i, $ep := .Architecture.Tools}}
+      <a href="/agents/{{$.Agent.ID}}/configure/architecture/endpoints/{{$ep.ID}}"
+         class="config-list-row {{if eq $i $.SelectedEPIdx}}selected{{end}}">
+        <span class="config-list-row-name">{{$ep.ID}}</span>
+        <span class="config-list-row-meta"><span class="muted">{{$ep.Method}} {{$ep.Path}}</span></span>
+      </a>
+    {{else}}
+      <p class="empty-state">No endpoints.</p>
+    {{end}}
+  </aside>
+  <main class="config-detail-pane">
+    {{if ge .SelectedEPIdx 0}}
+      {{$ep := index .Architecture.Tools .SelectedEPIdx}}
+      <h2>{{$ep.ID}}</h2>
+      <p><code>{{$ep.Method}} {{$ep.Path}}</code></p>
+      {{if $ep.Description}}<p>{{$ep.Description}}</p>{{end}}
+      <dl class="config-meta">
+        {{if $ep.Auth}}<dt>Auth</dt> <dd>{{$ep.Auth}}</dd>{{end}}
+        {{if $ep.Source}}<dt>Source</dt> <dd><code>{{$ep.Source}}</code></dd>{{end}}
+      </dl>
+      <form hx-post="/agents/{{.Agent.ID}}/configure/architecture/endpoints/{{$ep.ID}}/backend"
+            hx-target="closest .config-detail-pane"
+            hx-swap="innerHTML">
+        <label>
+          <strong>Backend</strong>
+          <select name="backend_id" hx-trigger="change" onchange="this.form.requestSubmit()">
+            <option value="">— Not connected —</option>
+            {{$current := index .EndpointBackends $ep.ID}}
+            {{range .HTTPBackends}}
+              <option value="{{.ID}}" {{if eq .ID $current}}selected{{end}}>{{.Name}}</option>
+            {{end}}
+          </select>
+        </label>
+      </form>
+    {{else}}
+      <p class="config-detail-empty">Select an endpoint on the left.</p>
+    {{end}}
+  </main>
+</div>
+{{end}}

@@ -338,6 +338,29 @@ func (r *AgentVersionRepository) UpdateStatus(ctx context.Context, versionID, ex
 	return nil
 }
 
+// GetFlowMapConfigForAgent returns the flow_map_config + parse_error of the
+// agent's ROOT version (the wizard-created row where parent_version_id IS
+// NULL). Used by agent-scoped views (Inputs tab on the agent detail page):
+// flow_map_config is effectively per-agent — only one wizard run per agent
+// — but it lives on agent_versions because it pre-dates the agent/version
+// split. Reading the root row gives the canonical per-agent value.
+func (r *AgentVersionRepository) GetFlowMapConfigForAgent(ctx context.Context, agentID string) ([]byte, string, error) {
+	var cfg []byte
+	var parseErr sql.NullString
+	err := r.db.QueryRowContext(ctx, `
+		SELECT flow_map_config, flow_map_parse_error
+		FROM agent_versions
+		WHERE agent_id = $1::uuid AND parent_version_id IS NULL
+	`, agentID).Scan(&cfg, &parseErr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "", types.ErrNotFound
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return cfg, parseErr.String, nil
+}
+
 // GetFlowMapConfig returns the version's flow_map_config + parse_error.
 // Returns ErrNotFound if the version does not exist.
 func (r *AgentVersionRepository) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
