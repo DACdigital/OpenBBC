@@ -60,6 +60,25 @@ func NewConfiguratorHandler(
 		"renderMarkdown": renderMarkdown,
 		"statusClass":    statusClass,
 		"dict":           tplDict,
+		// cssID makes a string safe for use inside a CSS selector (e.g.
+		// htmx's hx-target="#..."). Replaces any char outside [A-Za-z0-9_-]
+		// with '-'. Endpoint IDs from discovery often contain dots
+		// (orders.create), which are valid in HTML id attributes but in CSS
+		// selectors are interpreted as class separators — silently breaking
+		// htmx swaps.
+		"cssID": func(s string) string {
+			b := make([]byte, 0, len(s))
+			for i := 0; i < len(s); i++ {
+				c := s[i]
+				if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+					(c >= '0' && c <= '9') || c == '_' || c == '-' {
+					b = append(b, c)
+				} else {
+					b = append(b, '-')
+				}
+			}
+			return string(b)
+		},
 		"selectedFlowID": func(f *types.Flow) string {
 			if f == nil {
 				return ""

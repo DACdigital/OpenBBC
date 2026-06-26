@@ -227,7 +227,8 @@
 {{end}}
 
 {{define "endpoint_detail"}}
-<div class="config-detail" id="endpoint-detail-{{.Endpoint.ID}}">
+{{$domID := printf "endpoint-detail-%s" (cssID .Endpoint.ID)}}
+<div class="config-detail" id="{{$domID}}">
   <h2>{{.Endpoint.ID}}</h2>
   <p><code>{{.Endpoint.Method}} {{.Endpoint.Path}}</code></p>
 
@@ -259,7 +260,7 @@
     <select name="backend_id"
             hx-post="/agent_versions/{{.VersionID}}/endpoints/{{.Endpoint.ID}}/backend"
             hx-trigger="change"
-            hx-target="#endpoint-detail-{{.Endpoint.ID}}"
+            hx-target="#{{$domID}}"
             hx-swap="outerHTML">
       <option value="">— not connected —</option>
       {{range .AvailableBackends}}
