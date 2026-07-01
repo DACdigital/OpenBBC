@@ -12,11 +12,12 @@ import (
 
 // DatasetsHandler serves /datasets — list, detail, create, close.
 type DatasetsHandler struct {
-	repo             *repository.DatasetRepository
-	listTmpl         *template.Template
-	newModalTmpl     *template.Template
-	detailTmpl       *template.Template
-	closeConfirmTmpl *template.Template
+	repo                *repository.DatasetRepository
+	listTmpl            *template.Template
+	newModalTmpl        *template.Template
+	detailTmpl          *template.Template
+	closeConfirmTmpl    *template.Template
+	removeSessionTmpl   *template.Template
 }
 
 func NewDatasetsHandler(repo *repository.DatasetRepository, webFS fs.FS) (*DatasetsHandler, error) {
@@ -52,12 +53,19 @@ func NewDatasetsHandler(repo *repository.DatasetRepository, webFS fs.FS) (*Datas
 	if err != nil {
 		return nil, err
 	}
+	removeSessionTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/datasets/remove_session_modal.html",
+	)
+	if err != nil {
+		return nil, err
+	}
 	return &DatasetsHandler{
-		repo:             repo,
-		listTmpl:         listTmpl,
-		newModalTmpl:     newModalTmpl,
-		detailTmpl:       detailTmpl,
-		closeConfirmTmpl: closeConfirmTmpl,
+		repo:              repo,
+		listTmpl:          listTmpl,
+		newModalTmpl:      newModalTmpl,
+		detailTmpl:        detailTmpl,
+		closeConfirmTmpl:  closeConfirmTmpl,
+		removeSessionTmpl: removeSessionTmpl,
 	}, nil
 }
 
@@ -248,4 +256,18 @@ func (h *DatasetsHandler) CloseDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/datasets/"+datasetID, http.StatusSeeOther)
+}
+
+// RemoveSessionConfirm renders GET /datasets/{dataset_id}/sessions/{session_id}/remove-confirm
+// The modal's confirm button posts DELETE to the existing chat-scoped
+// unassign endpoint, then reloads on success.
+func (h *DatasetsHandler) RemoveSessionConfirm(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	versionID := r.URL.Query().Get("version_id")
+	title := r.URL.Query().Get("title")
+	renderTemplate(w, h.removeSessionTmpl, "dataset_remove_session_modal", map[string]any{
+		"SessionID":      sessionID,
+		"AgentVersionID": versionID,
+		"SessionTitle":   title,
+	})
 }

@@ -58,10 +58,9 @@
           {{if $.SelectedVersion}}{{if eq $.SelectedVersion.Status "DRAFT"}}
           <td class="col-actions">
             <button class="btn-small btn-danger"
-                    hx-delete="/agent_versions/{{.AgentVersionID}}/chat/{{.SessionID}}/assign-dataset"
-                    hx-confirm="Remove session from draft?"
-                    hx-swap="none"
-                    onclick="setTimeout(()=>location.reload(),200)">Remove</button>
+                    hx-get="/datasets/{{$.Dataset.ID}}/sessions/{{.SessionID}}/remove-confirm?version_id={{.AgentVersionID}}&amp;title={{.SessionTitle | urlquery}}"
+                    hx-target="body"
+                    hx-swap="beforeend">Remove</button>
           </td>
           {{end}}{{end}}
         </tr>

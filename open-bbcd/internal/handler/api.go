@@ -261,6 +261,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /datasets/{dataset_id}", datasetsHandler.Detail)
 	mux.HandleFunc("GET /datasets/{dataset_id}/close-draft/confirm", datasetsHandler.CloseConfirm)
 	mux.HandleFunc("POST /datasets/{dataset_id}/close-draft", datasetsHandler.CloseDraft)
+	mux.HandleFunc("GET /datasets/{dataset_id}/sessions/{session_id}/remove-confirm", datasetsHandler.RemoveSessionConfirm)
 
 	// Per-agent deploy/undeploy + confirm modals
 	mux.HandleFunc("POST /agents/{agent_id}/deploy", deployHandler.Deploy)
