@@ -16,7 +16,9 @@
       {{end}}
     </div>
   </div>
-  {{if .Dataset.Description}}<p style="color:#8b949e;font-size:14px;margin-top:-8px;margin-bottom:16px">{{.Dataset.Description}}</p>{{end}}
+  {{if .Dataset.Description}}
+  <div class="dataset-description">{{.Dataset.Description}}</div>
+  {{end}}
 
   <div class="datasets-version-strip">
     {{range .Versions}}
@@ -74,6 +76,19 @@
 </div>
 
 <style>
+.dataset-description {
+  max-width: 720px;
+  margin: -4px 0 16px 0;
+  padding: 10px 14px;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  background: #161b22;
+  color: #c9d1d9;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .datasets-version-strip { display:flex; gap:8px; overflow-x:auto; padding:8px 0 12px; border-bottom:1px solid #30363d; margin-bottom:16px; }
 .datasets-version-tab { border:1px solid #30363d; border-radius:6px; padding:8px 12px; color:#e6edf3; text-decoration:none; min-width:120px; font-size:13px; background:#161b22; }
 .datasets-version-tab.active { border-color:#58a6ff; background:#1c2230; }

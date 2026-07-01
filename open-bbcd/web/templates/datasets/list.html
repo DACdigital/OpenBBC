@@ -15,7 +15,6 @@
   <thead>
     <tr>
       <th>Name</th>
-      <th>Description</th>
       <th>Latest version</th>
       <th class="col-count"># sessions</th>
       <th class="col-date">Created</th>
@@ -25,7 +24,6 @@
     {{range .Rows}}
     <tr class="clickable" onclick="location.href='/datasets/{{.Dataset.ID}}'">
       <td><a class="agent-link" href="/datasets/{{.Dataset.ID}}">{{.Dataset.Name}}</a></td>
-      <td>{{.Dataset.Description}}</td>
       <td>
         {{if .LatestNum}}
           v{{.LatestNum}}
