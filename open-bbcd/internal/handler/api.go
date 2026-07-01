@@ -246,6 +246,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/turn", chatHandler.Turn)
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.ShowHeaderOverridesModal)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.UpdateHeaderOverrides)
+	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Footer)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Upsert)
 	mux.HandleFunc("DELETE /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Delete)
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/assign-dataset", chatHandler.AssignDatasetModal)
