@@ -78,15 +78,20 @@ type datasetListRow struct {
 	SessionCount int
 }
 
-// List renders GET /datasets — the datasets table.
+// List renders GET /datasets — the datasets table, paginated.
+// App-side slicing mirrors the /agents/ui pattern; per-row version +
+// session-count enrichment only runs for datasets on the current page.
 func (h *DatasetsHandler) List(w http.ResponseWriter, r *http.Request) {
 	datasets, err := h.repo.List(r.Context())
 	if err != nil {
 		Error(w, err)
 		return
 	}
-	rows := make([]datasetListRow, 0, len(datasets))
-	for _, d := range datasets {
+	pr := ParsePageRequest(r)
+	total := len(datasets)
+	pageDatasets := slicePage(datasets, pr.Offset(), pr.Limit())
+	rows := make([]datasetListRow, 0, len(pageDatasets))
+	for _, d := range pageDatasets {
 		versions, _ := h.repo.ListVersions(r.Context(), d.ID)
 		if len(versions) == 0 {
 			rows = append(rows, datasetListRow{Dataset: d})
@@ -110,8 +115,10 @@ func (h *DatasetsHandler) List(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	renderTemplate(w, h.listTmpl, "layout", map[string]any{
-		"Active": "datasets",
-		"Rows":   rows,
+		"Active":   "datasets",
+		"Rows":     rows,
+		"Page":     NewPageView(pr, total),
+		"BasePath": r.URL.Path,
 	})
 }
 
