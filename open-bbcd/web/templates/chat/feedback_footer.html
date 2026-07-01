@@ -57,7 +57,7 @@
         <textarea name="expected_output" rows="3">{{if .Feedback}}{{.Feedback.ExpectedOutput}}{{end}}</textarea>
       </label>
       <div class="feedback-form-actions">
-        <button type="button" onclick="document.getElementById('fb-form-{{.MessageID}}').hidden=true">Cancel</button>
+        <button type="button" class="btn-secondary" onclick="document.getElementById('fb-form-{{.MessageID}}').hidden=true">Cancel</button>
         <button type="submit" class="btn-primary">Save</button>
       </div>
     </form>
