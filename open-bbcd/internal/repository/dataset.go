@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -113,6 +114,23 @@ func (r *DatasetRepository) EnsureDraft(ctx context.Context, datasetID string) (
 	if err != nil {
 		return nil, err
 	}
+	// Inherit sessions from the most recent CLOSED version so users see
+	// cumulative dataset content instead of an empty next version. Sessions
+	// in the previous closed version are locked, so their feedback is
+	// frozen — they behave as immutable members that carry forward.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO dataset_version_sessions (dataset_version_id, session_id)
+		SELECT $1::uuid, dvs.session_id
+		FROM dataset_version_sessions dvs
+		JOIN dataset_versions dv ON dv.id = dvs.dataset_version_id
+		WHERE dv.dataset_id = $2::uuid AND dv.status = 'CLOSED'
+		  AND dv.version_num = (
+		      SELECT MAX(version_num) FROM dataset_versions
+		      WHERE dataset_id = $2::uuid AND status = 'CLOSED'
+		  )
+	`, v.ID, datasetID); err != nil {
+		return nil, fmt.Errorf("inherit previous version sessions: %w", err)
+	}
 	return v, tx.Commit()
 }
 
@@ -160,7 +178,8 @@ func (r *DatasetRepository) CloseDraft(ctx context.Context, versionID, note stri
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE chat_sessions
 		SET locked_at = now()
-		WHERE id IN (SELECT session_id FROM dataset_version_sessions WHERE dataset_version_id = $1::uuid)
+		WHERE locked_at IS NULL
+		  AND id IN (SELECT session_id FROM dataset_version_sessions WHERE dataset_version_id = $1::uuid)
 	`, versionID); err != nil {
 		return err
 	}
@@ -260,7 +279,11 @@ func (r *DatasetRepository) GetVersionSessions(ctx context.Context, versionID st
 // (creating one if none). Refuses if:
 //   - the session has no feedback rows (ErrSessionNoFeedback)
 //   - the session is locked (ErrSessionLocked)
-//   - the session is already in a dataset (ErrSessionAlreadyInDataset)
+//   - the session already belongs to a different dataset (ErrSessionAlreadyInDataset)
+//
+// Assigning a session that's already in the SAME dataset (e.g. inherited
+// from a previous CLOSED version) is a no-op at the row level — the draft
+// already has the row from EnsureDraft's inheritance step.
 func (r *DatasetRepository) AssignSessionToDraft(ctx context.Context, datasetID, sessionID string) (*types.DatasetVersion, error) {
 	var hasFeedback bool
 	if err := r.db.QueryRowContext(ctx, `
@@ -288,17 +311,34 @@ func (r *DatasetRepository) AssignSessionToDraft(ctx context.Context, datasetID,
 		return nil, types.ErrSessionLocked
 	}
 
+	// Since migration 020 dropped the global UNIQUE(session_id) constraint,
+	// we now explicitly check that this session isn't a member of a
+	// DIFFERENT dataset via any version.
+	var otherDataset bool
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+		    SELECT 1 FROM dataset_version_sessions dvs
+		    JOIN dataset_versions dv ON dv.id = dvs.dataset_version_id
+		    WHERE dvs.session_id = $1::uuid AND dv.dataset_id != $2::uuid
+		)
+	`, sessionID, datasetID).Scan(&otherDataset); err != nil {
+		return nil, err
+	}
+	if otherDataset {
+		return nil, types.ErrSessionAlreadyInDataset
+	}
+
 	draft, err := r.EnsureDraft(ctx, datasetID)
 	if err != nil {
 		return nil, err
 	}
+	// Insert into the draft, tolerating duplicate row if the session was
+	// already in the draft (either via a re-click or via inheritance).
 	_, err = r.db.ExecContext(ctx, `
 		INSERT INTO dataset_version_sessions (dataset_version_id, session_id) VALUES ($1::uuid, $2::uuid)
+		ON CONFLICT (dataset_version_id, session_id) DO NOTHING
 	`, draft.ID, sessionID)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, types.ErrSessionAlreadyInDataset
-		}
 		return nil, err
 	}
 	return draft, nil
@@ -314,7 +354,9 @@ type AssignmentView struct {
 }
 
 // GetSessionAssignment returns the session's dataset membership or nil if
-// unassigned.
+// unassigned. When a session appears in multiple versions of the same
+// dataset (draft + inherited from prior closed), the DRAFT row wins so
+// the chat UI shows the mutable badge.
 func (r *DatasetRepository) GetSessionAssignment(ctx context.Context, sessionID string) (*AssignmentView, error) {
 	av := &AssignmentView{}
 	var status string
@@ -324,6 +366,8 @@ func (r *DatasetRepository) GetSessionAssignment(ctx context.Context, sessionID 
 		JOIN dataset_versions dv ON dv.id = dvs.dataset_version_id
 		JOIN datasets d           ON d.id = dv.dataset_id
 		WHERE dvs.session_id = $1::uuid
+		ORDER BY (dv.status = 'DRAFT') DESC, dv.version_num DESC
+		LIMIT 1
 	`, sessionID).Scan(&av.DatasetID, &av.DatasetName, &av.VersionID, &av.VersionNum, &status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -335,25 +379,34 @@ func (r *DatasetRepository) GetSessionAssignment(ctx context.Context, sessionID 
 	return av, nil
 }
 
-// UnassignSession removes the session from whatever draft it's in.
-// Refuses if the containing version is CLOSED.
+// UnassignSession removes the session from the current DRAFT of its
+// dataset. Refuses if the session is locked (part of a CLOSED version;
+// removing would break the immutable snapshot). Rows in CLOSED versions
+// stay put — only the DRAFT row is deleted.
 func (r *DatasetRepository) UnassignSession(ctx context.Context, sessionID string) error {
-	var status sql.NullString
-	err := r.db.QueryRowContext(ctx, `
-		SELECT dv.status
-		FROM dataset_version_sessions dvs
-		JOIN dataset_versions dv ON dv.id = dvs.dataset_version_id
-		WHERE dvs.session_id = $1::uuid
-	`, sessionID).Scan(&status)
+	var locked sql.NullTime
+	err := r.db.QueryRowContext(ctx,
+		`SELECT locked_at FROM chat_sessions WHERE id = $1::uuid`, sessionID,
+	).Scan(&locked)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return types.ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if status.String != string(types.DatasetVersionDraft) {
-		return types.ErrDatasetVersionClosed
+	if locked.Valid {
+		return types.ErrSessionLocked
 	}
-	_, err = r.db.ExecContext(ctx, `DELETE FROM dataset_version_sessions WHERE session_id = $1::uuid`, sessionID)
+	// Delete only the DRAFT membership row. CLOSED versions (if any —
+	// possible if this session was in a prior CLOSED and then never got
+	// locked… actually locked_at rules that out, so this scope is only
+	// pruning the pending DRAFT) keep their rows for snapshot integrity.
+	_, err = r.db.ExecContext(ctx, `
+		DELETE FROM dataset_version_sessions dvs
+		USING dataset_versions dv
+		WHERE dv.id = dvs.dataset_version_id
+		  AND dvs.session_id = $1::uuid
+		  AND dv.status = 'DRAFT'
+	`, sessionID)
 	return err
 }

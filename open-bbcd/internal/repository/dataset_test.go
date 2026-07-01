@@ -248,3 +248,79 @@ func TestDataset_CloseDraft_PurgesSessionsWithoutFeedback(t *testing.T) {
 		t.Errorf("drop session should NOT be locked (it was purged before the lock step)")
 	}
 }
+
+func TestDataset_NextDraftInheritsFromPreviousClosed(t *testing.T) {
+	_, _, db := withRepo(t)
+	repo := NewDatasetRepository(db)
+	fb := NewFeedbackRepository(db)
+	d, _ := repo.Create(context.Background(), "ds-inherit", "")
+
+	// Seed two sessions with feedback, assign both to v1 draft, close.
+	var agentID, versionID string
+	_ = db.QueryRow(`INSERT INTO agents (name) VALUES ('inh-a') RETURNING id::text`).Scan(&agentID)
+	_ = db.QueryRow(`INSERT INTO agent_versions (agent_id, status) VALUES ($1::uuid, 'READY') RETURNING id::text`, agentID).Scan(&versionID)
+	mkSess := func() (sessionID string) {
+		var msgID string
+		_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&sessionID)
+		_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq) VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&msgID)
+		_ = fb.Upsert(context.Background(), msgID, types.FeedbackRatingUp, "", "")
+		return
+	}
+	sessA := mkSess()
+	sessB := mkSess()
+	v1, err := repo.AssignSessionToDraft(context.Background(), d.ID, sessA)
+	if err != nil {
+		t.Fatalf("assign A: %v", err)
+	}
+	if _, err := repo.AssignSessionToDraft(context.Background(), d.ID, sessB); err != nil {
+		t.Fatalf("assign B: %v", err)
+	}
+	if err := repo.CloseDraft(context.Background(), v1.ID, "v1"); err != nil {
+		t.Fatalf("close v1: %v", err)
+	}
+
+	// A new session for v2 (fresh, unlocked).
+	sessC := mkSess()
+
+	// Assigning C creates v2 draft. It must inherit A and B.
+	v2, err := repo.AssignSessionToDraft(context.Background(), d.ID, sessC)
+	if err != nil {
+		t.Fatalf("assign C to new draft: %v", err)
+	}
+	if v2.ID == v1.ID {
+		t.Fatalf("expected a new draft, got same version id as v1")
+	}
+	refs, _ := repo.GetVersionSessions(context.Background(), v2.ID)
+	if len(refs) != 3 {
+		t.Fatalf("v2 draft should have 3 sessions (2 inherited + 1 new), got %d", len(refs))
+	}
+	seen := map[string]bool{}
+	for _, r := range refs {
+		seen[r.SessionID] = true
+	}
+	if !seen[sessA] || !seen[sessB] || !seen[sessC] {
+		t.Errorf("v2 missing an expected session; got %v", seen)
+	}
+
+	// Closing v2 should not re-lock A and B (they were locked at v1 close).
+	// Grab their existing lock times.
+	var lockA1, lockB1 sql.NullTime
+	_ = db.QueryRow(`SELECT locked_at FROM chat_sessions WHERE id=$1::uuid`, sessA).Scan(&lockA1)
+	_ = db.QueryRow(`SELECT locked_at FROM chat_sessions WHERE id=$1::uuid`, sessB).Scan(&lockB1)
+	if !lockA1.Valid || !lockB1.Valid {
+		t.Fatalf("expected A and B locked from v1 close")
+	}
+	if err := repo.CloseDraft(context.Background(), v2.ID, "v2"); err != nil {
+		t.Fatalf("close v2: %v", err)
+	}
+	var lockA2, lockB2, lockC sql.NullTime
+	_ = db.QueryRow(`SELECT locked_at FROM chat_sessions WHERE id=$1::uuid`, sessA).Scan(&lockA2)
+	_ = db.QueryRow(`SELECT locked_at FROM chat_sessions WHERE id=$1::uuid`, sessB).Scan(&lockB2)
+	_ = db.QueryRow(`SELECT locked_at FROM chat_sessions WHERE id=$1::uuid`, sessC).Scan(&lockC)
+	if lockA1.Time != lockA2.Time || lockB1.Time != lockB2.Time {
+		t.Errorf("A/B lock times should be preserved from v1 close, not overwritten by v2 close")
+	}
+	if !lockC.Valid {
+		t.Errorf("C should be locked after v2 close")
+	}
+}
