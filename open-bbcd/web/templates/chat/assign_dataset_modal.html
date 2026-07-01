@@ -1,9 +1,20 @@
 {{define "assign_dataset_modal"}}
 <div class="modal" id="assign-dataset-modal" onclick="if(event.target===this)this.remove()">
   <div class="modal-content">
-    <h2>Assign session to a dataset</h2>
-    <p>Picks the dataset's current draft (creates one if none exists).</p>
-    {{if .Datasets}}
+    {{if not .HasFeedback}}
+      <h2>Add feedback first</h2>
+      <p>
+        This session has no feedback yet. Give at least one 👍 or 👎 on an
+        assistant message, then try assigning again — datasets only accept
+        sessions that carry usable signal.
+      </p>
+      <div style="display:flex;justify-content:flex-end">
+        <button type="button" class="btn-secondary"
+                onclick="document.getElementById('assign-dataset-modal').remove()">Close</button>
+      </div>
+    {{else if .Datasets}}
+      <h2>Assign session to a dataset</h2>
+      <p>Picks the dataset's current draft (creates one if none exists).</p>
       <form method="POST"
             action="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/assign-dataset"
             hx-post="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/assign-dataset"
@@ -28,6 +39,7 @@
         </div>
       </form>
     {{else}}
+      <h2>Assign session to a dataset</h2>
       <p class="empty-state" style="padding:8px 0">No datasets yet — <a href="/datasets" style="color:#79c0ff">create one first</a>.</p>
       <div style="display:flex;justify-content:flex-end">
         <button type="button" class="btn-secondary"

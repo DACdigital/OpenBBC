@@ -694,18 +694,39 @@ func (h *ChatHandler) UpdateHeaderOverrides(w http.ResponseWriter, r *http.Reque
 }
 
 // AssignDatasetModal renders GET /agent_versions/{version_id}/chat/{session_id}/assign-dataset — modal.
+// Renders one of three states:
+//   - session has no feedback yet → "add feedback first" explainer
+//   - datasets exist and session has feedback → dataset picker
+//   - session has feedback but no datasets exist → link to /datasets
 func (h *ChatHandler) AssignDatasetModal(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("session_id")
 	versionID := r.PathValue("version_id")
-	datasets, err := h.datasetRepo.List(r.Context())
-	if err != nil {
-		Error(w, err)
-		return
+
+	hasFeedback := false
+	if h.feedbackRepo != nil {
+		fbMap, err := h.feedbackRepo.GetForSession(r.Context(), sessionID)
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		hasFeedback = len(fbMap) > 0
 	}
+
+	var datasets []*types.Dataset
+	if hasFeedback {
+		var err error
+		datasets, err = h.datasetRepo.List(r.Context())
+		if err != nil {
+			Error(w, err)
+			return
+		}
+	}
+
 	renderTemplate(w, h.viewTmpl, "assign_dataset_modal", map[string]any{
-		"SessionID": sessionID,
-		"VersionID": versionID,
-		"Datasets":  datasets,
+		"SessionID":   sessionID,
+		"VersionID":   versionID,
+		"Datasets":    datasets,
+		"HasFeedback": hasFeedback,
 	})
 }
 

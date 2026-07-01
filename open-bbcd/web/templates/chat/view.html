@@ -40,14 +40,10 @@
                   onclick="setTimeout(()=>location.reload(),200)">Unassign</button>
         {{end}}
       </span>
-    {{else if .HasFeedback}}
+    {{else}}
       <button type="button" class="btn-secondary"
               hx-get="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/assign-dataset"
               hx-target="body" hx-swap="beforeend">
-        Assign to dataset…
-      </button>
-    {{else}}
-      <button type="button" class="btn-secondary" disabled title="Add feedback (👍 or 👎) on a message first">
         Assign to dataset…
       </button>
     {{end}}
