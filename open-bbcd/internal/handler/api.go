@@ -140,6 +140,12 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 
+	feedbackRepo := repository.NewFeedbackRepository(db)
+	feedbackHandler, err := NewFeedbackHandler(feedbackRepo, web.Assets)
+	if err != nil {
+		fatal("init feedback handler", err)
+	}
+
 	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, web.Assets, logger)
 	if err != nil {
 		fatal("init chat handler", err)
@@ -234,6 +240,8 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/turn", chatHandler.Turn)
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.ShowHeaderOverridesModal)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.UpdateHeaderOverrides)
+	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Upsert)
+	mux.HandleFunc("DELETE /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Delete)
 
 	// Per-agent deploy/undeploy + confirm modals
 	mux.HandleFunc("POST /agents/{agent_id}/deploy", deployHandler.Deploy)

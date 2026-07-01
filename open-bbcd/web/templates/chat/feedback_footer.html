@@ -1,0 +1,10 @@
+{{define "feedback_footer"}}
+<div class="feedback-footer" id="fb-{{.MessageID}}">
+  <!-- filled in by Task 14 -->
+  {{if .Feedback}}
+    <span class="thumb-{{.Feedback.Rating}} filled">{{if eq .Feedback.Rating "up"}}👍{{else}}👎{{end}}</span>
+  {{else}}
+    <span class="thumb-up">👍</span> <span class="thumb-down">👎</span>
+  {{end}}
+</div>
+{{end}}
