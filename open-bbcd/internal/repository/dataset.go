@@ -136,6 +136,20 @@ func (r *DatasetRepository) CloseDraft(ctx context.Context, versionID, note stri
 	if status != string(types.DatasetVersionDraft) {
 		return types.ErrDatasetVersionClosed
 	}
+	// Purge sessions that lost all their feedback between assignment and
+	// close. A session with no thumbs is dataset dead weight and would
+	// corrupt the frozen snapshot with a locked-but-signalless row.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM dataset_version_sessions dvs
+		WHERE dvs.dataset_version_id = $1::uuid
+		  AND NOT EXISTS (
+		      SELECT 1 FROM chat_message_feedback f
+		      JOIN chat_messages m ON m.id = f.message_id
+		      WHERE m.session_id = dvs.session_id
+		  )
+	`, versionID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE dataset_versions
 		SET status='CLOSED', closed_at=now(), close_note=$2

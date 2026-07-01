@@ -70,11 +70,13 @@ func TestDataset_CloseDraft_LocksSessions(t *testing.T) {
 	d, _ := repo.Create(context.Background(), "ds-close", "")
 	draft, _ := repo.EnsureDraft(context.Background(), d.ID)
 
-	// Seed a session and add it to the draft.
-	var agentID, versionID, sessionID string
+	// Seed a session WITH feedback so CloseDraft's purge step keeps it in.
+	var agentID, versionID, sessionID, messageID string
 	_ = db.QueryRow(`INSERT INTO agents (name) VALUES ('close-a') RETURNING id::text`).Scan(&agentID)
 	_ = db.QueryRow(`INSERT INTO agent_versions (agent_id, status) VALUES ($1::uuid, 'READY') RETURNING id::text`, agentID).Scan(&versionID)
 	_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&sessionID)
+	_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq) VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&messageID)
+	_, _ = db.Exec(`INSERT INTO chat_message_feedback (message_id, rating) VALUES ($1::uuid, 'up')`, messageID)
 	if _, err := db.Exec(`INSERT INTO dataset_version_sessions (dataset_version_id, session_id) VALUES ($1::uuid, $2::uuid)`, draft.ID, sessionID); err != nil {
 		t.Fatalf("seed dvs: %v", err)
 	}
@@ -180,5 +182,69 @@ func TestDataset_AssignAndUnassign(t *testing.T) {
 	_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&otherSessionID)
 	if _, err := repo.AssignSessionToDraft(context.Background(), d.ID, otherSessionID); !errors.Is(err, types.ErrSessionNoFeedback) {
 		t.Errorf("expected ErrSessionNoFeedback, got %v", err)
+	}
+}
+
+func TestDataset_CloseDraft_PurgesSessionsWithoutFeedback(t *testing.T) {
+	_, _, db := withRepo(t)
+	repo := NewDatasetRepository(db)
+	fb := NewFeedbackRepository(db)
+	d, _ := repo.Create(context.Background(), "ds-purge", "")
+
+	// Seed two sessions, both with feedback initially.
+	var agentID, versionID string
+	_ = db.QueryRow(`INSERT INTO agents (name) VALUES ('purge-a') RETURNING id::text`).Scan(&agentID)
+	_ = db.QueryRow(`INSERT INTO agent_versions (agent_id, status) VALUES ($1::uuid, 'READY') RETURNING id::text`, agentID).Scan(&versionID)
+
+	seedSess := func() (sessionID, msgID string) {
+		_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&sessionID)
+		_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq) VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&msgID)
+		return
+	}
+	keepSess, keepMsg := seedSess()
+	dropSess, dropMsg := seedSess()
+	if err := fb.Upsert(context.Background(), keepMsg, types.FeedbackRatingUp, "", ""); err != nil {
+		t.Fatalf("seed keep feedback: %v", err)
+	}
+	if err := fb.Upsert(context.Background(), dropMsg, types.FeedbackRatingUp, "", ""); err != nil {
+		t.Fatalf("seed drop feedback: %v", err)
+	}
+
+	// Assign both to the draft.
+	draft, _ := repo.AssignSessionToDraft(context.Background(), d.ID, keepSess)
+	if _, err := repo.AssignSessionToDraft(context.Background(), d.ID, dropSess); err != nil {
+		t.Fatalf("assign drop: %v", err)
+	}
+
+	// User changes mind and removes feedback from dropSess.
+	if err := fb.Delete(context.Background(), dropMsg); err != nil {
+		t.Fatalf("delete drop feedback: %v", err)
+	}
+
+	// Close — dropSess should be purged, keepSess should be locked in.
+	if err := repo.CloseDraft(context.Background(), draft.ID, "purge test"); err != nil {
+		t.Fatalf("CloseDraft: %v", err)
+	}
+
+	var keepStill bool
+	_ = db.QueryRow(`SELECT EXISTS(SELECT 1 FROM dataset_version_sessions WHERE session_id=$1::uuid)`, keepSess).Scan(&keepStill)
+	if !keepStill {
+		t.Errorf("keep session should still be in the closed version")
+	}
+	var dropStill bool
+	_ = db.QueryRow(`SELECT EXISTS(SELECT 1 FROM dataset_version_sessions WHERE session_id=$1::uuid)`, dropSess).Scan(&dropStill)
+	if dropStill {
+		t.Errorf("drop session should have been purged")
+	}
+
+	// keep locked, drop unlocked
+	var keepLocked, dropLocked sql.NullTime
+	_ = db.QueryRow(`SELECT locked_at FROM chat_sessions WHERE id=$1::uuid`, keepSess).Scan(&keepLocked)
+	_ = db.QueryRow(`SELECT locked_at FROM chat_sessions WHERE id=$1::uuid`, dropSess).Scan(&dropLocked)
+	if !keepLocked.Valid {
+		t.Errorf("keep session should be locked after close")
+	}
+	if dropLocked.Valid {
+		t.Errorf("drop session should NOT be locked (it was purged before the lock step)")
 	}
 }
