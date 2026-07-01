@@ -290,6 +290,37 @@ func (r *DatasetRepository) AssignSessionToDraft(ctx context.Context, datasetID,
 	return draft, nil
 }
 
+// AssignmentView is a session's dataset membership for chat-view rendering.
+type AssignmentView struct {
+	DatasetID     string
+	DatasetName   string
+	VersionID     string
+	VersionNum    int
+	VersionStatus types.DatasetVersionStatus
+}
+
+// GetSessionAssignment returns the session's dataset membership or nil if
+// unassigned.
+func (r *DatasetRepository) GetSessionAssignment(ctx context.Context, sessionID string) (*AssignmentView, error) {
+	av := &AssignmentView{}
+	var status string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT d.id::text, d.name, dv.id::text, dv.version_num, dv.status
+		FROM dataset_version_sessions dvs
+		JOIN dataset_versions dv ON dv.id = dvs.dataset_version_id
+		JOIN datasets d           ON d.id = dv.dataset_id
+		WHERE dvs.session_id = $1::uuid
+	`, sessionID).Scan(&av.DatasetID, &av.DatasetName, &av.VersionID, &av.VersionNum, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	av.VersionStatus = types.DatasetVersionStatus(status)
+	return av, nil
+}
+
 // UnassignSession removes the session from whatever draft it's in.
 // Refuses if the containing version is CLOSED.
 func (r *DatasetRepository) UnassignSession(ctx context.Context, sessionID string) error {

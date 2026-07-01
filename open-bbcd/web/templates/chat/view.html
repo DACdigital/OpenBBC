@@ -26,6 +26,31 @@
        hx-target="#modal-host"
        hx-swap="innerHTML"
        onclick="event.preventDefault()">Edit test headers</a>
+    {{if .Locked}}
+      <!-- locked: no assignment control -->
+    {{else if .Assignment}}
+      <span class="assignment-badge">
+        In dataset: <a href="/datasets/{{.Assignment.DatasetID}}" class="agent-link">{{.Assignment.DatasetName}}</a>
+        ({{if eq (print .Assignment.VersionStatus) "DRAFT"}}draft v{{.Assignment.VersionNum}}{{else}}v{{.Assignment.VersionNum}}{{end}})
+        {{if eq (print .Assignment.VersionStatus) "DRAFT"}}
+          <button type="button" class="btn-small btn-danger"
+                  hx-delete="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/assign-dataset"
+                  hx-confirm="Remove session from draft?"
+                  hx-swap="none"
+                  onclick="setTimeout(()=>location.reload(),200)">Unassign</button>
+        {{end}}
+      </span>
+    {{else if .HasFeedback}}
+      <button type="button" class="btn-secondary"
+              hx-get="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/assign-dataset"
+              hx-target="body" hx-swap="beforeend">
+        Assign to dataset…
+      </button>
+    {{else}}
+      <button type="button" class="btn-secondary" disabled title="Add feedback (👍 or 👎) on a message first">
+        Assign to dataset…
+      </button>
+    {{end}}
     <a href="/agent_versions/{{.VersionID}}/chat?from=chat:{{.SessionID}}" class="btn-secondary">Sessions</a>
     <form method="post" action="/agent_versions/{{.VersionID}}/chat/sessions" style="display:inline">
       <button type="submit" class="btn-primary">+ New Session</button>

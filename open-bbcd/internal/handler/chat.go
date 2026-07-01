@@ -247,6 +247,10 @@ type chatViewPageData struct {
 	Feedback map[string]*types.ChatMessageFeedback
 	// Locked is true when the session belongs to a closed dataset version.
 	Locked bool
+	// HasFeedback is true when at least one feedback row exists for the session.
+	HasFeedback bool
+	// Assignment is the session's current dataset membership, or nil if unassigned.
+	Assignment *repository.AssignmentView
 }
 
 // messageView is a UI-ready projection of a persisted ChatMessage. The raw
@@ -406,6 +410,17 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		// Best-effort: errors here don't block the chat page from rendering.
 	}
 
+	hasFeedback := len(feedback) > 0
+	var assignment *repository.AssignmentView
+	if h.datasetRepo != nil {
+		if a, err := h.datasetRepo.GetSessionAssignment(r.Context(), sessionID); err != nil {
+			Error(w, err)
+			return
+		} else {
+			assignment = a
+		}
+	}
+
 	data := chatViewPageData{
 		Active:       "agents",
 		VersionID:    versionID,
@@ -417,6 +432,8 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		HasBundle:    len(agent.Architecture) > 0 && len(version.Prompts) > 0,
 		Feedback:     feedback,
 		Locked:       locked,
+		HasFeedback:  hasFeedback,
+		Assignment:   assignment,
 	}
 	// Count unmapped endpoints so the view can show a warning banner.
 	// Best-effort: errors here don't block the chat page from rendering.
