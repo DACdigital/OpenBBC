@@ -426,6 +426,16 @@ func (h *ChatHandler) UpdateSessionTitle(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+	// Refuse writes on locked sessions before touching the DB.
+	if session, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
+		if session.LockedAt != nil {
+			Error(w, types.ErrSessionLocked)
+			return
+		}
+	} else if !errors.Is(err, types.ErrNotFound) {
+		Error(w, err)
+		return
+	}
 	title := strings.TrimSpace(body.Title)
 	const maxTitleLen = 200
 	if len(title) > maxTitleLen {
@@ -585,6 +595,17 @@ func (h *ChatHandler) ShowHeaderOverridesModal(w http.ResponseWriter, r *http.Re
 func (h *ChatHandler) UpdateHeaderOverrides(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
+
+	// Refuse writes on locked sessions before parsing the form.
+	if session, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
+		if session.LockedAt != nil {
+			Error(w, types.ErrSessionLocked)
+			return
+		}
+	} else if !errors.Is(err, types.ErrNotFound) {
+		Error(w, err)
+		return
+	}
 
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
