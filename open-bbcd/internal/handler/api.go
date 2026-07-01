@@ -152,7 +152,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("init datasets handler", err)
 	}
 
-	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, feedbackRepo, web.Assets, logger)
+	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, feedbackRepo, datasetRepo, web.Assets, logger)
 	if err != nil {
 		fatal("init chat handler", err)
 	}
@@ -248,6 +248,9 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.UpdateHeaderOverrides)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Upsert)
 	mux.HandleFunc("DELETE /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Delete)
+	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/assign-dataset", chatHandler.AssignDatasetModal)
+	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/assign-dataset", chatHandler.AssignDataset)
+	mux.HandleFunc("DELETE /agent_versions/{version_id}/chat/{session_id}/assign-dataset", chatHandler.UnassignDataset)
 
 	// Datasets — /datasets/new MUST precede /datasets/{dataset_id} so the
 	// literal path wins over the wildcard in Go's ServeMux.

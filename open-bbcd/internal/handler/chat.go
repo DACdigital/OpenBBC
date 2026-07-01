@@ -76,6 +76,7 @@ type ChatHandler struct {
 	orch         TurnRunner
 	transport    transport.Factory
 	feedbackRepo *repository.FeedbackRepository
+	datasetRepo  *repository.DatasetRepository
 	logger       *slog.Logger
 	sessionsTmpl *template.Template
 	viewTmpl     *template.Template
@@ -90,6 +91,7 @@ func NewChatHandler(
 	orch TurnRunner,
 	tf transport.Factory,
 	feedbackRepo *repository.FeedbackRepository,
+	datasetRepo *repository.DatasetRepository,
 	webFS fs.FS,
 	logger *slog.Logger,
 ) (*ChatHandler, error) {
@@ -117,6 +119,7 @@ func NewChatHandler(
 		"templates/layout.html",
 		"templates/chat/view.html",
 		"templates/chat/feedback_footer.html",
+		"templates/chat/assign_dataset_modal.html",
 	)
 	if err != nil {
 		return nil, err
@@ -129,8 +132,8 @@ func NewChatHandler(
 	}
 	return &ChatHandler{
 		agents: agents, chats: chats, headerOvr: headerOvr, backends: backends,
-		orch: orch, transport: tf, feedbackRepo: feedbackRepo, logger: logger,
-		sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl, headersTmpl: headersTmpl,
+		orch: orch, transport: tf, feedbackRepo: feedbackRepo, datasetRepo: datasetRepo,
+		logger: logger, sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl, headersTmpl: headersTmpl,
 	}, nil
 }
 
@@ -671,6 +674,53 @@ func (h *ChatHandler) UpdateHeaderOverrides(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	renderTemplate(w, h.headersTmpl, "headers_modal", data)
+}
+
+// AssignDatasetModal renders GET /agent_versions/{version_id}/chat/{session_id}/assign-dataset — modal.
+func (h *ChatHandler) AssignDatasetModal(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	versionID := r.PathValue("version_id")
+	datasets, err := h.datasetRepo.List(r.Context())
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, h.viewTmpl, "assign_dataset_modal", map[string]any{
+		"SessionID": sessionID,
+		"VersionID": versionID,
+		"Datasets":  datasets,
+	})
+}
+
+// AssignDataset handles POST /agent_versions/{version_id}/chat/{session_id}/assign-dataset
+func (h *ChatHandler) AssignDataset(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	versionID := r.PathValue("version_id")
+	if err := r.ParseForm(); err != nil {
+		Error(w, err)
+		return
+	}
+	datasetID := r.FormValue("dataset_id")
+	if datasetID == "" {
+		http.Error(w, "dataset_id required", http.StatusBadRequest)
+		return
+	}
+	if _, err := h.datasetRepo.AssignSessionToDraft(r.Context(), datasetID, sessionID); err != nil {
+		Error(w, err)
+		return
+	}
+	w.Header().Set("HX-Redirect", "/agent_versions/"+versionID+"/chat/"+sessionID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// UnassignDataset handles DELETE /agent_versions/{version_id}/chat/{session_id}/assign-dataset
+func (h *ChatHandler) UnassignDataset(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	if err := h.datasetRepo.UnassignSession(r.Context(), sessionID); err != nil {
+		Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *ChatHandler) buildHeadersModalData(ctx context.Context, versionID, sessionID string) (headersModalData, error) {
