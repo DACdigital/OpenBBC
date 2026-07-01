@@ -30,7 +30,7 @@
       <td>{{if .HasDraft}}<span class="badge badge-draft">DRAFT</span>{{end}}</td>
       <td>{{if .LatestNum}}v{{.LatestNum}} ({{.LatestStatus}}){{else}}—{{end}}</td>
       <td class="col-count">{{.SessionCount}}</td>
-      <td class="col-date">{{.Dataset.CreatedAt.Format "2006-01-02"}}</td>
+      <td class="col-date">{{.Dataset.CreatedAt.Format "2006-01-02 15:04"}}</td>
     </tr>
     {{end}}
   </tbody>

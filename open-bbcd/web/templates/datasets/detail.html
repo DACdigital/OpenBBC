@@ -23,7 +23,7 @@
       <a href="/datasets/{{$.Dataset.ID}}?version_id={{.ID}}"
          class="datasets-version-tab {{if and $.SelectedVersion (eq .ID $.SelectedVersion.ID)}}active{{end}}">
         <div>{{if eq .Status "DRAFT"}}DRAFT (v{{.VersionNum}}){{else}}v{{.VersionNum}}{{end}}</div>
-        <div style="color:#8b949e;font-size:12px">{{.CreatedAt.Format "2006-01-02"}}</div>
+        <div style="color:#8b949e;font-size:12px">{{.CreatedAt.Format "2006-01-02 15:04"}}</div>
       </a>
     {{end}}
   </div>
@@ -54,7 +54,7 @@
           <td><a class="agent-link" href="/agent_versions/{{.AgentVersionID}}/chat/{{.SessionID}}">{{if .SessionTitle}}{{.SessionTitle}}{{else}}Untitled{{end}}</a></td>
           <td class="col-count">{{.ThumbsUpCount}}</td>
           <td class="col-count">{{.ThumbsDownCount}}</td>
-          <td class="col-date">{{.AddedAt.Format "2006-01-02"}}</td>
+          <td class="col-date">{{.AddedAt.Format "2006-01-02 15:04"}}</td>
           {{if $.SelectedVersion}}{{if eq $.SelectedVersion.Status "DRAFT"}}
           <td class="col-actions">
             <button class="btn-small btn-danger"
