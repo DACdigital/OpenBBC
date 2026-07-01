@@ -16,7 +16,6 @@
     <tr>
       <th>Name</th>
       <th>Description</th>
-      <th>Draft?</th>
       <th>Latest version</th>
       <th class="col-count"># sessions</th>
       <th class="col-date">Created</th>
@@ -27,8 +26,12 @@
     <tr class="clickable" onclick="location.href='/datasets/{{.Dataset.ID}}'">
       <td><a class="agent-link" href="/datasets/{{.Dataset.ID}}">{{.Dataset.Name}}</a></td>
       <td>{{.Dataset.Description}}</td>
-      <td>{{if .HasDraft}}<span class="badge badge-draft">DRAFT</span>{{end}}</td>
-      <td>{{if .LatestNum}}v{{.LatestNum}} ({{.LatestStatus}}){{else}}—{{end}}</td>
+      <td>
+        {{if .LatestNum}}
+          v{{.LatestNum}}
+          {{if eq (print .LatestStatus) "DRAFT"}}<span class="badge badge-draft">DRAFT</span>{{else}}<span class="badge badge-ready">CLOSED</span>{{end}}
+        {{else}}—{{end}}
+      </td>
       <td class="col-count">{{.SessionCount}}</td>
       <td class="col-date">{{.Dataset.CreatedAt.Format "2006-01-02 15:04"}}</td>
     </tr>
