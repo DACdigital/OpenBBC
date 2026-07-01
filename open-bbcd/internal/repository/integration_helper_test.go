@@ -36,10 +36,12 @@ func withRepo(t *testing.T) (*AgentRepository, *AgentVersionRepository, *sql.DB)
 
 	// Truncate in dependency order. agents is parent for many other tables;
 	// CASCADE handles the rest. Tables created in migration 011 are included.
+	// Note: agent_version_endpoint_backend was renamed to agent_endpoint_backend
+	// in migration 017; use the current name here.
 	if _, err := db.Exec(`TRUNCATE
 		deployed_messages, deployed_sessions, chat_messages, chat_sessions,
 		resources, agent_versions, agents,
-		tool_backends, agent_version_endpoint_backend, agent_version_mcp_backend
+		tool_backends, agent_endpoint_backend, agent_version_mcp_backend
 		RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -65,10 +67,12 @@ func openTestDB(t *testing.T) *sql.DB {
 
 	// Truncate in dependency order. Add tool_backends so subsequent tests
 	// start from a clean slate.
+	// Note: agent_version_endpoint_backend was renamed to agent_endpoint_backend
+	// in migration 017; use the current name here.
 	if _, err := db.Exec(`TRUNCATE
 		deployed_messages, deployed_sessions, chat_messages, chat_sessions,
 		resources, agent_versions, agents,
-		tool_backends, agent_version_endpoint_backend, agent_version_mcp_backend
+		tool_backends, agent_endpoint_backend, agent_version_mcp_backend
 		RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
