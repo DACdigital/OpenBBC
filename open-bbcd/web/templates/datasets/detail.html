@@ -17,7 +17,10 @@
     </div>
   </div>
   {{if .Dataset.Description}}
-  <div class="dataset-description">{{.Dataset.Description}}</div>
+  <div class="dataset-description-block">
+    <div class="dataset-description-label">Description</div>
+    <div class="dataset-description">{{.Dataset.Description}}</div>
+  </div>
   {{end}}
 
   <div class="datasets-version-strip">
@@ -76,9 +79,19 @@
 </div>
 
 <style>
-.dataset-description {
+.dataset-description-block {
   max-width: 720px;
   margin: -4px 0 16px 0;
+}
+.dataset-description-label {
+  font-size: 11px;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.dataset-description {
   padding: 10px 14px;
   border: 1px solid #30363d;
   border-radius: 6px;
