@@ -29,6 +29,8 @@ func NewFeedbackHandler(repo *repository.FeedbackRepository, webFS fs.FS) (*Feed
 
 // Upsert handles POST /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback
 func (h *FeedbackHandler) Upsert(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	sessionID := r.PathValue("session_id")
 	messageID := r.PathValue("message_id")
 	if err := r.ParseForm(); err != nil {
 		Error(w, err)
@@ -50,11 +52,15 @@ func (h *FeedbackHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 		"MessageID": messageID,
 		"Feedback":  fb,
 		"Locked":    false,
+		"VersionID": versionID,
+		"SessionID": sessionID,
 	})
 }
 
 // Delete handles DELETE /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback
 func (h *FeedbackHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	sessionID := r.PathValue("session_id")
 	messageID := r.PathValue("message_id")
 	if err := h.repo.Delete(r.Context(), messageID); err != nil {
 		Error(w, err)
@@ -64,5 +70,7 @@ func (h *FeedbackHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		"MessageID": messageID,
 		"Feedback":  nil,
 		"Locked":    false,
+		"VersionID": versionID,
+		"SessionID": sessionID,
 	})
 }

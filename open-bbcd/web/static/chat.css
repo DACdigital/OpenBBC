@@ -376,6 +376,10 @@
   border-radius: 4px; padding: 6px; font-family: inherit; font-size: 13px;
 }
 .feedback-form-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.feedback-form-prompt { margin: 0; font-size: 13px; color: #c9d1d9; }
+/* Same [hidden] override rationale as .feedback-form above. */
+.feedback-actions { display: flex; gap: 6px; }
+.feedback-actions[hidden] { display: none; }
 .feedback-details { margin-top: 4px; font-size: 12px; color: #8b949e; width: 100%; }
 .feedback-details pre { white-space: pre-wrap; background: #0d1117; border: 1px solid #21262d; padding: 4px 6px; border-radius: 3px; }
 

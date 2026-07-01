@@ -1,4 +1,5 @@
 {{define "feedback_footer"}}
+{{$fbURL := printf "/agent_versions/%s/chat/%s/messages/%s/feedback" .VersionID .SessionID .MessageID}}
 <div class="feedback-footer" id="fb-{{.MessageID}}">
   {{if .Locked}}
     {{if .Feedback}}
@@ -13,19 +14,12 @@
     {{end}}
   {{else}}
     {{if .Feedback}}
-      <button type="button" class="thumb thumb-{{.Feedback.Rating}} filled"
-              {{if eq .Feedback.Rating "up"}}
-              hx-post="./messages/{{.MessageID}}/feedback"
-              hx-vals='{"rating":"up"}'
-              {{else}}
-              onclick="document.getElementById('fb-form-{{.MessageID}}').hidden=false"
-              {{end}}
-              hx-target="#fb-{{.MessageID}}"
-              hx-swap="outerHTML">{{if eq .Feedback.Rating "up"}}👍{{else}}👎{{end}}</button>
+      <span class="thumb thumb-{{.Feedback.Rating}} filled">{{if eq .Feedback.Rating "up"}}👍{{else}}👎{{end}}</span>
       <button type="button" class="thumb-remove"
-              hx-delete="./messages/{{.MessageID}}/feedback"
+              hx-delete="{{$fbURL}}"
               hx-target="#fb-{{.MessageID}}"
-              hx-swap="outerHTML">✕</button>
+              hx-swap="outerHTML"
+              title="Remove feedback">✕</button>
       {{if or .Feedback.Comment .Feedback.ExpectedOutput}}
         <details class="feedback-details">
           <summary>details</summary>
@@ -34,33 +28,46 @@
         </details>
       {{end}}
     {{else}}
-      <button type="button" class="thumb thumb-up"
-              hx-post="./messages/{{.MessageID}}/feedback"
-              hx-vals='{"rating":"up"}'
-              hx-target="#fb-{{.MessageID}}"
-              hx-swap="outerHTML">👍</button>
-      <button type="button" class="thumb thumb-down"
-              onclick="document.getElementById('fb-form-{{.MessageID}}').hidden=false">👎</button>
-    {{end}}
-
-    <form id="fb-form-{{.MessageID}}" class="feedback-form" hidden
-          hx-post="./messages/{{.MessageID}}/feedback"
-          hx-target="#fb-{{.MessageID}}"
-          hx-swap="outerHTML">
-      <input type="hidden" name="rating" value="down">
-      <label>
-        Comment (required)
-        <textarea name="comment" required rows="2">{{if .Feedback}}{{.Feedback.Comment}}{{end}}</textarea>
-      </label>
-      <label>
-        Expected output (optional)
-        <textarea name="expected_output" rows="3">{{if .Feedback}}{{.Feedback.ExpectedOutput}}{{end}}</textarea>
-      </label>
-      <div class="feedback-form-actions">
-        <button type="button" class="btn-secondary" onclick="document.getElementById('fb-form-{{.MessageID}}').hidden=true">Cancel</button>
-        <button type="submit" class="btn-primary">Save</button>
+      <div class="feedback-actions" id="fb-actions-{{.MessageID}}">
+        <button type="button" class="thumb thumb-up"
+                onclick="document.getElementById('fb-form-up-{{.MessageID}}').hidden=false; document.getElementById('fb-actions-{{.MessageID}}').hidden=true">👍</button>
+        <button type="button" class="thumb thumb-down"
+                onclick="document.getElementById('fb-form-down-{{.MessageID}}').hidden=false; document.getElementById('fb-actions-{{.MessageID}}').hidden=true">👎</button>
       </div>
-    </form>
+
+      <form id="fb-form-up-{{.MessageID}}" class="feedback-form" hidden
+            hx-post="{{$fbURL}}"
+            hx-target="#fb-{{.MessageID}}"
+            hx-swap="outerHTML">
+        <input type="hidden" name="rating" value="up">
+        <p class="feedback-form-prompt">Confirm positive feedback for this response?</p>
+        <div class="feedback-form-actions">
+          <button type="button" class="btn-secondary"
+                  onclick="document.getElementById('fb-form-up-{{.MessageID}}').hidden=true; document.getElementById('fb-actions-{{.MessageID}}').hidden=false">Cancel</button>
+          <button type="submit" class="btn-primary">Confirm</button>
+        </div>
+      </form>
+
+      <form id="fb-form-down-{{.MessageID}}" class="feedback-form" hidden
+            hx-post="{{$fbURL}}"
+            hx-target="#fb-{{.MessageID}}"
+            hx-swap="outerHTML">
+        <input type="hidden" name="rating" value="down">
+        <label>
+          Comment (required)
+          <textarea name="comment" required rows="2"></textarea>
+        </label>
+        <label>
+          Expected output (optional)
+          <textarea name="expected_output" rows="3"></textarea>
+        </label>
+        <div class="feedback-form-actions">
+          <button type="button" class="btn-secondary"
+                  onclick="document.getElementById('fb-form-down-{{.MessageID}}').hidden=true; document.getElementById('fb-actions-{{.MessageID}}').hidden=false">Cancel</button>
+          <button type="submit" class="btn-primary">Save</button>
+        </div>
+      </form>
+    {{end}}
   {{end}}
 </div>
 {{end}}

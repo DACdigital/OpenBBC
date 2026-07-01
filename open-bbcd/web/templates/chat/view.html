@@ -99,7 +99,7 @@
         {{end}}
       </div>
       {{if eq .Role "assistant"}}
-        {{template "feedback_footer" (dict "MessageID" .ID "Feedback" (index $.Feedback .ID) "Locked" $.Locked)}}
+        {{template "feedback_footer" (dict "MessageID" .ID "Feedback" (index $.Feedback .ID) "Locked" $.Locked "VersionID" $.VersionID "SessionID" $.SessionID)}}
       {{end}}
     </div>
   {{else}}
