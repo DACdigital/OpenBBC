@@ -468,6 +468,18 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refuse turns on locked sessions (session belongs to a closed dataset version).
+	// Check before writing SSE headers so we can return a clean JSON error.
+	if session, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
+		if session.LockedAt != nil {
+			Error(w, types.ErrSessionLocked)
+			return
+		}
+	} else if !errors.Is(err, types.ErrNotFound) && !errors.Is(err, types.ErrSessionAgentMismatch) {
+		Error(w, err)
+		return
+	}
+
 	// Build typed input blocks. v1 supports only text inputs; other
 	// block types are silently ignored (no error).
 	input := make([]llm.Block, 0, len(req.Input))
