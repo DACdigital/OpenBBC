@@ -15,6 +15,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/google/uuid"
@@ -74,6 +75,7 @@ type ChatHandler struct {
 	backends     VersionBackendLister
 	orch         TurnRunner
 	transport    transport.Factory
+	feedbackRepo *repository.FeedbackRepository
 	logger       *slog.Logger
 	sessionsTmpl *template.Template
 	viewTmpl     *template.Template
@@ -87,6 +89,7 @@ func NewChatHandler(
 	backends VersionBackendLister,
 	orch TurnRunner,
 	tf transport.Factory,
+	feedbackRepo *repository.FeedbackRepository,
 	webFS fs.FS,
 	logger *slog.Logger,
 ) (*ChatHandler, error) {
@@ -110,7 +113,11 @@ func NewChatHandler(
 	if err != nil {
 		return nil, err
 	}
-	viewTmpl, err := parse("view")
+	viewTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/layout.html",
+		"templates/chat/view.html",
+		"templates/chat/feedback_footer.html",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +129,7 @@ func NewChatHandler(
 	}
 	return &ChatHandler{
 		agents: agents, chats: chats, headerOvr: headerOvr, backends: backends,
-		orch: orch, transport: tf, logger: logger,
+		orch: orch, transport: tf, feedbackRepo: feedbackRepo, logger: logger,
 		sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl, headersTmpl: headersTmpl,
 	}, nil
 }
@@ -233,6 +240,10 @@ type chatViewPageData struct {
 	// tool_use block, which is highly confusing during testing.
 	TotalEndpoints    int
 	UnmappedEndpoints int
+	// Feedback maps message UUID → ChatMessageFeedback for rendering footers.
+	Feedback map[string]*types.ChatMessageFeedback
+	// Locked is true when the session belongs to a closed dataset version.
+	Locked bool
 }
 
 // messageView is a UI-ready projection of a persisted ChatMessage. The raw
@@ -240,6 +251,7 @@ type chatViewPageData struct {
 // blockView entries so the template can render text inline, tool calls and
 // tool results as collapsible <details>, matching the live-stream UI.
 type messageView struct {
+	ID     string // chat_messages.id (UUID) — used for feedback footer anchoring
 	Role   string
 	Blocks []blockView
 }
@@ -277,12 +289,14 @@ func buildMessageViews(msgs []*types.ChatMessage) []messageView {
 		blocks := decodeBlocks(raw)
 		if m.Role == types.ChatRoleUser {
 			flush()
-			out = append(out, messageView{Role: string(types.ChatRoleUser), Blocks: blocks})
+			out = append(out, messageView{ID: m.ID, Role: string(types.ChatRoleUser), Blocks: blocks})
 			continue
 		}
 		// Assistant or tool — both go into the current assistant bubble.
 		if pending == nil {
-			pending = &messageView{Role: string(types.ChatRoleAssistant)}
+			// Use the first assistant/tool message ID as the bubble's canonical ID
+			// so feedback rows keyed by this ID can be looked up in the view.
+			pending = &messageView{ID: m.ID, Role: string(types.ChatRoleAssistant)}
 		}
 		pending.Blocks = append(pending.Blocks, blocks...)
 	}
@@ -369,13 +383,24 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Session row may not exist yet (lazy-created on first turn). A missing
-	// row is fine — leave title empty. Other errors propagate.
+	// row is fine — leave title empty and locked=false. Other errors propagate.
 	var sessionTitle string
+	var locked bool
 	if sess, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
 		sessionTitle = sess.Title
+		locked = sess.LockedAt != nil
 	} else if !errors.Is(err, types.ErrNotFound) {
 		Error(w, err)
 		return
+	}
+
+	// Load per-message feedback for the session so the view can render footers.
+	var feedback map[string]*types.ChatMessageFeedback
+	if h.feedbackRepo != nil {
+		if fb, err := h.feedbackRepo.GetForSession(r.Context(), sessionID); err == nil {
+			feedback = fb
+		}
+		// Best-effort: errors here don't block the chat page from rendering.
 	}
 
 	data := chatViewPageData{
@@ -387,6 +412,8 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		SessionTitle: sessionTitle,
 		Messages:     buildMessageViews(msgs),
 		HasBundle:    len(agent.Architecture) > 0 && len(version.Prompts) > 0,
+		Feedback:     feedback,
+		Locked:       locked,
 	}
 	// Count unmapped endpoints so the view can show a warning banner.
 	// Best-effort: errors here don't block the chat page from rendering.
