@@ -1,4 +1,39 @@
-<!-- open-bbcd/web/templates/chat/assign_dataset_modal.html -->
 {{define "assign_dataset_modal"}}
-<!-- Filled in by Task 21 -->
+<div class="modal" id="assign-dataset-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content">
+    <h2>Assign session to a dataset</h2>
+    <p>Picks the dataset's current draft (creates one if none exists).</p>
+    {{if .Datasets}}
+      <form method="POST"
+            action="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/assign-dataset"
+            hx-post="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/assign-dataset"
+            style="margin:0;display:flex;flex-direction:column;gap:10px">
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#8b949e">
+          Dataset
+          <select name="dataset_id" required
+                  style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:8px 10px;font-size:14px">
+            <option value="">— pick a dataset —</option>
+            {{range .Datasets}}
+              <option value="{{.ID}}">{{.Name}}{{if .Description}} — {{.Description}}{{end}}</option>
+            {{end}}
+          </select>
+        </label>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <a href="/datasets" style="font-size:13px;color:#79c0ff">Manage datasets →</a>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="btn-secondary"
+                    onclick="document.getElementById('assign-dataset-modal').remove()">Cancel</button>
+            <button type="submit" class="btn-primary">Assign</button>
+          </div>
+        </div>
+      </form>
+    {{else}}
+      <p class="empty-state" style="padding:8px 0">No datasets yet — <a href="/datasets" style="color:#79c0ff">create one first</a>.</p>
+      <div style="display:flex;justify-content:flex-end">
+        <button type="button" class="btn-secondary"
+                onclick="document.getElementById('assign-dataset-modal').remove()">Close</button>
+      </div>
+    {{end}}
+  </div>
+</div>
 {{end}}
