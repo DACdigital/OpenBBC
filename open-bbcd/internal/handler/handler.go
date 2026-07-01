@@ -44,7 +44,12 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrUnmappedEndpoints),
 		errors.Is(err, types.ErrAgentInUse),
 		errors.Is(err, types.ErrVersionInUse),
-		errors.Is(err, types.ErrVersionHasChildren):
+		errors.Is(err, types.ErrVersionHasChildren),
+		errors.Is(err, types.ErrSessionNoFeedback),
+		errors.Is(err, types.ErrSessionAlreadyInDataset),
+		errors.Is(err, types.ErrSessionInDataset),
+		errors.Is(err, types.ErrSessionLocked),
+		errors.Is(err, types.ErrDatasetVersionClosed):
 		status = http.StatusConflict
 	case errors.Is(err, types.ErrSessionAgentMismatch):
 		status = http.StatusForbidden
@@ -62,7 +67,10 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrToolBackendNameRequired),
 		errors.Is(err, types.ErrToolBackendKindInvalid),
 		errors.Is(err, types.ErrToolBackendNameTaken),
-		errors.Is(err, types.ErrAgentNameMismatch):
+		errors.Is(err, types.ErrAgentNameMismatch),
+		errors.Is(err, types.ErrFeedbackNotAssistant),
+		errors.Is(err, types.ErrFeedbackCommentRequired),
+		errors.Is(err, types.ErrDatasetNameRequired):
 		status = http.StatusBadRequest
 	case errors.Is(err, types.ErrLLMUnavailable),
 		errors.Is(err, types.ErrToolHandlerFailed):

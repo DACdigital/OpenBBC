@@ -36,6 +36,9 @@
   let typingActive = false;
   let streamEnded = false;
   let onDrained = null;
+  // Persisted assistant message ID captured from the first TEXT_MESSAGE_START.
+  // Used post-finalize to fetch the feedback footer for the bubble.
+  let currentAssistantMessageID = null;
   const toolCallElements = new Map();
 
   sendBtn.addEventListener('click', send);
@@ -141,9 +144,18 @@
   function handleEvent(type, data) {
     switch (type) {
       case 'RUN_STARTED':
-      case 'TEXT_MESSAGE_START':
       case 'TEXT_MESSAGE_END':
       case 'RUN_FINISHED':
+        break;
+      case 'TEXT_MESSAGE_START':
+        // AG-UI carries the persisted assistant message id on start events.
+        // Capture the FIRST one only — a single turn can produce multiple
+        // assistant messages (text → tool_use → tool_result → text) but
+        // buildMessageViews merges them into one bubble anchored at the
+        // first id, so feedback attaches there too.
+        if (!currentAssistantMessageID && data.messageId) {
+          currentAssistantMessageID = data.messageId;
+        }
         break;
       case 'TEXT_MESSAGE_CONTENT':
         appendTextDelta(data.delta || '');
@@ -280,6 +292,28 @@
       seg.classList.remove('md-stream');
       seg.innerHTML = renderMarkdown(raw);
     });
+    // Fetch and inject the feedback footer for this bubble. Done async so
+    // it doesn't block scroll settling; failures are logged and skipped
+    // (page refresh will render it via the server template on next load).
+    const bubble = currentAssistantTurn.bubble;
+    const msgID = currentAssistantMessageID;
+    if (msgID) {
+      const url = `/agent_versions/${versionID}/chat/${sessionID}/messages/${msgID}/feedback`;
+      fetch(url, { headers: { 'Accept': 'text/html' } })
+        .then((r) => (r.ok ? r.text() : null))
+        .then((html) => {
+          if (!html) return;
+          const wrap = document.createElement('div');
+          wrap.innerHTML = html.trim();
+          const footer = wrap.firstElementChild;
+          if (footer) {
+            bubble.appendChild(footer);
+            if (window.htmx) window.htmx.process(footer);
+          }
+        })
+        .catch((err) => console.warn('[chat.js] feedback footer fetch failed', err));
+    }
+    currentAssistantMessageID = null;
     currentAssistantTurn = null;
     scheduleScroll();
   }

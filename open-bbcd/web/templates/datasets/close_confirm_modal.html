@@ -1,0 +1,24 @@
+{{define "dataset_close_confirm_modal"}}
+<div class="modal" id="dataset-close-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content">
+    <h2>Close draft v{{.Version.VersionNum}}?</h2>
+    <p>
+      This will publish v{{.Version.VersionNum}} as an immutable version.
+      The <strong>{{.SessionCount}}</strong> session{{if ne .SessionCount 1}}s{{end}}
+      inside will become read-only. Any future feedback will need a new session.
+    </p>
+    <form method="POST" action="/datasets/{{.Dataset.ID}}/close-draft" style="margin:0;display:flex;flex-direction:column;gap:10px">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:#8b949e">
+        Optional note for this version
+        <textarea name="close_note" rows="3"
+                  style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit"></textarea>
+      </label>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button type="button" class="btn-secondary"
+                onclick="document.getElementById('dataset-close-modal').remove()">Cancel</button>
+        <button type="submit" class="btn-danger-solid">Close draft</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

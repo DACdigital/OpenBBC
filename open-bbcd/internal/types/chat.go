@@ -6,11 +6,12 @@ import (
 )
 
 type ChatSession struct {
-	ID             string    `json:"id"`
-	AgentVersionID string    `json:"agent_version_id"`
-	Title          string    `json:"title,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             string     `json:"id"`
+	AgentVersionID string     `json:"agent_version_id"`
+	Title          string     `json:"title,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	LockedAt       *time.Time `json:"locked_at,omitempty"` // set when the session's dataset version closes
 }
 
 type ChatRole string

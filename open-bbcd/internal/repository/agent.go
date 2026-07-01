@@ -118,6 +118,20 @@ func (r *AgentRepository) Delete(ctx context.Context, agentID string) error {
 	if hasDeployed {
 		return types.ErrAgentInUse
 	}
+	var pinned bool
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+		    SELECT 1 FROM dataset_version_sessions dvs
+		    JOIN chat_sessions s      ON s.id = dvs.session_id
+		    JOIN agent_versions av    ON av.id = s.agent_version_id
+		    WHERE av.agent_id = $1::uuid
+		)
+	`, agentID).Scan(&pinned); err != nil {
+		return err
+	}
+	if pinned {
+		return types.ErrSessionInDataset
+	}
 	res, err := r.db.ExecContext(ctx, `DELETE FROM agents WHERE id = $1::uuid`, agentID)
 	if err != nil {
 		return err

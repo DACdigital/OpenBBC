@@ -140,7 +140,19 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 
-	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, web.Assets, logger)
+	feedbackRepo := repository.NewFeedbackRepository(db)
+	feedbackHandler, err := NewFeedbackHandler(feedbackRepo, web.Assets)
+	if err != nil {
+		fatal("init feedback handler", err)
+	}
+
+	datasetRepo := repository.NewDatasetRepository(db)
+	datasetsHandler, err := NewDatasetsHandler(datasetRepo, web.Assets)
+	if err != nil {
+		fatal("init datasets handler", err)
+	}
+
+	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, feedbackRepo, datasetRepo, web.Assets, logger)
 	if err != nil {
 		fatal("init chat handler", err)
 	}
@@ -234,6 +246,22 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/turn", chatHandler.Turn)
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.ShowHeaderOverridesModal)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.UpdateHeaderOverrides)
+	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Footer)
+	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Upsert)
+	mux.HandleFunc("DELETE /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Delete)
+	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/assign-dataset", chatHandler.AssignDatasetModal)
+	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/assign-dataset", chatHandler.AssignDataset)
+	mux.HandleFunc("DELETE /agent_versions/{version_id}/chat/{session_id}/assign-dataset", chatHandler.UnassignDataset)
+
+	// Datasets — /datasets/new MUST precede /datasets/{dataset_id} so the
+	// literal path wins over the wildcard in Go's ServeMux.
+	mux.HandleFunc("GET /datasets", datasetsHandler.List)
+	mux.HandleFunc("GET /datasets/new", datasetsHandler.New)
+	mux.HandleFunc("POST /datasets", datasetsHandler.Create)
+	mux.HandleFunc("GET /datasets/{dataset_id}", datasetsHandler.Detail)
+	mux.HandleFunc("GET /datasets/{dataset_id}/close-draft/confirm", datasetsHandler.CloseConfirm)
+	mux.HandleFunc("POST /datasets/{dataset_id}/close-draft", datasetsHandler.CloseDraft)
+	mux.HandleFunc("GET /datasets/{dataset_id}/sessions/{session_id}/remove-confirm", datasetsHandler.RemoveSessionConfirm)
 
 	// Per-agent deploy/undeploy + confirm modals
 	mux.HandleFunc("POST /agents/{agent_id}/deploy", deployHandler.Deploy)

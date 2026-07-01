@@ -26,6 +26,27 @@
        hx-target="#modal-host"
        hx-swap="innerHTML"
        onclick="event.preventDefault()">Edit test headers</a>
+    {{if .Locked}}
+      <!-- locked: no assignment control -->
+    {{else if .Assignment}}
+      <span class="assignment-badge">
+        In dataset: <a href="/datasets/{{.Assignment.DatasetID}}" class="agent-link">{{.Assignment.DatasetName}}</a>
+        ({{if eq (print .Assignment.VersionStatus) "DRAFT"}}draft v{{.Assignment.VersionNum}}{{else}}v{{.Assignment.VersionNum}}{{end}})
+        {{if eq (print .Assignment.VersionStatus) "DRAFT"}}
+          <button type="button" class="btn-small btn-danger"
+                  hx-delete="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/assign-dataset"
+                  hx-confirm="Remove session from draft?"
+                  hx-swap="none"
+                  onclick="setTimeout(()=>location.reload(),200)">Unassign</button>
+        {{end}}
+      </span>
+    {{else}}
+      <button type="button" class="btn-secondary"
+              hx-get="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}/assign-dataset"
+              hx-target="body" hx-swap="beforeend">
+        Assign to dataset…
+      </button>
+    {{end}}
     <a href="/agent_versions/{{.VersionID}}/chat?from=chat:{{.SessionID}}" class="btn-secondary">Sessions</a>
     <form method="post" action="/agent_versions/{{.VersionID}}/chat/sessions" style="display:inline">
       <button type="submit" class="btn-primary">+ New Session</button>
@@ -40,6 +61,12 @@
   <strong>{{.UnmappedEndpoints}} of {{.TotalEndpoints}} endpoints not wired to a backend.</strong>
   The agent will receive an explicit error result when it tries to call any of them.
   Configure mappings under <a href="/agent_versions/{{.VersionID}}/configure/architecture/endpoints">Endpoints</a>.
+</div>
+{{end}}
+
+{{if .Locked}}
+<div class="config-banner config-banner-warning">
+  🔒 Part of a closed dataset version. This session is read-only.
 </div>
 {{end}}
 
@@ -67,6 +94,9 @@
           {{end}}
         {{end}}
       </div>
+      {{if eq .Role "assistant"}}
+        {{template "feedback_footer" (dict "MessageID" .ID "Feedback" (index $.Feedback .ID) "Locked" $.Locked "VersionID" $.VersionID "SessionID" $.SessionID)}}
+      {{end}}
     </div>
   {{else}}
     <p class="empty-state">No messages yet — type below to start.</p>
@@ -74,8 +104,8 @@
 </div>
 
 <form id="chat-form" class="chat-input" onsubmit="return false;">
-  <textarea id="chat-input" placeholder="Type a message…  (Enter to send, Shift+Enter for newline)" rows="2"{{if not .HasBundle}} disabled{{end}}></textarea>
-  <button type="submit" id="chat-send" class="btn-primary"{{if not .HasBundle}} disabled title="Agent has no bundle"{{end}}>Send</button>
+  <textarea id="chat-input" rows="2"{{if or (not .HasBundle) .Locked}} disabled{{end}} placeholder="{{if .Locked}}Session is locked (part of a closed dataset version).{{else}}Type a message…  (Enter to send, Shift+Enter for newline){{end}}"></textarea>
+  <button type="submit" id="chat-send" class="btn-primary"{{if or (not .HasBundle) .Locked}} disabled{{if .Locked}} title="Session is locked"{{else}} title="Agent has no bundle"{{end}}{{end}}>Send</button>
 </form>
 
 <link rel="stylesheet" href="/static/chat.css">

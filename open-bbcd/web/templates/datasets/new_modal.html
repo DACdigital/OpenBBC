@@ -1,0 +1,24 @@
+{{define "dataset_new_modal"}}
+<div class="modal" id="dataset-new-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content">
+    <h2>New dataset</h2>
+    <form method="POST" action="/datasets" style="margin:0;display:flex;flex-direction:column;gap:10px">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:#8b949e">
+        Name
+        <input type="text" name="name" required autofocus
+               style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:8px 10px;font-size:14px">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:#8b949e">
+        Description (optional)
+        <textarea name="description" rows="3"
+                  style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit"></textarea>
+      </label>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button type="button" class="btn-secondary"
+                onclick="document.getElementById('dataset-new-modal').remove()">Cancel</button>
+        <button type="submit" class="btn-primary">Create</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

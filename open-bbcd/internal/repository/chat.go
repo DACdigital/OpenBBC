@@ -46,11 +46,12 @@ func (r *ChatRepository) EnsureSession(ctx context.Context, sessionID, versionID
 // if it exists but is owned by a different agent version.
 func (r *ChatRepository) GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error) {
 	s := &types.ChatSession{}
+	var lockedAt sql.NullTime
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at
+		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at, locked_at
 		FROM chat_sessions
 		WHERE id = $1::uuid
-	`, sessionID).Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt)
+	`, sessionID).Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt, &lockedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, types.ErrNotFound
@@ -59,6 +60,10 @@ func (r *ChatRepository) GetSession(ctx context.Context, sessionID, versionID st
 	}
 	if s.AgentVersionID != versionID {
 		return nil, types.ErrSessionAgentMismatch
+	}
+	if lockedAt.Valid {
+		t := lockedAt.Time
+		s.LockedAt = &t
 	}
 	return s, nil
 }
@@ -113,7 +118,7 @@ func (r *ChatRepository) ListSessions(ctx context.Context, versionID string, lim
 	}
 
 	q := `
-		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at
+		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at, locked_at
 		FROM chat_sessions
 		WHERE agent_version_id = $1::uuid
 		ORDER BY created_at DESC`
@@ -131,8 +136,13 @@ func (r *ChatRepository) ListSessions(ctx context.Context, versionID string, lim
 	var out []*types.ChatSession
 	for rows.Next() {
 		s := &types.ChatSession{}
-		if err := rows.Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		var lockedAt sql.NullTime
+		if err := rows.Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt, &lockedAt); err != nil {
 			return nil, 0, err
+		}
+		if lockedAt.Valid {
+			t := lockedAt.Time
+			s.LockedAt = &t
 		}
 		out = append(out, s)
 	}

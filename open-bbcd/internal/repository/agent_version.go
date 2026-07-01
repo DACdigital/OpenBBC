@@ -71,6 +71,21 @@ func (r *AgentVersionRepository) Delete(ctx context.Context, versionID string) e
 	if hasChild {
 		return types.ErrVersionHasChildren
 	}
+	// Sessions pinned inside any dataset (draft or closed) prevent
+	// cascading version delete from succeeding. Surface a clean error.
+	var pinned bool
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+		    SELECT 1 FROM dataset_version_sessions dvs
+		    JOIN chat_sessions s ON s.id = dvs.session_id
+		    WHERE s.agent_version_id = $1::uuid
+		)
+	`, versionID).Scan(&pinned); err != nil {
+		return err
+	}
+	if pinned {
+		return types.ErrSessionInDataset
+	}
 	_, err = r.db.ExecContext(ctx, `DELETE FROM agent_versions WHERE id = $1::uuid`, versionID)
 	return err
 }

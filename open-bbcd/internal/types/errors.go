@@ -67,4 +67,14 @@ var (
 	// ErrAgentNameMismatch is returned when the user-typed confirmation does
 	// not match the agent's name on the delete-agent endpoint.
 	ErrAgentNameMismatch = errors.New("agent: name confirmation did not match")
+
+	// Feedback / dataset domain (spec: docs/superpowers/specs/2026-07-01-feedback-datasets-design.md).
+	ErrFeedbackNotAssistant       = errors.New("feedback: can only attach to assistant messages")
+	ErrFeedbackCommentRequired    = errors.New("feedback: comment is required when rating is 'down'")
+	ErrDatasetNameRequired        = errors.New("dataset: name is required")
+	ErrSessionNoFeedback          = errors.New("dataset: session must have at least one feedback row to be assigned")
+	ErrSessionAlreadyInDataset    = errors.New("dataset: session already belongs to another dataset")
+	ErrSessionInDataset           = errors.New("dataset: session is pinned inside a closed dataset version and cannot be deleted")
+	ErrSessionLocked              = errors.New("session is locked (belongs to a closed dataset version)")
+	ErrDatasetVersionClosed       = errors.New("dataset: version is closed and cannot be modified")
 )

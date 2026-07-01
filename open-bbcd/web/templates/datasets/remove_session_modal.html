@@ -1,0 +1,22 @@
+{{define "dataset_remove_session_modal"}}
+<div class="modal" id="dataset-remove-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content">
+    <h2>Remove session from draft?</h2>
+    <p>
+      The session <strong>{{if .SessionTitle}}{{.SessionTitle}}{{else}}(untitled){{end}}</strong>
+      will be removed from this draft. Its feedback stays intact — you can
+      re-add it later.
+    </p>
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button type="button" class="btn-secondary"
+              onclick="document.getElementById('dataset-remove-modal').remove()">Cancel</button>
+      <button type="button" class="btn-danger-solid"
+              hx-delete="/agent_versions/{{.AgentVersionID}}/chat/{{.SessionID}}/assign-dataset"
+              hx-swap="none"
+              hx-on::after-request="if(event.detail.successful){window.location.reload()}else{const p=document.createElement('p');p.style.color='#f85149';p.textContent='Remove failed: '+(event.detail.xhr.responseText||'unknown error');this.parentElement.parentElement.insertBefore(p,this.parentElement);}">
+        Remove
+      </button>
+    </div>
+  </div>
+</div>
+{{end}}

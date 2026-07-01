@@ -15,6 +15,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/google/uuid"
@@ -74,6 +75,8 @@ type ChatHandler struct {
 	backends     VersionBackendLister
 	orch         TurnRunner
 	transport    transport.Factory
+	feedbackRepo *repository.FeedbackRepository
+	datasetRepo  *repository.DatasetRepository
 	logger       *slog.Logger
 	sessionsTmpl *template.Template
 	viewTmpl     *template.Template
@@ -87,6 +90,8 @@ func NewChatHandler(
 	backends VersionBackendLister,
 	orch TurnRunner,
 	tf transport.Factory,
+	feedbackRepo *repository.FeedbackRepository,
+	datasetRepo *repository.DatasetRepository,
 	webFS fs.FS,
 	logger *slog.Logger,
 ) (*ChatHandler, error) {
@@ -110,7 +115,12 @@ func NewChatHandler(
 	if err != nil {
 		return nil, err
 	}
-	viewTmpl, err := parse("view")
+	viewTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/layout.html",
+		"templates/chat/view.html",
+		"templates/chat/feedback_footer.html",
+		"templates/chat/assign_dataset_modal.html",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -122,8 +132,8 @@ func NewChatHandler(
 	}
 	return &ChatHandler{
 		agents: agents, chats: chats, headerOvr: headerOvr, backends: backends,
-		orch: orch, transport: tf, logger: logger,
-		sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl, headersTmpl: headersTmpl,
+		orch: orch, transport: tf, feedbackRepo: feedbackRepo, datasetRepo: datasetRepo,
+		logger: logger, sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl, headersTmpl: headersTmpl,
 	}, nil
 }
 
@@ -233,6 +243,14 @@ type chatViewPageData struct {
 	// tool_use block, which is highly confusing during testing.
 	TotalEndpoints    int
 	UnmappedEndpoints int
+	// Feedback maps message UUID → ChatMessageFeedback for rendering footers.
+	Feedback map[string]*types.ChatMessageFeedback
+	// Locked is true when the session belongs to a closed dataset version.
+	Locked bool
+	// HasFeedback is true when at least one feedback row exists for the session.
+	HasFeedback bool
+	// Assignment is the session's current dataset membership, or nil if unassigned.
+	Assignment *repository.AssignmentView
 }
 
 // messageView is a UI-ready projection of a persisted ChatMessage. The raw
@@ -240,6 +258,7 @@ type chatViewPageData struct {
 // blockView entries so the template can render text inline, tool calls and
 // tool results as collapsible <details>, matching the live-stream UI.
 type messageView struct {
+	ID     string // chat_messages.id (UUID) — used for feedback footer anchoring
 	Role   string
 	Blocks []blockView
 }
@@ -277,12 +296,14 @@ func buildMessageViews(msgs []*types.ChatMessage) []messageView {
 		blocks := decodeBlocks(raw)
 		if m.Role == types.ChatRoleUser {
 			flush()
-			out = append(out, messageView{Role: string(types.ChatRoleUser), Blocks: blocks})
+			out = append(out, messageView{ID: m.ID, Role: string(types.ChatRoleUser), Blocks: blocks})
 			continue
 		}
 		// Assistant or tool — both go into the current assistant bubble.
 		if pending == nil {
-			pending = &messageView{Role: string(types.ChatRoleAssistant)}
+			// Use the first assistant/tool message ID as the bubble's canonical ID
+			// so feedback rows keyed by this ID can be looked up in the view.
+			pending = &messageView{ID: m.ID, Role: string(types.ChatRoleAssistant)}
 		}
 		pending.Blocks = append(pending.Blocks, blocks...)
 	}
@@ -369,13 +390,35 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Session row may not exist yet (lazy-created on first turn). A missing
-	// row is fine — leave title empty. Other errors propagate.
+	// row is fine — leave title empty and locked=false. Other errors propagate.
 	var sessionTitle string
+	var locked bool
 	if sess, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
 		sessionTitle = sess.Title
+		locked = sess.LockedAt != nil
 	} else if !errors.Is(err, types.ErrNotFound) {
 		Error(w, err)
 		return
+	}
+
+	// Load per-message feedback for the session so the view can render footers.
+	var feedback map[string]*types.ChatMessageFeedback
+	if h.feedbackRepo != nil {
+		if fb, err := h.feedbackRepo.GetForSession(r.Context(), sessionID); err == nil {
+			feedback = fb
+		}
+		// Best-effort: errors here don't block the chat page from rendering.
+	}
+
+	hasFeedback := len(feedback) > 0
+	var assignment *repository.AssignmentView
+	if h.datasetRepo != nil {
+		if a, err := h.datasetRepo.GetSessionAssignment(r.Context(), sessionID); err != nil {
+			Error(w, err)
+			return
+		} else {
+			assignment = a
+		}
 	}
 
 	data := chatViewPageData{
@@ -387,6 +430,10 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		SessionTitle: sessionTitle,
 		Messages:     buildMessageViews(msgs),
 		HasBundle:    len(agent.Architecture) > 0 && len(version.Prompts) > 0,
+		Feedback:     feedback,
+		Locked:       locked,
+		HasFeedback:  hasFeedback,
+		Assignment:   assignment,
 	}
 	// Count unmapped endpoints so the view can show a warning banner.
 	// Best-effort: errors here don't block the chat page from rendering.
@@ -424,6 +471,16 @@ func (h *ChatHandler) UpdateSessionTitle(w http.ResponseWriter, r *http.Request)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	// Refuse writes on locked sessions before touching the DB.
+	if session, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
+		if session.LockedAt != nil {
+			Error(w, types.ErrSessionLocked)
+			return
+		}
+	} else if !errors.Is(err, types.ErrNotFound) {
+		Error(w, err)
 		return
 	}
 	title := strings.TrimSpace(body.Title)
@@ -464,6 +521,18 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 			slog.String("session_id", sessionID),
 			slog.Any("err", err),
 		)
+		Error(w, err)
+		return
+	}
+
+	// Refuse turns on locked sessions (session belongs to a closed dataset version).
+	// Check before writing SSE headers so we can return a clean JSON error.
+	if session, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
+		if session.LockedAt != nil {
+			Error(w, types.ErrSessionLocked)
+			return
+		}
+	} else if !errors.Is(err, types.ErrNotFound) && !errors.Is(err, types.ErrSessionAgentMismatch) {
 		Error(w, err)
 		return
 	}
@@ -574,6 +643,17 @@ func (h *ChatHandler) UpdateHeaderOverrides(w http.ResponseWriter, r *http.Reque
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
 
+	// Refuse writes on locked sessions before parsing the form.
+	if session, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
+		if session.LockedAt != nil {
+			Error(w, types.ErrSessionLocked)
+			return
+		}
+	} else if !errors.Is(err, types.ErrNotFound) {
+		Error(w, err)
+		return
+	}
+
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
@@ -611,6 +691,74 @@ func (h *ChatHandler) UpdateHeaderOverrides(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	renderTemplate(w, h.headersTmpl, "headers_modal", data)
+}
+
+// AssignDatasetModal renders GET /agent_versions/{version_id}/chat/{session_id}/assign-dataset — modal.
+// Renders one of three states:
+//   - session has no feedback yet → "add feedback first" explainer
+//   - datasets exist and session has feedback → dataset picker
+//   - session has feedback but no datasets exist → link to /datasets
+func (h *ChatHandler) AssignDatasetModal(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	versionID := r.PathValue("version_id")
+
+	hasFeedback := false
+	if h.feedbackRepo != nil {
+		fbMap, err := h.feedbackRepo.GetForSession(r.Context(), sessionID)
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		hasFeedback = len(fbMap) > 0
+	}
+
+	var datasets []*types.Dataset
+	if hasFeedback {
+		var err error
+		datasets, err = h.datasetRepo.List(r.Context())
+		if err != nil {
+			Error(w, err)
+			return
+		}
+	}
+
+	renderTemplate(w, h.viewTmpl, "assign_dataset_modal", map[string]any{
+		"SessionID":   sessionID,
+		"VersionID":   versionID,
+		"Datasets":    datasets,
+		"HasFeedback": hasFeedback,
+	})
+}
+
+// AssignDataset handles POST /agent_versions/{version_id}/chat/{session_id}/assign-dataset
+func (h *ChatHandler) AssignDataset(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	versionID := r.PathValue("version_id")
+	if err := r.ParseForm(); err != nil {
+		Error(w, err)
+		return
+	}
+	datasetID := r.FormValue("dataset_id")
+	if datasetID == "" {
+		http.Error(w, "dataset_id required", http.StatusBadRequest)
+		return
+	}
+	if _, err := h.datasetRepo.AssignSessionToDraft(r.Context(), datasetID, sessionID); err != nil {
+		Error(w, err)
+		return
+	}
+	w.Header().Set("HX-Redirect", "/agent_versions/"+versionID+"/chat/"+sessionID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// UnassignDataset handles DELETE /agent_versions/{version_id}/chat/{session_id}/assign-dataset
+func (h *ChatHandler) UnassignDataset(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	if err := h.datasetRepo.UnassignSession(r.Context(), sessionID); err != nil {
+		Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *ChatHandler) buildHeadersModalData(ctx context.Context, versionID, sessionID string) (headersModalData, error) {
