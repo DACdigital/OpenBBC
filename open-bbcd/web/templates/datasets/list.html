@@ -1,0 +1,41 @@
+{{define "content"}}
+<div class="page-header">
+  <h1>Datasets</h1>
+  <button type="button"
+          class="btn-primary"
+          hx-get="/datasets/new"
+          hx-target="body"
+          hx-swap="beforeend">
+    + New dataset
+  </button>
+</div>
+
+{{if .Rows}}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Description</th>
+      <th>Draft?</th>
+      <th>Latest version</th>
+      <th class="col-count"># sessions</th>
+      <th class="col-date">Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rows}}
+    <tr class="clickable" onclick="location.href='/datasets/{{.Dataset.ID}}'">
+      <td><a class="agent-link" href="/datasets/{{.Dataset.ID}}">{{.Dataset.Name}}</a></td>
+      <td>{{.Dataset.Description}}</td>
+      <td>{{if .HasDraft}}<span class="badge badge-draft">DRAFT</span>{{end}}</td>
+      <td>{{if .LatestNum}}v{{.LatestNum}} ({{.LatestStatus}}){{else}}—{{end}}</td>
+      <td class="col-count">{{.SessionCount}}</td>
+      <td class="col-date">{{.Dataset.CreatedAt.Format "2006-01-02"}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty-state">No datasets yet. Create one, then save chat sessions to it from the Run window.</p>
+{{end}}
+{{end}}

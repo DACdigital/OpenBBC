@@ -1,0 +1,83 @@
+{{define "content"}}
+<link rel="stylesheet" href="/static/configurator.css">
+<div class="config-page">
+  <div class="config-header">
+    <a href="/datasets" class="config-back">← Back to Datasets</a>
+    <h1>{{.Dataset.Name}}</h1>
+    {{if .SelectedVersion}}{{if eq .SelectedVersion.Status "DRAFT"}}<span class="badge badge-draft">DRAFT v{{.SelectedVersion.VersionNum}}</span>{{else}}<span class="badge badge-ready">v{{.SelectedVersion.VersionNum}}</span>{{end}}{{end}}
+    <span class="config-spacer"></span>
+    <div class="config-actions">
+      {{if .DraftVersion}}
+        <button type="button" class="btn-primary"
+                hx-get="/datasets/{{.Dataset.ID}}/close-draft/confirm"
+                hx-target="body" hx-swap="beforeend">
+          Close draft…
+        </button>
+      {{end}}
+    </div>
+  </div>
+  {{if .Dataset.Description}}<p style="color:#8b949e;font-size:14px;margin-top:-8px;margin-bottom:16px">{{.Dataset.Description}}</p>{{end}}
+
+  <div class="datasets-version-strip">
+    {{range .Versions}}
+      <a href="/datasets/{{$.Dataset.ID}}?version_id={{.ID}}"
+         class="datasets-version-tab {{if and $.SelectedVersion (eq .ID $.SelectedVersion.ID)}}active{{end}}">
+        <div>{{if eq .Status "DRAFT"}}DRAFT (v{{.VersionNum}}){{else}}v{{.VersionNum}}{{end}}</div>
+        <div style="color:#8b949e;font-size:12px">{{.CreatedAt.Format "2006-01-02"}}</div>
+      </a>
+    {{end}}
+  </div>
+
+  {{if and .SelectedVersion .SelectedVersion.CloseNote}}
+    <p style="color:#8b949e;font-size:13px;font-style:italic;margin:6px 0 12px">Note: {{.SelectedVersion.CloseNote}}</p>
+  {{end}}
+
+  <div class="config-body">
+    {{if .Sessions}}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Source agent</th>
+          <th>Source version</th>
+          <th>Session title</th>
+          <th class="col-count"># 👍</th>
+          <th class="col-count"># 👎</th>
+          <th class="col-date">Added</th>
+          {{if .SelectedVersion}}{{if eq .SelectedVersion.Status "DRAFT"}}<th class="col-actions"></th>{{end}}{{end}}
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Sessions}}
+        <tr>
+          <td>{{.AgentName}}</td>
+          <td>v{{.AgentVersionNum}}</td>
+          <td><a class="agent-link" href="/agent_versions/{{.AgentVersionID}}/chat/{{.SessionID}}">{{if .SessionTitle}}{{.SessionTitle}}{{else}}Untitled{{end}}</a></td>
+          <td class="col-count">{{.ThumbsUpCount}}</td>
+          <td class="col-count">{{.ThumbsDownCount}}</td>
+          <td class="col-date">{{.AddedAt.Format "2006-01-02"}}</td>
+          {{if $.SelectedVersion}}{{if eq $.SelectedVersion.Status "DRAFT"}}
+          <td class="col-actions">
+            <button class="btn-small btn-danger"
+                    hx-delete="/agent_versions/{{.AgentVersionID}}/chat/{{.SessionID}}/assign-dataset"
+                    hx-confirm="Remove session from draft?"
+                    hx-swap="none"
+                    onclick="setTimeout(()=>location.reload(),200)">Remove</button>
+          </td>
+          {{end}}{{end}}
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <p class="empty-state">No sessions yet in this version.</p>
+    {{end}}
+  </div>
+</div>
+
+<style>
+.datasets-version-strip { display:flex; gap:8px; overflow-x:auto; padding:8px 0 12px; border-bottom:1px solid #30363d; margin-bottom:16px; }
+.datasets-version-tab { border:1px solid #30363d; border-radius:6px; padding:8px 12px; color:#e6edf3; text-decoration:none; min-width:120px; font-size:13px; background:#161b22; }
+.datasets-version-tab.active { border-color:#58a6ff; background:#1c2230; }
+.datasets-version-tab:hover { background:#1c2230; }
+</style>
+{{end}}

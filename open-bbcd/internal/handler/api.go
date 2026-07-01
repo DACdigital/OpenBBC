@@ -146,6 +146,12 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("init feedback handler", err)
 	}
 
+	datasetRepo := repository.NewDatasetRepository(db)
+	datasetsHandler, err := NewDatasetsHandler(datasetRepo, web.Assets)
+	if err != nil {
+		fatal("init datasets handler", err)
+	}
+
 	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, feedbackRepo, web.Assets, logger)
 	if err != nil {
 		fatal("init chat handler", err)
@@ -242,6 +248,15 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.UpdateHeaderOverrides)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Upsert)
 	mux.HandleFunc("DELETE /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback", feedbackHandler.Delete)
+
+	// Datasets — /datasets/new MUST precede /datasets/{dataset_id} so the
+	// literal path wins over the wildcard in Go's ServeMux.
+	mux.HandleFunc("GET /datasets", datasetsHandler.List)
+	mux.HandleFunc("GET /datasets/new", datasetsHandler.New)
+	mux.HandleFunc("POST /datasets", datasetsHandler.Create)
+	mux.HandleFunc("GET /datasets/{dataset_id}", datasetsHandler.Detail)
+	mux.HandleFunc("GET /datasets/{dataset_id}/close-draft/confirm", datasetsHandler.CloseConfirm)
+	mux.HandleFunc("POST /datasets/{dataset_id}/close-draft", datasetsHandler.CloseDraft)
 
 	// Per-agent deploy/undeploy + confirm modals
 	mux.HandleFunc("POST /agents/{agent_id}/deploy", deployHandler.Deploy)
