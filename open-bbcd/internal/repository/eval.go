@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/lib/pq"
 )
 
 // EvalRepository owns evals + eval_sessions.
@@ -269,4 +270,68 @@ func marshalOrEmpty(raw json.RawMessage) []byte {
 		return []byte("{}")
 	}
 	return []byte(raw)
+}
+
+// EvalRowView pairs an eval with human-readable labels (agent name, dataset name,
+// version numbers). Kept here to avoid a hot join loop in the handler.
+type EvalRowView struct {
+	Eval              *types.Eval
+	AgentName         string
+	AgentVersionNum   int
+	DatasetName       string
+	DatasetVersionNum int
+}
+
+// EnrichRows returns one EvalRowView per eval, resolving agent/dataset labels
+// in a single query. Preserves input order via the passed slice of ids.
+func (r *EvalRepository) EnrichRows(ctx context.Context, evals []*types.Eval) ([]EvalRowView, error) {
+	if len(evals) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(evals))
+	for _, e := range evals {
+		ids = append(ids, e.ID)
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		WITH RECURSIVE chain AS (
+		    SELECT id, parent_version_id, 1 AS num
+		    FROM agent_versions WHERE parent_version_id IS NULL
+		    UNION ALL
+		    SELECT av.id, av.parent_version_id, c.num + 1
+		    FROM agent_versions av JOIN chain c ON av.parent_version_id = c.id
+		)
+		SELECT
+		    e.id::text,
+		    a.name,
+		    COALESCE(c.num, 1),
+		    d.name,
+		    dv.version_num
+		FROM evals e
+		JOIN agent_versions av ON av.id = e.agent_version_id
+		JOIN agents a ON a.id = av.agent_id
+		LEFT JOIN chain c ON c.id = av.id
+		JOIN dataset_versions dv ON dv.id = e.dataset_version_id
+		JOIN datasets d ON d.id = dv.dataset_id
+		WHERE e.id::text = ANY($1)
+	`, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	labels := map[string]EvalRowView{}
+	for rows.Next() {
+		var evalID string
+		var v EvalRowView
+		if err := rows.Scan(&evalID, &v.AgentName, &v.AgentVersionNum, &v.DatasetName, &v.DatasetVersionNum); err != nil {
+			return nil, err
+		}
+		labels[evalID] = v
+	}
+	out := make([]EvalRowView, 0, len(evals))
+	for _, e := range evals {
+		lbl := labels[e.ID]
+		lbl.Eval = e
+		out = append(out, lbl)
+	}
+	return out, rows.Err()
 }

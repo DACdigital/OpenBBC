@@ -1,9 +1,7 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -327,6 +325,3 @@ func formatPercent(f float64) string {
 	}
 	return s + "%"
 }
-
-// silence unused-import if the tree ever compiles too lean:
-var _ = errors.Is
