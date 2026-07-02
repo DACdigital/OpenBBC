@@ -1,6 +1,10 @@
 """Top-level eval orchestrator. Reads eval-input.yaml, runs each session
 concurrently under settings.parallelism, aggregates a global weighted
-pass-rate score, and returns an EvalResult."""
+pass-rate score, and returns an EvalResult.
+
+Note: the spec calls out a separate `assemble.py` module; that job is small
+enough (one loop over SessionOutcomes to sum criteria and build the result)
+that we fold it inline here rather than adding a two-function module."""
 
 from __future__ import annotations
 

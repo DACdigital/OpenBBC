@@ -242,8 +242,9 @@ func (r *EvalRepository) ListSessions(ctx context.Context, evalID string) ([]*ty
 }
 
 // AverageScoreByAgentVersion returns the plain mean of DONE eval scores
-// for the given agent version. Returns 0.0 and hasEvals=false when none
-// exist — templates render "—" in that case.
+// for the given agent version. When no DONE evals exist, avg=0.0 and
+// count=0 — templates should check count > 0 before rendering avg
+// (otherwise render "—").
 func (r *EvalRepository) AverageScoreByAgentVersion(ctx context.Context, agentVersionID string) (avg float64, count int, err error) {
 	err = r.db.QueryRowContext(ctx, `
 		SELECT COALESCE(AVG(score), 0), COUNT(*)
