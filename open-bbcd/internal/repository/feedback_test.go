@@ -39,7 +39,7 @@ func TestFeedbackUpsert_Up(t *testing.T) {
 	}
 
 	repo := NewFeedbackRepository(db)
-	if err := repo.Upsert(context.Background(), messageID, types.FeedbackRatingUp, "", ""); err != nil {
+	if err := repo.Upsert(context.Background(), messageID, types.FeedbackRatingUp, "", "", nil); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 	fb, err := repo.Get(context.Background(), messageID)
@@ -58,7 +58,7 @@ func TestFeedbackUpsert_DownRequiresComment(t *testing.T) {
 	_, _, db := withRepo(t)
 	repo := NewFeedbackRepository(db)
 	err := repo.Upsert(context.Background(), "00000000-0000-0000-0000-000000000000",
-		types.FeedbackRatingDown, "", "")
+		types.FeedbackRatingDown, "", "", nil)
 	if !errors.Is(err, types.ErrFeedbackCommentRequired) {
 		t.Fatalf("err = %v, want ErrFeedbackCommentRequired", err)
 	}
@@ -74,7 +74,7 @@ func TestFeedbackUpsert_RefusesUserMessage(t *testing.T) {
 		VALUES ($1::uuid, 'user', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&messageID)
 
 	repo := NewFeedbackRepository(db)
-	err := repo.Upsert(context.Background(), messageID, types.FeedbackRatingUp, "", "")
+	err := repo.Upsert(context.Background(), messageID, types.FeedbackRatingUp, "", "", nil)
 	if !errors.Is(err, types.ErrFeedbackNotAssistant) {
 		t.Fatalf("err = %v, want ErrFeedbackNotAssistant", err)
 	}
@@ -90,7 +90,7 @@ func TestFeedback_DeleteAndGetForSession(t *testing.T) {
 		VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&messageID)
 
 	repo := NewFeedbackRepository(db)
-	if err := repo.Upsert(context.Background(), messageID, types.FeedbackRatingDown, "bad", "the answer"); err != nil {
+	if err := repo.Upsert(context.Background(), messageID, types.FeedbackRatingDown, "bad", "the answer", nil); err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
 	m, err := repo.GetForSession(context.Background(), sessionID)
@@ -109,5 +109,39 @@ func TestFeedback_DeleteAndGetForSession(t *testing.T) {
 	m2, _ := repo.GetForSession(context.Background(), sessionID)
 	if len(m2) != 0 {
 		t.Errorf("expected 0 rows after Delete, got %d", len(m2))
+	}
+}
+
+func TestFeedback_JudgeCriteriaRoundTrip(t *testing.T) {
+	_, _, db := withRepo(t)
+	var agentID, versionID, sessionID, messageID string
+	_ = db.QueryRow(`INSERT INTO agents (name) VALUES ('fb-crit') RETURNING id::text`).Scan(&agentID)
+	_ = db.QueryRow(`INSERT INTO agent_versions (agent_id, status) VALUES ($1::uuid, 'READY') RETURNING id::text`, agentID).Scan(&versionID)
+	_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&sessionID)
+	_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq)
+		VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&messageID)
+
+	repo := NewFeedbackRepository(db)
+	crit := []string{"Must greet the user", "Must not disclose PII"}
+	if err := repo.Upsert(context.Background(), messageID, types.FeedbackRatingUp, "", "", crit); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	fb, err := repo.Get(context.Background(), messageID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(fb.JudgeCriteria) != 2 || fb.JudgeCriteria[0] != "Must greet the user" {
+		t.Errorf("JudgeCriteria = %v, want the seeded list", fb.JudgeCriteria)
+	}
+	// Empty list default (no criteria supplied).
+	var msg2ID string
+	_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq)
+		VALUES ($1::uuid, 'assistant', '[]'::jsonb, 2) RETURNING id::text`, sessionID).Scan(&msg2ID)
+	if err := repo.Upsert(context.Background(), msg2ID, types.FeedbackRatingUp, "", "", nil); err != nil {
+		t.Fatalf("Upsert nil: %v", err)
+	}
+	fb2, _ := repo.Get(context.Background(), msg2ID)
+	if fb2.JudgeCriteria == nil || len(fb2.JudgeCriteria) != 0 {
+		t.Errorf("JudgeCriteria = %v, want []string{}", fb2.JudgeCriteria)
 	}
 }

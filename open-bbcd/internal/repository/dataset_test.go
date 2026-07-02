@@ -152,7 +152,7 @@ func TestDataset_AssignAndUnassign(t *testing.T) {
 	_ = db.QueryRow(`INSERT INTO agent_versions (agent_id, status) VALUES ($1::uuid, 'READY') RETURNING id::text`, agentID).Scan(&versionID)
 	_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&sessionID)
 	_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq) VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&messageID)
-	if err := fb.Upsert(context.Background(), messageID, types.FeedbackRatingUp, "", ""); err != nil {
+	if err := fb.Upsert(context.Background(), messageID, types.FeedbackRatingUp, "", "", nil); err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
 
@@ -203,10 +203,10 @@ func TestDataset_CloseDraft_PurgesSessionsWithoutFeedback(t *testing.T) {
 	}
 	keepSess, keepMsg := seedSess()
 	dropSess, dropMsg := seedSess()
-	if err := fb.Upsert(context.Background(), keepMsg, types.FeedbackRatingUp, "", ""); err != nil {
+	if err := fb.Upsert(context.Background(), keepMsg, types.FeedbackRatingUp, "", "", nil); err != nil {
 		t.Fatalf("seed keep feedback: %v", err)
 	}
-	if err := fb.Upsert(context.Background(), dropMsg, types.FeedbackRatingUp, "", ""); err != nil {
+	if err := fb.Upsert(context.Background(), dropMsg, types.FeedbackRatingUp, "", "", nil); err != nil {
 		t.Fatalf("seed drop feedback: %v", err)
 	}
 
@@ -263,7 +263,7 @@ func TestDataset_NextDraftInheritsFromPreviousClosed(t *testing.T) {
 		var msgID string
 		_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&sessionID)
 		_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq) VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&msgID)
-		_ = fb.Upsert(context.Background(), msgID, types.FeedbackRatingUp, "", "")
+		_ = fb.Upsert(context.Background(), msgID, types.FeedbackRatingUp, "", "", nil)
 		return
 	}
 	sessA := mkSess()
