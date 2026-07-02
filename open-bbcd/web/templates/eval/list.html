@@ -1,1 +1,33 @@
-{{define "content"}}<p>eval list — placeholder</p>{{end}}
+{{define "content"}}
+<section>
+  <div class="page-header">
+    <h1>Evals</h1>
+  </div>
+  {{if .Rows}}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Created</th>
+          <th>Agent</th>
+          <th>Dataset</th>
+          <th class="col-status">Status</th>
+          <th class="col-count">Score</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range .Rows}}
+        <tr class="clickable" onclick="window.location='/evals/{{.Eval.ID}}'">
+          <td class="col-date">{{.Eval.CreatedAt.Format "2006-01-02 15:04"}}</td>
+          <td><a class="agent-link" href="/agent_versions/{{.Eval.AgentVersionID}}/configure">{{.AgentName}} v{{.AgentVersionNum}}</a></td>
+          <td>{{.DatasetName}} v{{.DatasetVersionNum}}</td>
+          <td><span class="badge badge-{{statusClass (printf "%s" .Eval.Status)}}">{{.Eval.Status}}</span></td>
+          <td class="col-count">{{with .Eval.Score}}{{pct .}}{{else}}—{{end}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{else}}
+    <p class="empty-state">No evals yet — head to an agent version's Versions tab and click "Evaluate".</p>
+  {{end}}
+</section>
+{{end}}
