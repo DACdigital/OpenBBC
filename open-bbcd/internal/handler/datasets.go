@@ -227,10 +227,12 @@ func (h *DatasetsHandler) CloseConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessions, _ := h.repo.GetVersionSessions(r.Context(), draft.ID)
+	missing, _ := h.repo.CountMissingCriteria(r.Context(), draft.ID)
 	renderTemplate(w, h.closeConfirmTmpl, "dataset_close_confirm_modal", map[string]any{
-		"Dataset":      dataset,
-		"Version":      draft,
-		"SessionCount": len(sessions),
+		"Dataset":         dataset,
+		"Version":         draft,
+		"SessionCount":    len(sessions),
+		"MissingCriteria": missing,
 	})
 }
 

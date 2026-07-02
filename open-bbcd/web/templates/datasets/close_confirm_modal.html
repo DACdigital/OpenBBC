@@ -13,10 +13,13 @@
         <textarea name="close_note" rows="3"
                   style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit"></textarea>
       </label>
+      {{if gt .MissingCriteria 0}}
+        <p class="warn-text">⚠️ {{.MissingCriteria}} feedback row(s) still have no acceptance criteria — fill them before publishing.</p>
+      {{end}}
       <div style="display:flex;justify-content:flex-end;gap:8px">
         <button type="button" class="btn-secondary"
                 onclick="document.getElementById('dataset-close-modal').remove()">Cancel</button>
-        <button type="submit" class="btn-danger-solid">Close draft</button>
+        <button type="submit" class="btn-danger-solid" {{if gt .MissingCriteria 0}}disabled{{end}}>Close draft</button>
       </div>
     </form>
   </div>
