@@ -41,6 +41,13 @@ type InputMessage struct {
 	MessageID string          `yaml:"message_id"`
 	Role      string          `yaml:"role"`
 	Content   json.RawMessage `yaml:"content"`
+	ToolCalls []InputToolCall `yaml:"tool_calls,omitempty"`
+}
+
+type InputToolCall struct {
+	Name   string          `yaml:"name"`
+	Args   json.RawMessage `yaml:"args"`
+	Result json.RawMessage `yaml:"result"`
 }
 
 type InputCriterion struct {
@@ -98,6 +105,66 @@ func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
 				Role:      string(m.Role),
 				Content:   m.Content,
 			})
+		}
+		// First pass: index tool_use_id → tool_result content from tool-role messages.
+		toolResults := map[string]json.RawMessage{}
+		for _, m := range transcript {
+			if m.Role != string(types.ChatRoleTool) {
+				continue
+			}
+			var blocks []map[string]json.RawMessage
+			if err := json.Unmarshal(m.Content, &blocks); err != nil {
+				continue
+			}
+			for _, blk := range blocks {
+				var t string
+				_ = json.Unmarshal(blk["type"], &t)
+				if t != "tool_result" {
+					continue
+				}
+				var id string
+				_ = json.Unmarshal(blk["tool_use_id"], &id)
+				if id == "" {
+					continue
+				}
+				// The tool_result's "content" field is the actual result payload.
+				if raw, ok := blk["content"]; ok {
+					toolResults[id] = raw
+				}
+			}
+		}
+		// Second pass: for each assistant turn, hoist tool_use blocks into ToolCalls.
+		for i := range transcript {
+			if transcript[i].Role != string(types.ChatRoleAssistant) {
+				continue
+			}
+			var blocks []map[string]json.RawMessage
+			if err := json.Unmarshal(transcript[i].Content, &blocks); err != nil {
+				continue
+			}
+			for _, blk := range blocks {
+				var t string
+				_ = json.Unmarshal(blk["type"], &t)
+				if t != "tool_use" {
+					continue
+				}
+				var name, id string
+				_ = json.Unmarshal(blk["name"], &name)
+				_ = json.Unmarshal(blk["id"], &id)
+				args := blk["input"]
+				result := toolResults[id]
+				if len(args) == 0 {
+					args = json.RawMessage("{}")
+				}
+				if len(result) == 0 {
+					result = json.RawMessage("null")
+				}
+				transcript[i].ToolCalls = append(transcript[i].ToolCalls, InputToolCall{
+					Name:   name,
+					Args:   args,
+					Result: result,
+				})
+			}
 		}
 		criteria := make([]InputCriterion, 0, len(fbMap))
 		for msgID, fb := range fbMap {

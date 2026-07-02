@@ -27,3 +27,17 @@ def test_unknown_tool_returns_error():
     out = m.call("nope", {})
     assert out["source"] == "error"
     assert "unknown" in out["result"]["error"].lower()
+
+
+def test_replays_from_pydantic_model_dump():
+    from aikdm.eval.schemas import InputMessage, InputToolCall
+    msg = InputMessage(
+        message_id="m-a-1",
+        role="assistant",
+        content=[{"type": "text", "text": "let me look"}],
+        tool_calls=[InputToolCall(name="search", args={"q": "cats"}, result={"hits": 42})],
+    )
+    m = ToolMock([msg.model_dump()], {"search": {"body_shape": {"type": "object"}}})
+    out = m.call("search", {"q": "cats"})
+    assert out["source"] == "replayed"
+    assert out["result"] == {"hits": 42}

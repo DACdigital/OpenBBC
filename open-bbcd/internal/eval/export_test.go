@@ -68,3 +68,54 @@ func TestExportBuild_ShapesPayload(t *testing.T) {
 		t.Errorf("yaml.Marshal: %v", err)
 	}
 }
+
+func TestExportBuild_HoistsToolCallsFromContentBlocks(t *testing.T) {
+	assistantContent := `[{"type":"text","text":"let me look"},{"type":"tool_use","id":"tu-1","name":"search","input":{"q":"cats"}}]`
+	toolContent := `[{"type":"tool_result","tool_use_id":"tu-1","content":{"hits":42}}]`
+
+	fs := &fakeStore{
+		eval:   &types.Eval{ID: "e-2", AgentVersionID: "av-1", DatasetVersionID: "dv-1"},
+		bundle: []byte(`{"main_prompt":"hi","tools":[]}`),
+		refs:   []*types.DatasetSessionRef{{SessionID: "s-1", SessionTitle: "search flow"}},
+		msgs: map[string][]*types.ChatMessage{
+			"s-1": {
+				{ID: "m-u-1", Role: types.ChatRoleUser, Content: json.RawMessage(`[{"type":"text","text":"find cats"}]`)},
+				{ID: "m-a-1", Role: types.ChatRoleAssistant, Content: json.RawMessage(assistantContent)},
+				{ID: "m-t-1", Role: types.ChatRoleTool, Content: json.RawMessage(toolContent)},
+				{ID: "m-a-2", Role: types.ChatRoleAssistant, Content: json.RawMessage(`[{"type":"text","text":"found 42"}]`)},
+			},
+		},
+		feedback: map[string]map[string]*types.ChatMessageFeedback{
+			"s-1": {"m-a-2": {MessageID: "m-a-2", Rating: types.FeedbackRatingUp, JudgeCriteria: []string{"c1"}}},
+		},
+	}
+	got, err := Build(context.Background(), fs, "e-2")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	sess := got.DatasetVersion.Sessions[0]
+	// Find the assistant message m-a-1 in the emitted transcript.
+	var mA1 *InputMessage
+	for i := range sess.Transcript {
+		if sess.Transcript[i].MessageID == "m-a-1" {
+			mA1 = &sess.Transcript[i]
+			break
+		}
+	}
+	if mA1 == nil {
+		t.Fatalf("m-a-1 not in transcript")
+	}
+	if len(mA1.ToolCalls) != 1 {
+		t.Fatalf("tool_calls count = %d, want 1", len(mA1.ToolCalls))
+	}
+	tc := mA1.ToolCalls[0]
+	if tc.Name != "search" {
+		t.Errorf("tool name = %q, want 'search'", tc.Name)
+	}
+	if string(tc.Args) != `{"q":"cats"}` {
+		t.Errorf("tool args = %s, want {\"q\":\"cats\"}", string(tc.Args))
+	}
+	if string(tc.Result) != `{"hits":42}` {
+		t.Errorf("tool result = %s, want {\"hits\":42}", string(tc.Result))
+	}
+}

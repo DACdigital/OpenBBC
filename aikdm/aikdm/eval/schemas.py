@@ -7,11 +7,19 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class InputToolCall(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    args: Any = None
+    result: Any = None
+
+
 class InputMessage(BaseModel):
     model_config = ConfigDict(extra="ignore")
     message_id: str
     role: Literal["user", "assistant", "tool"]
     content: Any  # opaque JSON — Anthropic-style content-blocks array or string
+    tool_calls: list[InputToolCall] = Field(default_factory=list)
 
 
 class InputCriterion(BaseModel):
