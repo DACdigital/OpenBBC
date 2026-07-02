@@ -43,6 +43,9 @@ class Settings(BaseSettings):
 
     model_generator: str = "claude-haiku-4-5"
     model_critic: str = "claude-haiku-4-5"
+    model_user_simulator: str = "claude-haiku-4-5"
+    model_judge: str = "claude-haiku-4-5"
+    model_target: str = "claude-haiku-4-5"
     critic_rounds: int = Field(default=2, ge=1)
     parallelism: int = Field(default=10, ge=1)
     log_level: str = "info"
@@ -61,7 +64,13 @@ def load_settings() -> Settings:
     except ValidationError as e:
         raise ConfigError(str(e)) from e
 
-    providers = {_provider_of(s.model_generator), _provider_of(s.model_critic)}
+    providers = {
+        _provider_of(s.model_generator),
+        _provider_of(s.model_critic),
+        _provider_of(s.model_user_simulator),
+        _provider_of(s.model_judge),
+        _provider_of(s.model_target),
+    }
     for p in providers:
         env_name = _PROVIDER_KEYS.get(p)
         if env_name is None:
