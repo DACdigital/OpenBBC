@@ -219,8 +219,15 @@ func (r *EvalRepository) Fail(ctx context.Context, id, errMsg string) error {
 
 func (r *EvalRepository) ListSessions(ctx context.Context, evalID string) ([]*types.EvalSession, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id::text, eval_id::text, session_id::text, score, total_criteria, passed_criteria, transcript, judgments
-		FROM eval_sessions WHERE eval_id = $1::uuid ORDER BY score ASC
+		SELECT
+		    es.id::text, es.eval_id::text, es.session_id::text,
+		    COALESCE(s.title, ''), s.agent_version_id::text,
+		    es.score, es.total_criteria, es.passed_criteria,
+		    es.transcript, es.judgments
+		FROM eval_sessions es
+		JOIN chat_sessions s ON s.id = es.session_id
+		WHERE es.eval_id = $1::uuid
+		ORDER BY es.score ASC
 	`, evalID)
 	if err != nil {
 		return nil, err
@@ -230,8 +237,10 @@ func (r *EvalRepository) ListSessions(ctx context.Context, evalID string) ([]*ty
 	for rows.Next() {
 		s := &types.EvalSession{}
 		var transcript, judgments []byte
-		if err := rows.Scan(&s.ID, &s.EvalID, &s.SessionID, &s.Score,
-			&s.TotalCriteria, &s.PassedCriteria, &transcript, &judgments); err != nil {
+		if err := rows.Scan(&s.ID, &s.EvalID, &s.SessionID,
+			&s.SessionTitle, &s.AgentVersionID,
+			&s.Score, &s.TotalCriteria, &s.PassedCriteria,
+			&transcript, &judgments); err != nil {
 			return nil, err
 		}
 		s.Transcript = transcript

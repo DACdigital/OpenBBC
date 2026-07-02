@@ -38,7 +38,13 @@
         <tr>
           <td>
             <details>
-              <summary>{{.SessionID}}</summary>
+              <summary>
+                {{if .SessionTitle}}
+                  <a href="/agent_versions/{{.AgentVersionID}}/chat/{{.SessionID}}">{{.SessionTitle}}</a>
+                {{else}}
+                  <a href="/agent_versions/{{.AgentVersionID}}/chat/{{.SessionID}}">{{.SessionID}}</a>
+                {{end}}
+              </summary>
               <p><strong>Transcript:</strong></p>
               <pre class="json-preview">{{printf "%s" .Transcript}}</pre>
               <p><strong>Judgments:</strong></p>

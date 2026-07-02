@@ -39,6 +39,8 @@ type EvalSession struct {
 	ID             string          `json:"id"`
 	EvalID         string          `json:"eval_id"`
 	SessionID      string          `json:"session_id"`
+	SessionTitle   string          `json:"session_title,omitempty"`
+	AgentVersionID string          `json:"agent_version_id,omitempty"`
 	Score          float64         `json:"score"`
 	TotalCriteria  int             `json:"total_criteria"`
 	PassedCriteria int             `json:"passed_criteria"`
