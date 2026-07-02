@@ -77,4 +77,10 @@ var (
 	ErrSessionInDataset           = errors.New("dataset: session is pinned inside a closed dataset version and cannot be deleted")
 	ErrSessionLocked              = errors.New("session is locked (belongs to a closed dataset version)")
 	ErrDatasetVersionClosed       = errors.New("dataset: version is closed and cannot be modified")
+
+	// Eval domain (spec: docs/superpowers/specs/2026-07-02-agent-eval-on-dataset-version-design.md).
+	ErrDatasetVersionNotClosed = errors.New("eval: dataset version must be closed before it can be evaluated")
+	ErrDatasetMissingCriteria  = errors.New("eval: dataset version has feedback rows with no judge_criteria")
+	ErrEvalNotPending          = errors.New("eval: cannot start; not in PENDING state")
+	ErrEvalAlreadyFinal        = errors.New("eval: already in DONE or FAILED state")
 )
