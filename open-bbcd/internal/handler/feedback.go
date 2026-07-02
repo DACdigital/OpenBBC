@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"html/template"
 	"io/fs"
 	"net/http"
@@ -63,7 +64,14 @@ func (h *FeedbackHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 	}
 	comment := r.FormValue("comment")
 	expected := r.FormValue("expected_output")
-	if err := h.repo.Upsert(r.Context(), messageID, rating, comment, expected); err != nil {
+	var criteria []string
+	if raw := r.FormValue("judge_criteria_json"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &criteria); err != nil {
+			http.Error(w, "invalid judge_criteria_json", http.StatusBadRequest)
+			return
+		}
+	}
+	if err := h.repo.Upsert(r.Context(), messageID, rating, comment, expected, criteria); err != nil {
 		Error(w, err)
 		return
 	}
