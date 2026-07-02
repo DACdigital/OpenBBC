@@ -1,1 +1,42 @@
-{{define "eval_new_modal"}}<p>eval new modal — placeholder</p>{{end}}
+{{define "eval_new_modal"}}
+<div class="modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content">
+    <h2>Evaluate</h2>
+    <form method="post" action="/agent_versions/{{.VersionID}}/evals">
+      <label>
+        Dataset
+        <select name="dataset_id" class="field-input" onchange="pickLatest(this)">
+          <option value="">— select —</option>
+          {{range .Rows}}
+            <option value="{{.Dataset.ID}}" data-versions='{{range .Versions}}{{.ID}}|v{{.VersionNum}},{{end}}'>{{.Dataset.Name}}</option>
+          {{end}}
+        </select>
+      </label>
+      <label>
+        Version
+        <select name="dataset_version_id" class="field-input" required></select>
+      </label>
+      <div class="modal-actions">
+        <button type="submit" class="btn-primary">Create eval</button>
+        <button type="button" onclick="this.closest('.modal').remove()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script>
+function pickLatest(dsSelect) {
+  const versionSel = dsSelect.form.querySelector('select[name="dataset_version_id"]');
+  versionSel.innerHTML = '';
+  const opt = dsSelect.selectedOptions[0];
+  if (!opt || !opt.dataset.versions) return;
+  const pairs = opt.dataset.versions.split(',').filter(Boolean);
+  for (const p of pairs) {
+    const [id, label] = p.split('|');
+    const o = document.createElement('option');
+    o.value = id; o.textContent = label;
+    versionSel.appendChild(o);
+  }
+  if (versionSel.options.length > 0) versionSel.selectedIndex = 0;
+}
+</script>
+{{end}}
