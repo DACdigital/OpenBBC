@@ -76,7 +76,7 @@ func TestDataset_CloseDraft_LocksSessions(t *testing.T) {
 	_ = db.QueryRow(`INSERT INTO agent_versions (agent_id, status) VALUES ($1::uuid, 'READY') RETURNING id::text`, agentID).Scan(&versionID)
 	_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&sessionID)
 	_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq) VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&messageID)
-	_, _ = db.Exec(`INSERT INTO chat_message_feedback (message_id, rating) VALUES ($1::uuid, 'up')`, messageID)
+	_, _ = db.Exec(`INSERT INTO chat_message_feedback (message_id, rating, judge_criteria) VALUES ($1::uuid, 'up', '["a"]'::jsonb)`, messageID)
 	if _, err := db.Exec(`INSERT INTO dataset_version_sessions (dataset_version_id, session_id) VALUES ($1::uuid, $2::uuid)`, draft.ID, sessionID); err != nil {
 		t.Fatalf("seed dvs: %v", err)
 	}
@@ -203,10 +203,10 @@ func TestDataset_CloseDraft_PurgesSessionsWithoutFeedback(t *testing.T) {
 	}
 	keepSess, keepMsg := seedSess()
 	dropSess, dropMsg := seedSess()
-	if err := fb.Upsert(context.Background(), keepMsg, types.FeedbackRatingUp, "", "", nil); err != nil {
+	if err := fb.Upsert(context.Background(), keepMsg, types.FeedbackRatingUp, "", "", []string{"a"}); err != nil {
 		t.Fatalf("seed keep feedback: %v", err)
 	}
-	if err := fb.Upsert(context.Background(), dropMsg, types.FeedbackRatingUp, "", "", nil); err != nil {
+	if err := fb.Upsert(context.Background(), dropMsg, types.FeedbackRatingUp, "", "", []string{"a"}); err != nil {
 		t.Fatalf("seed drop feedback: %v", err)
 	}
 
@@ -263,7 +263,7 @@ func TestDataset_NextDraftInheritsFromPreviousClosed(t *testing.T) {
 		var msgID string
 		_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&sessionID)
 		_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq) VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&msgID)
-		_ = fb.Upsert(context.Background(), msgID, types.FeedbackRatingUp, "", "", nil)
+		_ = fb.Upsert(context.Background(), msgID, types.FeedbackRatingUp, "", "", []string{"a"})
 		return
 	}
 	sessA := mkSess()
@@ -322,5 +322,33 @@ func TestDataset_NextDraftInheritsFromPreviousClosed(t *testing.T) {
 	}
 	if !lockC.Valid {
 		t.Errorf("C should be locked after v2 close")
+	}
+}
+
+func TestDataset_CloseDraft_RefusesWhenCriteriaMissing(t *testing.T) {
+	_, _, db := withRepo(t)
+	repo := NewDatasetRepository(db)
+	d, _ := repo.Create(context.Background(), "ds-crit", "")
+	draft, _ := repo.EnsureDraft(context.Background(), d.ID)
+
+	var agentID, versionID, sessionID, msgID string
+	_ = db.QueryRow(`INSERT INTO agents (name) VALUES ('crit-a') RETURNING id::text`).Scan(&agentID)
+	_ = db.QueryRow(`INSERT INTO agent_versions (agent_id, status) VALUES ($1::uuid, 'READY') RETURNING id::text`, agentID).Scan(&versionID)
+	_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&sessionID)
+	_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq)
+		VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&msgID)
+	// Feedback with no judge_criteria (defaults to []).
+	_, _ = db.Exec(`INSERT INTO chat_message_feedback (message_id, rating) VALUES ($1::uuid, 'up')`, msgID)
+	_, _ = db.Exec(`INSERT INTO dataset_version_sessions (dataset_version_id, session_id) VALUES ($1::uuid, $2::uuid)`, draft.ID, sessionID)
+
+	err := repo.CloseDraft(context.Background(), draft.ID, "trying to close")
+	if !errors.Is(err, types.ErrDatasetMissingCriteria) {
+		t.Fatalf("CloseDraft err = %v, want ErrDatasetMissingCriteria", err)
+	}
+
+	// Fill criteria; close should now succeed.
+	_, _ = db.Exec(`UPDATE chat_message_feedback SET judge_criteria = '["a"]'::jsonb WHERE message_id = $1::uuid`, msgID)
+	if err := repo.CloseDraft(context.Background(), draft.ID, "ok"); err != nil {
+		t.Fatalf("CloseDraft after fill: %v", err)
 	}
 }
