@@ -8,7 +8,7 @@
         <select name="dataset_id" class="field-input" onchange="pickLatest(this)">
           <option value="">— select —</option>
           {{range .Rows}}
-            <option value="{{.Dataset.ID}}" data-versions='{{range .Versions}}{{.ID}}|v{{.VersionNum}},{{end}}'>{{.Dataset.Name}}</option>
+            <option value="{{.Dataset.ID}}" data-versions='{{range .Versions}}{{.ID}}|v{{.VersionNum}}|{{if index $.Inflight .ID}}1{{else}}0{{end}},{{end}}'>{{.Dataset.Name}}</option>
           {{end}}
         </select>
       </label>
@@ -16,6 +16,9 @@
         Version
         <select name="dataset_version_id" class="field-input" required></select>
       </label>
+      <div id="eval-inflight-warn" class="warn-text" hidden>
+        There is already an eval in progress for this pair. Create another anyway?
+      </div>
       <div class="modal-actions">
         <button type="submit" class="btn-primary">Create eval</button>
         <button type="button" onclick="this.closest('.modal').remove()">Cancel</button>
@@ -26,17 +29,30 @@
 <script>
 function pickLatest(dsSelect) {
   const versionSel = dsSelect.form.querySelector('select[name="dataset_version_id"]');
+  const warn = document.getElementById('eval-inflight-warn');
   versionSel.innerHTML = '';
   const opt = dsSelect.selectedOptions[0];
-  if (!opt || !opt.dataset.versions) return;
+  if (!opt || !opt.dataset.versions) {
+    warn.hidden = true;
+    return;
+  }
   const pairs = opt.dataset.versions.split(',').filter(Boolean);
   for (const p of pairs) {
-    const [id, label] = p.split('|');
+    const [id, label, inflight] = p.split('|');
     const o = document.createElement('option');
-    o.value = id; o.textContent = label;
+    o.value = id;
+    o.textContent = label + (inflight === '1' ? ' (eval in progress)' : '');
+    o.dataset.inflight = inflight;
     versionSel.appendChild(o);
   }
   if (versionSel.options.length > 0) versionSel.selectedIndex = 0;
+  syncWarning(versionSel);
+  versionSel.onchange = () => syncWarning(versionSel);
+}
+function syncWarning(versionSel) {
+  const warn = document.getElementById('eval-inflight-warn');
+  const opt = versionSel.selectedOptions[0];
+  warn.hidden = !(opt && opt.dataset.inflight === '1');
 }
 </script>
 {{end}}

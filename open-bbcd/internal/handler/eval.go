@@ -301,9 +301,21 @@ func (h *EvalHandler) UINewModal(w http.ResponseWriter, r *http.Request) {
 			rows = append(rows, dsRow{Dataset: d, Versions: closed})
 		}
 	}
+	// Set of dataset_version_id → true, for the current agent version,
+	// where an eval is already PENDING or IN_PROGRESS.
+	inflight := map[string]bool{}
+	existing, err := h.repo.ListByAgentVersion(r.Context(), versionID)
+	if err == nil {
+		for _, e := range existing {
+			if e.Status == types.EvalStatusPending || e.Status == types.EvalStatusInProgress {
+				inflight[e.DatasetVersionID] = true
+			}
+		}
+	}
 	renderTemplate(w, h.modalTmpl, "eval_new_modal", map[string]any{
 		"VersionID": versionID,
 		"Rows":      rows,
+		"Inflight":  inflight,
 	})
 }
 
