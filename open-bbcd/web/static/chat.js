@@ -461,3 +461,36 @@
     });
   }
 })();
+
+// Feedback criteria editor: hooks all .feedback-criteria-editor blocks on
+// the page. Add/remove rows, serialise to the sibling hidden input as JSON
+// on submit. Called from feedback form onsubmit handlers.
+function serialiseCriteria(form) {
+  form.querySelectorAll('.feedback-criteria-editor').forEach(editor => {
+    const targetName = editor.dataset.targetInput;
+    const target = form.querySelector(`input[name="${targetName}"]`);
+    if (!target) return;
+    const items = [...editor.querySelectorAll('.feedback-criterion-row input')]
+      .map(i => i.value.trim()).filter(Boolean);
+    target.value = JSON.stringify(items);
+  });
+}
+
+document.addEventListener('click', (e) => {
+  const addBtn = e.target.closest('.btn-add-criterion');
+  if (addBtn) {
+    const editor = addBtn.closest('.feedback-criteria-editor');
+    const rows = editor.querySelector('.feedback-criteria-rows');
+    const row = document.createElement('div');
+    row.className = 'feedback-criterion-row';
+    row.innerHTML = '<input type="text" class="field-input" placeholder="e.g. Refuses to disclose PII">' +
+      '<button type="button" class="btn-remove-criterion">✕</button>';
+    rows.appendChild(row);
+    row.querySelector('input').focus();
+    return;
+  }
+  const rmBtn = e.target.closest('.btn-remove-criterion');
+  if (rmBtn) {
+    rmBtn.closest('.feedback-criterion-row').remove();
+  }
+});
