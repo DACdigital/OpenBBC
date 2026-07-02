@@ -99,6 +99,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	backendRepo := repository.NewToolBackendRepository(db)
 	wiringRepo := repository.NewVersionWiringRepository(db)
 	agentWiringRepo := repository.NewAgentWiringRepository(db)
+	evalRepo := repository.NewEvalRepository(db)
 
 	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, backendRepo, wiringRepo, agentWiringRepo, &schema, web.Assets)
 	if err != nil {
@@ -107,7 +108,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 
 	agentDetailHandler, err := NewAgentDetailHandler(
 		&agentDetailStoreAdapter{agents: agentRepo, versions: versionRepo},
-		backendRepo, agentWiringRepo, &schema, web.Assets,
+		backendRepo, agentWiringRepo, evalRepo, &schema, web.Assets,
 	)
 	if err != nil {
 		fatal("init agent detail handler", err)
@@ -152,7 +153,6 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("init datasets handler", err)
 	}
 
-	evalRepo := repository.NewEvalRepository(db)
 	evalAdapter := &evalStoreAdapter{
 		db:       db,
 		evalRepo: evalRepo,

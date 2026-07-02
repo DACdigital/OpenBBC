@@ -31,6 +31,7 @@ type AgentDetailHandler struct {
 	store           AgentDetailStore
 	backendRepo     *repository.ToolBackendRepository
 	agentWiringRepo *repository.AgentWiringRepository
+	evalRepo        *repository.EvalRepository
 	schema          *types.WizardSchema
 	tmpl            *template.Template
 }
@@ -39,6 +40,7 @@ func NewAgentDetailHandler(
 	store AgentDetailStore,
 	backendRepo *repository.ToolBackendRepository,
 	agentWiringRepo *repository.AgentWiringRepository,
+	evalRepo *repository.EvalRepository,
 	schema *types.WizardSchema,
 	webFS fs.FS,
 ) (*AgentDetailHandler, error) {
@@ -62,9 +64,18 @@ func NewAgentDetailHandler(
 		store:           store,
 		backendRepo:     backendRepo,
 		agentWiringRepo: agentWiringRepo,
+		evalRepo:        evalRepo,
 		schema:          schema,
 		tmpl:            tmpl,
 	}, nil
+}
+
+// versionStat is the per-version eval rollup shown in the Versions tab.
+// Avg is a plain mean of DONE eval scores; Count is the number of DONE
+// evals contributing. Both are zero when no evals have completed yet.
+type versionStat struct {
+	Avg   float64
+	Count int
 }
 
 // agentDetailPageData is the shape passed to the agent-detail layout.
@@ -80,6 +91,7 @@ type agentDetailPageData struct {
 	Versions                  []types.AgentVersionListItem
 	CurrentDeployedVersionNum int
 	CurrentDeployedVersionID  string
+	EvalStats                 map[string]versionStat
 
 	// Inputs tab payload.
 	WizardFields []wizardFieldView
@@ -171,6 +183,22 @@ func (h *AgentDetailHandler) Versions(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// Per-version eval rollup for the "Avg eval" column. A failed lookup
+	// is not fatal — the row simply falls back to em-dash. evalRepo may
+	// be nil in tests that don't wire it.
+	stats := map[string]versionStat{}
+	if h.evalRepo != nil {
+		for _, v := range versions {
+			if v.Version == nil {
+				continue
+			}
+			avg, count, err := h.evalRepo.AverageScoreByAgentVersion(r.Context(), v.Version.ID)
+			if err == nil {
+				stats[v.Version.ID] = versionStat{Avg: avg, Count: count}
+			}
+		}
+	}
+	data.EvalStats = stats
 	renderTemplate(w, h.tmpl, "layout", data)
 }
 
