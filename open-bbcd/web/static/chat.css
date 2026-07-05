@@ -398,3 +398,4 @@
 .feedback-criterion-row .btn-remove-criterion { background:#21130f; color:#f85149; border:1px solid #5f1a18; padding:4px 8px; border-radius:5px; cursor:pointer; font-size:12px; font-family:inherit; }
 .btn-add-criterion { font-size:12px; padding:4px 10px; }
 .feedback-criteria-list { padding-left:18px; margin:6px 0; }
+.feedback-criteria-hint { margin:6px 0 0; font-size:12px; color:#f9d050; }

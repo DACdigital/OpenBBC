@@ -506,6 +506,8 @@ function syncFeedbackSubmit(editor) {
     .some(i => i.value.trim().length > 0);
   submit.disabled = !filled;
   submit.title = filled ? '' : 'Add at least one acceptance criterion';
+  const hint = editor.querySelector('.feedback-criteria-hint');
+  if (hint) hint.hidden = filled;
 }
 
 // Disable submit on initial render of any newly-shown feedback form
