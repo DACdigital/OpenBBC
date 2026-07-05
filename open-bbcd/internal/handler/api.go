@@ -211,6 +211,8 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/prompts", configuratorHandler.Prompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts/confirm", configuratorHandler.ConfirmSavePrompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts", configuratorHandler.SavePrompts)
+	// No confirm modal — the caller (scripts/train_from_eval.sh) already
+	// gates the request behind an operator y/N confirmation.
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts/land", configuratorHandler.LandPrompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/new", configuratorHandler.SkillNew)

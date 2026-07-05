@@ -342,9 +342,9 @@ func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, p
 	var newID string
 	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO agent_versions (agent_id, parent_version_id, status, prompts)
-		VALUES ($1::uuid, $2::uuid, $4::text, $3::jsonb)
+		VALUES ($1::uuid, $2::uuid, $3::text, $4::jsonb)
 		RETURNING id::text
-	`, agentID, parentVersionID, promptsJSON, string(status)).Scan(&newID); err != nil {
+	`, agentID, parentVersionID, string(status), promptsJSON).Scan(&newID); err != nil {
 		return "", fmt.Errorf("insert new version: %w", err)
 	}
 
