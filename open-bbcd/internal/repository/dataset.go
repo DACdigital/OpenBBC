@@ -154,6 +154,26 @@ func (r *DatasetRepository) CloseDraft(ctx context.Context, versionID, note stri
 	if status != string(types.DatasetVersionDraft) {
 		return types.ErrDatasetVersionClosed
 	}
+	// Refuse close if any feedback row in this version's sessions still has
+	// an empty judge_criteria list. Empty list is the DB default, so this
+	// keeps freeze honest without forcing criteria at capture time.
+	var missing bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+		    SELECT 1
+		    FROM chat_message_feedback f
+		    JOIN chat_messages m ON m.id = f.message_id
+		    WHERE m.session_id IN (
+		        SELECT session_id FROM dataset_version_sessions WHERE dataset_version_id = $1::uuid
+		    )
+		    AND jsonb_array_length(f.judge_criteria) = 0
+		)
+	`, versionID).Scan(&missing); err != nil {
+		return err
+	}
+	if missing {
+		return types.ErrDatasetMissingCriteria
+	}
 	// Purge sessions that lost all their feedback between assignment and
 	// close. A session with no thumbs is dataset dead weight and would
 	// corrupt the frozen snapshot with a locked-but-signalless row.
@@ -409,4 +429,21 @@ func (r *DatasetRepository) UnassignSession(ctx context.Context, sessionID strin
 		  AND dv.status = 'DRAFT'
 	`, sessionID)
 	return err
+}
+
+// CountMissingCriteria returns how many feedback rows in this version's
+// sessions still have an empty judge_criteria list. Used by the close-draft
+// modal to render a blocking banner before submit.
+func (r *DatasetRepository) CountMissingCriteria(ctx context.Context, versionID string) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message_feedback f
+		JOIN chat_messages m ON m.id = f.message_id
+		WHERE m.session_id IN (
+		    SELECT session_id FROM dataset_version_sessions WHERE dataset_version_id = $1::uuid
+		)
+		AND jsonb_array_length(f.judge_criteria) = 0
+	`, versionID).Scan(&n)
+	return n, err
 }

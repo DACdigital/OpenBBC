@@ -324,3 +324,40 @@ Single-binary deployment:
 ```
 
 **Future:** Operator pattern for multi-agent deployments
+
+## Evaluate
+
+Once a dataset version is closed, any agent version can be evaluated
+against it. Evaluation is scenario-driven: aikdm spins up a user-simulator
+agent that replays the original session's user turns (with paraphrase
+allowed) against the tested agent, then a judge agent scores the resulting
+transcript against the acceptance criteria captured on each feedback row.
+
+Data flow:
+
+1. **Open-bbcd UI** — on the agent version's Versions tab, click **Evaluate**,
+   pick a dataset + closed version, confirm. Creates an eval row in `PENDING`.
+2. **Operator** — copies the eval id from the URL and runs
+   `OPENBBCD_URL=http://localhost:8080 scripts/run_eval.sh <eval_id>`.
+3. **Script** — GETs `/evals/{id}/export.yaml`, POSTs `/evals/{id}/start`
+   (flips to `IN_PROGRESS`), invokes `aikdm evaluate`, POSTs the result
+   JSON to `/evals/{id}/result` (or `/fail` on error).
+4. **Aikdm** — for each session:
+   - `simulator.py` produces the next user turn (LiteLLM via ADK).
+   - `target.py` invokes the tested agent using LiteLLM's completion API
+     with the bundle's tools translated to function schemas. Tool calls
+     go through `tool_mock.py`, which A) replays exact matches from the
+     original transcript, and B) synthesizes a plausible payload from the
+     tool's `body_shape`/`response_shape` when no match is available.
+   - `judge.py` scores each criterion against the completed transcript.
+5. **Open-bbcd** — persists per-session results, computes the global
+   pass-rate score, renders the eval detail page.
+
+Scenario-testing inspiration: [langwatch/scenario](https://github.com/langwatch/scenario).
+
+Score formula: **global pass-rate** = `sum(passed_criteria) / sum(total_criteria)`
+across all sessions in the eval. Every criterion is worth the same;
+bigger sessions carry proportionally more weight.
+
+Agent-version detail's *Avg eval* column is a plain mean of `DONE` eval
+scores for that version (not weighted by dataset size).

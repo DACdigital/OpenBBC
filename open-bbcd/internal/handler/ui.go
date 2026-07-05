@@ -38,14 +38,16 @@ type UIHandler struct {
 
 func statusClass(status string) string {
 	switch status {
-	case "DEPLOYED":
+	case "DEPLOYED", "DONE":
 		return "deployed"
 	case "READY":
 		return "ready"
-	case "TRAINING":
+	case "TRAINING", "IN_PROGRESS":
 		return "training"
-	case "INITIALIZING":
+	case "INITIALIZING", "PENDING":
 		return "initializing"
+	case "FAILED":
+		return "failed"
 	default:
 		return "draft"
 	}

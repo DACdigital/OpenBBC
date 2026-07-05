@@ -99,6 +99,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	backendRepo := repository.NewToolBackendRepository(db)
 	wiringRepo := repository.NewVersionWiringRepository(db)
 	agentWiringRepo := repository.NewAgentWiringRepository(db)
+	evalRepo := repository.NewEvalRepository(db)
 
 	configuratorHandler, err := NewConfiguratorHandler(&configStore{versions: versionRepo}, backendRepo, wiringRepo, agentWiringRepo, &schema, web.Assets)
 	if err != nil {
@@ -107,7 +108,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 
 	agentDetailHandler, err := NewAgentDetailHandler(
 		&agentDetailStoreAdapter{agents: agentRepo, versions: versionRepo},
-		backendRepo, agentWiringRepo, &schema, web.Assets,
+		backendRepo, agentWiringRepo, evalRepo, &schema, web.Assets,
 	)
 	if err != nil {
 		fatal("init agent detail handler", err)
@@ -150,6 +151,18 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	datasetsHandler, err := NewDatasetsHandler(datasetRepo, web.Assets)
 	if err != nil {
 		fatal("init datasets handler", err)
+	}
+
+	evalAdapter := &evalStoreAdapter{
+		db:       db,
+		evalRepo: evalRepo,
+		dataset:  datasetRepo,
+		chat:     chatRepo,
+		feedback: feedbackRepo,
+	}
+	evalHandler, err := NewEvalHandler(evalRepo, datasetRepo, evalAdapter, web.Assets)
+	if err != nil {
+		fatal("init eval handler", err)
 	}
 
 	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, feedbackRepo, datasetRepo, web.Assets, logger)
@@ -262,6 +275,20 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /datasets/{dataset_id}/close-draft/confirm", datasetsHandler.CloseConfirm)
 	mux.HandleFunc("POST /datasets/{dataset_id}/close-draft", datasetsHandler.CloseDraft)
 	mux.HandleFunc("GET /datasets/{dataset_id}/sessions/{session_id}/remove-confirm", datasetsHandler.RemoveSessionConfirm)
+
+	// Evals — JSON script surface.
+	mux.HandleFunc("POST /agent_versions/{version_id}/evals", evalHandler.Create)
+	mux.HandleFunc("GET /evals/{eval_id}/export.yaml", evalHandler.Export)
+	mux.HandleFunc("POST /evals/{eval_id}/start", evalHandler.Start)
+	mux.HandleFunc("POST /evals/{eval_id}/result", evalHandler.Result)
+	mux.HandleFunc("POST /evals/{eval_id}/fail", evalHandler.Fail)
+	mux.HandleFunc("POST /evals/{eval_id}/upload-result", evalHandler.UploadResult)
+
+	// Evals — UI surface.
+	mux.HandleFunc("GET /evals", evalHandler.UIList)
+	mux.HandleFunc("GET /evals/{eval_id}", evalHandler.UIDetail)
+	mux.HandleFunc("GET /agent_versions/{version_id}/evals", evalHandler.UIListByAgentVersion)
+	mux.HandleFunc("GET /agent_versions/{version_id}/evals/new", evalHandler.UINewModal)
 
 	// Per-agent deploy/undeploy + confirm modals
 	mux.HandleFunc("POST /agents/{agent_id}/deploy", deployHandler.Deploy)

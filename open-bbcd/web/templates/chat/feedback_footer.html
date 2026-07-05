@@ -4,11 +4,17 @@
   {{if .Locked}}
     {{if .Feedback}}
       <span class="thumb thumb-{{.Feedback.Rating}} filled" aria-label="{{.Feedback.Rating}}">{{if eq .Feedback.Rating "up"}}👍{{else}}👎{{end}}</span>
-      {{if or .Feedback.Comment .Feedback.ExpectedOutput}}
+      {{if or .Feedback.Comment .Feedback.ExpectedOutput .Feedback.JudgeCriteria}}
         <details class="feedback-details">
           <summary>details</summary>
           {{if .Feedback.Comment}}<p><strong>Comment:</strong> {{.Feedback.Comment}}</p>{{end}}
           {{if .Feedback.ExpectedOutput}}<p><strong>Expected:</strong></p><pre>{{.Feedback.ExpectedOutput}}</pre>{{end}}
+          {{if .Feedback.JudgeCriteria}}
+            <p><strong>Criteria:</strong></p>
+            <ul class="feedback-criteria-list">
+              {{range .Feedback.JudgeCriteria}}<li>{{.}}</li>{{end}}
+            </ul>
+          {{end}}
         </details>
       {{end}}
     {{end}}
@@ -20,11 +26,17 @@
               hx-target="#fb-{{.MessageID}}"
               hx-swap="outerHTML"
               title="Remove feedback">✕</button>
-      {{if or .Feedback.Comment .Feedback.ExpectedOutput}}
+      {{if or .Feedback.Comment .Feedback.ExpectedOutput .Feedback.JudgeCriteria}}
         <details class="feedback-details">
           <summary>details</summary>
           {{if .Feedback.Comment}}<p><strong>Comment:</strong> {{.Feedback.Comment}}</p>{{end}}
           {{if .Feedback.ExpectedOutput}}<p><strong>Expected:</strong></p><pre>{{.Feedback.ExpectedOutput}}</pre>{{end}}
+          {{if .Feedback.JudgeCriteria}}
+            <p><strong>Criteria:</strong></p>
+            <ul class="feedback-criteria-list">
+              {{range .Feedback.JudgeCriteria}}<li>{{.}}</li>{{end}}
+            </ul>
+          {{end}}
         </details>
       {{end}}
     {{else}}
@@ -38,9 +50,15 @@
       <form id="fb-form-up-{{.MessageID}}" class="feedback-form" hidden
             hx-post="{{$fbURL}}"
             hx-target="#fb-{{.MessageID}}"
-            hx-swap="outerHTML">
+            hx-swap="outerHTML"
+            onsubmit="serialiseCriteria(this)">
         <input type="hidden" name="rating" value="up">
-        <p class="feedback-form-prompt">Confirm positive feedback for this response?</p>
+        <input type="hidden" name="judge_criteria_json" value="[]">
+        <div class="feedback-criteria-editor" data-target-input="judge_criteria_json">
+          <label class="feedback-criteria-label">Acceptance criteria (bullets)</label>
+          <div class="feedback-criteria-rows"></div>
+          <button type="button" class="btn-secondary btn-add-criterion">+ Add criterion</button>
+        </div>
         <div class="feedback-form-actions">
           <button type="button" class="btn-secondary"
                   onclick="document.getElementById('fb-form-up-{{.MessageID}}').hidden=true; document.getElementById('fb-actions-{{.MessageID}}').hidden=false">Cancel</button>
@@ -51,8 +69,10 @@
       <form id="fb-form-down-{{.MessageID}}" class="feedback-form" hidden
             hx-post="{{$fbURL}}"
             hx-target="#fb-{{.MessageID}}"
-            hx-swap="outerHTML">
+            hx-swap="outerHTML"
+            onsubmit="serialiseCriteria(this)">
         <input type="hidden" name="rating" value="down">
+        <input type="hidden" name="judge_criteria_json" value="[]">
         <label>
           Comment (required)
           <textarea name="comment" required rows="2"></textarea>
@@ -61,6 +81,11 @@
           Expected output (optional)
           <textarea name="expected_output" rows="3"></textarea>
         </label>
+        <div class="feedback-criteria-editor" data-target-input="judge_criteria_json">
+          <label class="feedback-criteria-label">Acceptance criteria (bullets)</label>
+          <div class="feedback-criteria-rows"></div>
+          <button type="button" class="btn-secondary btn-add-criterion">+ Add criterion</button>
+        </div>
         <div class="feedback-form-actions">
           <button type="button" class="btn-secondary"
                   onclick="document.getElementById('fb-form-down-{{.MessageID}}').hidden=true; document.getElementById('fb-actions-{{.MessageID}}').hidden=false">Cancel</button>

@@ -13,6 +13,7 @@ def _clear_settings_cache():
 def _env(monkeypatch, **kwargs):
     for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
               "AIKDM_MODEL_GENERATOR", "AIKDM_MODEL_CRITIC",
+              "AIKDM_MODEL_USER_SIMULATOR", "AIKDM_MODEL_JUDGE", "AIKDM_MODEL_TARGET",
               "AIKDM_CRITIC_ROUNDS", "AIKDM_LOG_LEVEL"):
         monkeypatch.delenv(k, raising=False)
     for k, v in kwargs.items():
@@ -46,7 +47,10 @@ def test_openai_model(monkeypatch):
     _env(monkeypatch,
          OPENAI_API_KEY="sk-xxx",
          AIKDM_MODEL_GENERATOR="openai/gpt-4o",
-         AIKDM_MODEL_CRITIC="openai/gpt-4o")
+         AIKDM_MODEL_CRITIC="openai/gpt-4o",
+         AIKDM_MODEL_USER_SIMULATOR="openai/gpt-4o",
+         AIKDM_MODEL_JUDGE="openai/gpt-4o",
+         AIKDM_MODEL_TARGET="openai/gpt-4o")
     s = load_settings()
     assert s.model_generator == "openai/gpt-4o"
 

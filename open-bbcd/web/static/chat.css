@@ -389,3 +389,12 @@
   background: #1c2230; border: 1px solid #30363d;
   font-size: 13px; color: #c9d1d9;
 }
+
+.feedback-criteria-editor { margin: 10px 0; }
+.feedback-criteria-label  { display:block; font-size:12px; color:#a8b3c1; text-transform:uppercase; letter-spacing:.04em; font-weight:600; margin-bottom:6px; }
+.feedback-criteria-rows   { display:flex; flex-direction:column; gap:6px; margin-bottom:6px; }
+.feedback-criterion-row   { display:flex; gap:6px; align-items:center; }
+.feedback-criterion-row input { flex:1; }
+.feedback-criterion-row .btn-remove-criterion { background:#21130f; color:#f85149; border:1px solid #5f1a18; padding:4px 8px; border-radius:5px; cursor:pointer; font-size:12px; font-family:inherit; }
+.btn-add-criterion { font-size:12px; padding:4px 10px; }
+.feedback-criteria-list { padding-left:18px; margin:6px 0; }

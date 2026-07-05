@@ -461,3 +461,76 @@
     });
   }
 })();
+
+// Feedback criteria editor: hooks all .feedback-criteria-editor blocks on
+// the page. Add/remove rows, serialise to the sibling hidden input as JSON
+// on submit. Called from feedback form onsubmit handlers.
+function serialiseCriteria(form) {
+  form.querySelectorAll('.feedback-criteria-editor').forEach(editor => {
+    const targetName = editor.dataset.targetInput;
+    const target = form.querySelector(`input[name="${targetName}"]`);
+    if (!target) return;
+    const items = [...editor.querySelectorAll('.feedback-criterion-row input')]
+      .map(i => i.value.trim()).filter(Boolean);
+    target.value = JSON.stringify(items);
+  });
+}
+
+document.addEventListener('click', (e) => {
+  const addBtn = e.target.closest('.btn-add-criterion');
+  if (addBtn) {
+    const editor = addBtn.closest('.feedback-criteria-editor');
+    const rows = editor.querySelector('.feedback-criteria-rows');
+    const row = document.createElement('div');
+    row.className = 'feedback-criterion-row';
+    row.innerHTML = '<input type="text" class="field-input" placeholder="e.g. Refuses to disclose PII">' +
+      '<button type="button" class="btn-remove-criterion">✕</button>';
+    rows.appendChild(row);
+    row.querySelector('input').focus();
+    return;
+  }
+  const rmBtn = e.target.closest('.btn-remove-criterion');
+  if (rmBtn) {
+    rmBtn.closest('.feedback-criterion-row').remove();
+  }
+});
+
+// Sync submit-button enabled state to whether the feedback form has at
+// least one non-empty criterion. Runs on click (add/remove) and on input.
+function syncFeedbackSubmit(editor) {
+  const form = editor.closest('form');
+  if (!form) return;
+  const submit = form.querySelector('button[type="submit"]');
+  if (!submit) return;
+  const filled = [...editor.querySelectorAll('.feedback-criterion-row input')]
+    .some(i => i.value.trim().length > 0);
+  submit.disabled = !filled;
+  submit.title = filled ? '' : 'Add at least one acceptance criterion';
+}
+
+// Disable submit on initial render of any newly-shown feedback form
+// (they start with zero criteria, so submit must be disabled).
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.thumb-up, .thumb-down');
+  if (!btn) return;
+  // The form was just un-hidden by the inline onclick; find it and sync.
+  setTimeout(() => {
+    const parent = btn.closest('.feedback-footer');
+    if (!parent) return;
+    parent.querySelectorAll('.feedback-criteria-editor').forEach(syncFeedbackSubmit);
+  }, 0);
+});
+
+// Re-sync when rows are added/removed or when input changes.
+document.addEventListener('click', (e) => {
+  const target = e.target.closest('.btn-add-criterion, .btn-remove-criterion');
+  if (!target) return;
+  const editor = target.closest('.feedback-criteria-editor');
+  if (editor) setTimeout(() => syncFeedbackSubmit(editor), 0);
+});
+document.addEventListener('input', (e) => {
+  const input = e.target.closest('.feedback-criterion-row input');
+  if (!input) return;
+  const editor = input.closest('.feedback-criteria-editor');
+  if (editor) syncFeedbackSubmit(editor);
+});

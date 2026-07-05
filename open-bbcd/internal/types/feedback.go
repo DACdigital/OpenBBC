@@ -13,11 +13,14 @@ const (
 // ChatMessageFeedback is a per-assistant-message row.
 // The rating='down' branch requires a non-empty comment (enforced by DB CHECK).
 // expected_output is optional in either branch.
+// judge_criteria is a list of acceptance-criteria bullets; required
+// (at least one) on every feedback row — enforced at Upsert time.
 type ChatMessageFeedback struct {
 	MessageID      string         `json:"message_id"`
 	Rating         FeedbackRating `json:"rating"`
 	Comment        string         `json:"comment"`
 	ExpectedOutput string         `json:"expected_output"`
+	JudgeCriteria  []string       `json:"judge_criteria"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
 }

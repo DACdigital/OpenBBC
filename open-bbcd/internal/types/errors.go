@@ -71,10 +71,17 @@ var (
 	// Feedback / dataset domain (spec: docs/superpowers/specs/2026-07-01-feedback-datasets-design.md).
 	ErrFeedbackNotAssistant       = errors.New("feedback: can only attach to assistant messages")
 	ErrFeedbackCommentRequired    = errors.New("feedback: comment is required when rating is 'down'")
+	ErrFeedbackCriteriaRequired   = errors.New("feedback: at least one judge criterion is required")
 	ErrDatasetNameRequired        = errors.New("dataset: name is required")
 	ErrSessionNoFeedback          = errors.New("dataset: session must have at least one feedback row to be assigned")
 	ErrSessionAlreadyInDataset    = errors.New("dataset: session already belongs to another dataset")
 	ErrSessionInDataset           = errors.New("dataset: session is pinned inside a closed dataset version and cannot be deleted")
 	ErrSessionLocked              = errors.New("session is locked (belongs to a closed dataset version)")
 	ErrDatasetVersionClosed       = errors.New("dataset: version is closed and cannot be modified")
+
+	// Eval domain (spec: docs/superpowers/specs/2026-07-02-agent-eval-on-dataset-version-design.md).
+	ErrDatasetVersionNotClosed = errors.New("eval: dataset version must be closed before it can be evaluated")
+	ErrDatasetMissingCriteria  = errors.New("eval: dataset version has feedback rows with no judge_criteria")
+	ErrEvalNotPending          = errors.New("eval: cannot start; not in PENDING state")
+	ErrEvalAlreadyFinal        = errors.New("eval: already in DONE or FAILED state")
 )

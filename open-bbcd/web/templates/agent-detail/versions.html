@@ -48,6 +48,8 @@
       <th class="col-version">Version</th>
       <th class="col-status">Status</th>
       <th class="col-date">Created</th>
+      <th class="col-count">Avg eval</th>
+      <th class="col-actions">Evals</th>
     </tr>
   </thead>
   <tbody>
@@ -59,6 +61,16 @@
       </td>
       <td class="col-status"><span class="badge badge-{{.Version.Status | statusClass}}">{{.Version.Status}}</span></td>
       <td class="col-date">{{.Version.CreatedAt.Format "Jan 2, 2006"}}</td>
+      <td class="col-count" onclick="event.stopPropagation()">
+        {{$s := index $.EvalStats .Version.ID}}
+        {{if $s.Count}}{{printf "%.2f" $s.Avg}} · {{$s.Count}} evals{{else}}—{{end}}
+      </td>
+      <td class="col-actions" onclick="event.stopPropagation()">
+        <button class="btn-small"
+                hx-get="/agent_versions/{{.Version.ID}}/evals/new"
+                hx-target="body" hx-swap="beforeend">Evaluate</button>
+        <a class="btn-small" href="/agent_versions/{{.Version.ID}}/evals">View evals</a>
+      </td>
     </tr>
     {{end}}
   </tbody>

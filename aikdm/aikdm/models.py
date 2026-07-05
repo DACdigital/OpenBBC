@@ -9,7 +9,7 @@ from google.adk.models.lite_llm import LiteLlm  # type: ignore[import-untyped]
 
 from aikdm.config import Settings
 
-Role = Literal["generator", "critic"]
+Role = Literal["generator", "critic", "user_simulator", "judge", "target"]
 
 
 def _normalize_model_string(model: str) -> str:
@@ -26,10 +26,13 @@ def _normalize_model_string(model: str) -> str:
 
 
 def build_model(role: Role, settings: Settings) -> LiteLlm:
-    if role == "generator":
-        model_str = settings.model_generator
-    elif role == "critic":
-        model_str = settings.model_critic
-    else:
+    lookup = {
+        "generator":      settings.model_generator,
+        "critic":         settings.model_critic,
+        "user_simulator": settings.model_user_simulator,
+        "judge":          settings.model_judge,
+        "target":         settings.model_target,
+    }
+    if role not in lookup:
         raise ValueError(f"unknown role {role!r}")
-    return LiteLlm(model=_normalize_model_string(model_str))
+    return LiteLlm(model=_normalize_model_string(lookup[role]))

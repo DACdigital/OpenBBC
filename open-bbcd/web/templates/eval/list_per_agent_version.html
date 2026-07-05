@@ -1,0 +1,32 @@
+{{define "content"}}
+<section>
+  <a class="wizard-back" href="/agent_versions/{{.VersionID}}/configure">← back to version</a>
+  <div class="page-header">
+    <h1>Evals for this version</h1>
+  </div>
+  {{if .Rows}}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Created</th>
+          <th>Dataset</th>
+          <th class="col-status">Status</th>
+          <th class="col-count">Score</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range .Rows}}
+        <tr class="clickable" onclick="window.location='/evals/{{.Eval.ID}}'">
+          <td class="col-date">{{.Eval.CreatedAt.Format "2006-01-02 15:04"}}</td>
+          <td>{{.DatasetName}} v{{.DatasetVersionNum}}</td>
+          <td><span class="badge badge-{{statusClass (printf "%s" .Eval.Status)}}">{{.Eval.Status}}</span></td>
+          <td class="col-count">{{with .Eval.Score}}{{pct .}}{{else}}—{{end}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{else}}
+    <p class="empty-state">No evals for this version yet.</p>
+  {{end}}
+</section>
+{{end}}

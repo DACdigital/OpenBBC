@@ -69,6 +69,7 @@
     .badge-training    {background:#332405;border-color:#bb8009;color:#f9d050} /* amber */
     .badge-initializing{background:#221137;border-color:#8957e5;color:#c2a4ff} /* violet */
     .badge-draft       {background:#252a31;border-color:#6e7681;color:#d0d7de} /* neutral */
+    .badge-failed      {background:#3a0c0c;border-color:#f85149;color:#ff9d9d} /* red */
     .empty-state{color:#8b949e;font-size:14px;padding:40px 0;text-align:center}
     .wizard-back{font-size:13px;color:#8b949e;text-decoration:none;display:inline-block;margin-bottom:14px}
     .wizard-back:hover{color:#e6edf3}
@@ -101,6 +102,8 @@
     .pagination-link:hover{color:#e6edf3;background:#1c2230}
     .pagination-link.disabled{opacity:.4;pointer-events:none}
     .pagination-summary{color:#8b949e;font-size:13px;font-variant-numeric:tabular-nums}
+    .json-preview{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:10px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;color:#c9d1d9;overflow:auto;max-height:280px;white-space:pre-wrap}
+    .warn-text{color:#f9d050;background:#332405;border:1px solid #bb8009;border-radius:6px;padding:8px 12px;font-size:13px}
   </style>
   <link rel="stylesheet" href="/static/drawflow.min.css">
   <link rel="stylesheet" href="/static/configurator.css">
@@ -120,7 +123,7 @@
     <a href="/agents/ui" class="nav-link {{if eq .Active "agents"}}active{{end}}">Agents</a>
     <a href="/mcp" class="nav-link {{if eq .Active "mcp"}}active{{end}}">MCP</a>
     <a href="/datasets" class="nav-link {{if eq .Active "datasets"}}active{{end}}">Datasets</a>
-    <span class="nav-link disabled">Scores</span>
+    <a href="/evals" class="nav-link {{if eq .Active "evals"}}active{{end}}">Evals</a>
     <span class="nav-link disabled">Resources</span>
   </nav>
   <main class="content">

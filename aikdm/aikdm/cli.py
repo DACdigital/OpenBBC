@@ -10,10 +10,13 @@ import sys
 from pathlib import Path
 
 import click
+import yaml as _yaml
 from dotenv import find_dotenv, load_dotenv
 
 from aikdm import orchestrator
 from aikdm.config import ConfigError, load_settings
+from aikdm.eval.orchestrator import run_eval
+from aikdm.eval.schemas import EvalInput
 from aikdm.loader import (
     InputIOError,
     InputValidationError,
@@ -87,6 +90,48 @@ def generate_agent(config_path: Path, output_path: Path | None) -> None:
         sys.exit(3)
 
     write_bundle(bundle, output_path)
+    sys.exit(0)
+
+
+@main.command("evaluate", help="Run an agent-version × dataset-version eval.")
+@click.option("--input", "input_path", type=click.Path(path_type=Path),
+              required=True, help="Path to eval-input.yaml.")
+@click.option("--output", "output_path", type=click.Path(path_type=Path),
+              required=True, help="Where to write eval-result.json.")
+def evaluate(input_path: Path, output_path: Path) -> None:
+    input_path = input_path.expanduser()
+    output_path = output_path.expanduser()
+    load_dotenv(find_dotenv(usecwd=True))
+    try:
+        settings = load_settings()
+    except ConfigError as e:
+        _print_error("config", str(e))
+        sys.exit(2)
+
+    logging.basicConfig(level=settings.log_level.upper(), stream=sys.stderr)
+
+    try:
+        raw = _yaml.safe_load(input_path.read_text(encoding="utf-8"))
+    except OSError as e:
+        _print_error("input_io", str(e))
+        sys.exit(2)
+    except _yaml.YAMLError as e:
+        _print_error("input_validation", str(e))
+        sys.exit(2)
+
+    try:
+        inp = EvalInput.model_validate(raw)
+    except Exception as e:
+        _print_error("input_validation", str(e))
+        sys.exit(2)
+
+    try:
+        result = asyncio.run(run_eval(inp, settings))
+    except Exception as e:
+        _print_error("llm_unavailable", str(e))
+        sys.exit(3)
+
+    output_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     sys.exit(0)
 
 

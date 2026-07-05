@@ -1,0 +1,24 @@
+schema_version: eval-input-v1
+eval_id: e-fix-1
+agent_version:
+  id: av-1
+  bundle:
+    main_prompt: "You are a helpful test agent."
+    tools: []
+    skills: []
+dataset_version:
+  id: dv-1
+  sessions:
+    - session_id: s-1
+      title: greet-flow
+      transcript:
+        - message_id: m-u-1
+          role: user
+          content: hi
+        - message_id: m-a-1
+          role: assistant
+          content: hello, how can I help?
+      criteria:
+        - message_id: m-a-1
+          rating: up
+          items: ["Greets politely"]
