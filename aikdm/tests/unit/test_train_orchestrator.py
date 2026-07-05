@@ -188,3 +188,33 @@ def test_failed_candidate_eval_doesnt_kill_loop(monkeypatch):
     assert report.epochs[0].error != ""
     assert report.epochs[0].promoted is False
     assert report.final_score == 0.5
+
+
+def test_failed_apply_patches_blacklists_patch(monkeypatch):
+    scores = iter([0.5])
+    async def fake_run_eval(inp, settings):     # noqa: ARG001
+        return _result(next(scores))
+
+    async def fake_propose(*, agent, bundle, eval_result, tried):    # noqa: ARG001
+        # Always propose a malformed section_id — apply_patches will raise.
+        return teacher_mod.TeacherTurn(
+            output=TeacherOutput(patches=[
+                SectionPatch(section_id="skill.ghost.prompt", new="x", rationale="x"),
+            ]),
+            tokens_in=1, tokens_out=1,
+        )
+
+    monkeypatch.setattr(orch_mod, "run_eval", fake_run_eval)
+    monkeypatch.setattr(orch_mod, "propose_patches", fake_propose)
+    monkeypatch.setattr(orch_mod, "build_teacher_agent", lambda m: object())
+    monkeypatch.setattr(orch_mod.models, "build_model", lambda role, s: object())
+
+    _final, report = asyncio.run(orch_mod.run_training(
+        _input(), _settings(), epochs=3, patience=2,
+    ))
+    # Loop should exit on plateau (structural failures still count).
+    assert report.stopped_reason == "plateau"
+    assert report.total_epochs_run == 2
+    for ep in report.epochs:
+        assert ep.error.startswith("apply_patches:")
+        assert ep.promoted is False

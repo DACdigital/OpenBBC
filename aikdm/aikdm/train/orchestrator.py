@@ -13,7 +13,7 @@ import copy
 import time
 from typing import Any
 
-from aikdm import models                                 # test seam
+from aikdm import models                                 # test seam: keep as module ref so tests can `monkeypatch.setattr(orch_mod.models, "build_model", ...)`. Do NOT change to `from aikdm.models import build_model` — that would rebind locally and break the seam.
 from aikdm.config import Settings
 from aikdm.eval.orchestrator import run_eval             # test seam
 from aikdm.eval.schemas import EvalInput, EvalResult
@@ -87,6 +87,7 @@ async def run_training(
                 tokens_in=turn.tokens_in, tokens_out=turn.tokens_out,
                 error=f"apply_patches: {e}",
             ))
+            tried.extend(patches)
             no_improve_streak += 1
             emit("epoch_done", epoch=epoch, promoted=False, error=str(e))
             if no_improve_streak >= patience:
@@ -146,8 +147,10 @@ async def run_training(
 
 
 def _with_bundle(base: EvalInput, bundle: dict[str, Any]) -> EvalInput:
-    """Rebuild the EvalInput with a swapped bundle. Deep-copies agent_version
-    so the caller's original stays untouched."""
-    return base.model_copy(deep=True, update={
+    """Rebuild the EvalInput with a swapped bundle. Only agent_version changes
+    — dataset_version and other fields are read-only inputs to run_eval, so
+    shallow-copying the outer EvalInput and rebuilding agent_version alone
+    avoids copying the (potentially large) dataset on every eval call."""
+    return base.model_copy(update={
         "agent_version": base.agent_version.model_copy(update={"bundle": bundle}),
     })
