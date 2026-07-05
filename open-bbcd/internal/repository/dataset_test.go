@@ -152,7 +152,7 @@ func TestDataset_AssignAndUnassign(t *testing.T) {
 	_ = db.QueryRow(`INSERT INTO agent_versions (agent_id, status) VALUES ($1::uuid, 'READY') RETURNING id::text`, agentID).Scan(&versionID)
 	_ = db.QueryRow(`INSERT INTO chat_sessions (agent_version_id) VALUES ($1::uuid) RETURNING id::text`, versionID).Scan(&sessionID)
 	_ = db.QueryRow(`INSERT INTO chat_messages (session_id, role, content, seq) VALUES ($1::uuid, 'assistant', '[]'::jsonb, 1) RETURNING id::text`, sessionID).Scan(&messageID)
-	if err := fb.Upsert(context.Background(), messageID, types.FeedbackRatingUp, "", "", nil); err != nil {
+	if err := fb.Upsert(context.Background(), messageID, types.FeedbackRatingUp, "", "", []string{"c"}); err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
 

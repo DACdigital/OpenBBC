@@ -71,6 +71,7 @@ var (
 	// Feedback / dataset domain (spec: docs/superpowers/specs/2026-07-01-feedback-datasets-design.md).
 	ErrFeedbackNotAssistant       = errors.New("feedback: can only attach to assistant messages")
 	ErrFeedbackCommentRequired    = errors.New("feedback: comment is required when rating is 'down'")
+	ErrFeedbackCriteriaRequired   = errors.New("feedback: at least one judge criterion is required")
 	ErrDatasetNameRequired        = errors.New("dataset: name is required")
 	ErrSessionNoFeedback          = errors.New("dataset: session must have at least one feedback row to be assigned")
 	ErrSessionAlreadyInDataset    = errors.New("dataset: session already belongs to another dataset")

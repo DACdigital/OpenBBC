@@ -494,3 +494,43 @@ document.addEventListener('click', (e) => {
     rmBtn.closest('.feedback-criterion-row').remove();
   }
 });
+
+// Sync submit-button enabled state to whether the feedback form has at
+// least one non-empty criterion. Runs on click (add/remove) and on input.
+function syncFeedbackSubmit(editor) {
+  const form = editor.closest('form');
+  if (!form) return;
+  const submit = form.querySelector('button[type="submit"]');
+  if (!submit) return;
+  const filled = [...editor.querySelectorAll('.feedback-criterion-row input')]
+    .some(i => i.value.trim().length > 0);
+  submit.disabled = !filled;
+  submit.title = filled ? '' : 'Add at least one acceptance criterion';
+}
+
+// Disable submit on initial render of any newly-shown feedback form
+// (they start with zero criteria, so submit must be disabled).
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.thumb-up, .thumb-down');
+  if (!btn) return;
+  // The form was just un-hidden by the inline onclick; find it and sync.
+  setTimeout(() => {
+    const parent = btn.closest('.feedback-footer');
+    if (!parent) return;
+    parent.querySelectorAll('.feedback-criteria-editor').forEach(syncFeedbackSubmit);
+  }, 0);
+});
+
+// Re-sync when rows are added/removed or when input changes.
+document.addEventListener('click', (e) => {
+  const target = e.target.closest('.btn-add-criterion, .btn-remove-criterion');
+  if (!target) return;
+  const editor = target.closest('.feedback-criteria-editor');
+  if (editor) setTimeout(() => syncFeedbackSubmit(editor), 0);
+});
+document.addEventListener('input', (e) => {
+  const input = e.target.closest('.feedback-criterion-row input');
+  if (!input) return;
+  const editor = input.closest('.feedback-criteria-editor');
+  if (editor) syncFeedbackSubmit(editor);
+});

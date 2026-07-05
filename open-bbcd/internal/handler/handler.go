@@ -72,6 +72,7 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrAgentNameMismatch),
 		errors.Is(err, types.ErrFeedbackNotAssistant),
 		errors.Is(err, types.ErrFeedbackCommentRequired),
+		errors.Is(err, types.ErrFeedbackCriteriaRequired),
 		errors.Is(err, types.ErrDatasetNameRequired),
 		errors.Is(err, types.ErrDatasetVersionNotClosed),
 		errors.Is(err, types.ErrDatasetMissingCriteria):

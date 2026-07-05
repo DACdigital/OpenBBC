@@ -19,14 +19,18 @@ func NewFeedbackRepository(db *sql.DB) *FeedbackRepository {
 }
 
 // Upsert writes (or replaces) the feedback row for messageID.
-// judgeCriteria is stored as a JSONB array; nil is normalised to '[]'.
+// judgeCriteria must be non-empty (at least one criterion).
 // Refuses when:
 //   - the message is not an assistant message (ErrFeedbackNotAssistant)
 //   - rating='down' and comment is empty (ErrFeedbackCommentRequired)
+//   - judgeCriteria is empty (ErrFeedbackCriteriaRequired)
 //   - the owning session is locked (ErrSessionLocked)
 func (r *FeedbackRepository) Upsert(ctx context.Context, messageID string, rating types.FeedbackRating, comment, expectedOutput string, judgeCriteria []string) error {
 	if rating == types.FeedbackRatingDown && comment == "" {
 		return types.ErrFeedbackCommentRequired
+	}
+	if len(judgeCriteria) == 0 {
+		return types.ErrFeedbackCriteriaRequired
 	}
 	var role string
 	var locked sql.NullTime
@@ -47,9 +51,6 @@ func (r *FeedbackRepository) Upsert(ctx context.Context, messageID string, ratin
 	}
 	if locked.Valid {
 		return types.ErrSessionLocked
-	}
-	if judgeCriteria == nil {
-		judgeCriteria = []string{}
 	}
 	critJSON, err := json.Marshal(judgeCriteria)
 	if err != nil {
