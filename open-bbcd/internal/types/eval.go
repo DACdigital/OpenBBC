@@ -18,18 +18,20 @@ const (
 // score. Score/total/passed are nullable until DONE. AikdmMeta captures
 // the models used and timing so we can trace how a number was produced.
 type Eval struct {
-	ID               string          `json:"id"`
-	AgentVersionID   string          `json:"agent_version_id"`
-	DatasetVersionID string          `json:"dataset_version_id"`
-	Status           EvalStatus      `json:"status"`
-	Score            *float64        `json:"score,omitempty"`
-	TotalCriteria    *int            `json:"total_criteria,omitempty"`
-	PassedCriteria   *int            `json:"passed_criteria,omitempty"`
-	ErrorMessage     string          `json:"error_message,omitempty"`
-	AikdmMeta        json.RawMessage `json:"aikdm_meta,omitempty"`
-	CreatedAt        time.Time       `json:"created_at"`
-	StartedAt        *time.Time      `json:"started_at,omitempty"`
-	CompletedAt      *time.Time      `json:"completed_at,omitempty"`
+	ID               string            `json:"id"`
+	AgentVersionID   string            `json:"agent_version_id"`
+	DatasetVersionID string            `json:"dataset_version_id"`
+	Status           EvalStatus        `json:"status"`
+	MockMCPTools     bool              `json:"mock_mcp_tools"`
+	HeaderOverrides  map[string]string `json:"header_overrides,omitempty"`
+	Score            *float64          `json:"score,omitempty"`
+	TotalCriteria    *int              `json:"total_criteria,omitempty"`
+	PassedCriteria   *int              `json:"passed_criteria,omitempty"`
+	ErrorMessage     string            `json:"error_message,omitempty"`
+	AikdmMeta        json.RawMessage   `json:"aikdm_meta,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	StartedAt        *time.Time        `json:"started_at,omitempty"`
+	CompletedAt      *time.Time        `json:"completed_at,omitempty"`
 }
 
 // EvalSession is one row per simulated session inside an eval.

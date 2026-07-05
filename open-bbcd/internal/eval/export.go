@@ -13,11 +13,17 @@ import (
 )
 
 // InputPayload is the shape emitted to aikdm.
+//
+// Note: HeaderOverrides is a flat map (differs from chat-session's
+// per-backend layout intentionally — an eval targets a single agent
+// version, so a flat set of overrides is sufficient).
 type InputPayload struct {
-	SchemaVersion  string              `yaml:"schema_version"`
-	EvalID         string              `yaml:"eval_id"`
-	AgentVersion   InputAgentVersion   `yaml:"agent_version"`
-	DatasetVersion InputDatasetVersion `yaml:"dataset_version"`
+	SchemaVersion   string              `yaml:"schema_version"`
+	EvalID          string              `yaml:"eval_id"`
+	MockMCPTools    bool                `yaml:"mock_mcp_tools"`
+	HeaderOverrides map[string]string   `yaml:"header_overrides,omitempty"`
+	AgentVersion    InputAgentVersion   `yaml:"agent_version"`
+	DatasetVersion  InputDatasetVersion `yaml:"dataset_version"`
 }
 
 type InputAgentVersion struct {
@@ -37,17 +43,20 @@ type InputSession struct {
 	Criteria   []InputCriterion `yaml:"criteria"`
 }
 
+// InputMessage carries the decoded JSON content so YAML round-trips as
+// native structures (maps, arrays, strings) — not byte-arrays as would
+// happen if Content were json.RawMessage.
 type InputMessage struct {
 	MessageID string          `yaml:"message_id"`
 	Role      string          `yaml:"role"`
-	Content   json.RawMessage `yaml:"content"`
+	Content   any             `yaml:"content"`
 	ToolCalls []InputToolCall `yaml:"tool_calls,omitempty"`
 }
 
 type InputToolCall struct {
-	Name   string          `yaml:"name"`
-	Args   json.RawMessage `yaml:"args"`
-	Result json.RawMessage `yaml:"result"`
+	Name   string `yaml:"name"`
+	Args   any    `yaml:"args"`
+	Result any    `yaml:"result"`
 }
 
 type InputCriterion struct {
@@ -98,22 +107,26 @@ func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Keep raw bytes for the tool_use / tool_result scan (needs sub-tree
+		// selection from Anthropic-style content blocks); decode to native
+		// structures once at the end for YAML.
+		rawContent := make([]json.RawMessage, len(msgs))
 		transcript := make([]InputMessage, 0, len(msgs))
-		for _, m := range msgs {
+		for i, m := range msgs {
+			rawContent[i] = m.Content
 			transcript = append(transcript, InputMessage{
 				MessageID: m.ID,
 				Role:      string(m.Role),
-				Content:   m.Content,
 			})
 		}
-		// First pass: index tool_use_id → tool_result content from tool-role messages.
-		toolResults := map[string]json.RawMessage{}
-		for _, m := range transcript {
+		// First pass: index tool_use_id → decoded tool_result payload from tool-role messages.
+		toolResults := map[string]any{}
+		for i, m := range transcript {
 			if m.Role != string(types.ChatRoleTool) {
 				continue
 			}
 			var blocks []map[string]json.RawMessage
-			if err := json.Unmarshal(m.Content, &blocks); err != nil {
+			if err := json.Unmarshal(rawContent[i], &blocks); err != nil {
 				continue
 			}
 			for _, blk := range blocks {
@@ -127,9 +140,11 @@ func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
 				if id == "" {
 					continue
 				}
-				// The tool_result's "content" field is the actual result payload.
 				if raw, ok := blk["content"]; ok {
-					toolResults[id] = raw
+					var decoded any
+					if err := json.Unmarshal(raw, &decoded); err == nil {
+						toolResults[id] = decoded
+					}
 				}
 			}
 		}
@@ -139,7 +154,7 @@ func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
 				continue
 			}
 			var blocks []map[string]json.RawMessage
-			if err := json.Unmarshal(transcript[i].Content, &blocks); err != nil {
+			if err := json.Unmarshal(rawContent[i], &blocks); err != nil {
 				continue
 			}
 			for _, blk := range blocks {
@@ -151,19 +166,29 @@ func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
 				var name, id string
 				_ = json.Unmarshal(blk["name"], &name)
 				_ = json.Unmarshal(blk["id"], &id)
-				args := blk["input"]
-				result := toolResults[id]
-				if len(args) == 0 {
-					args = json.RawMessage("{}")
+				var args any = map[string]any{}
+				if raw := blk["input"]; len(raw) > 0 {
+					_ = json.Unmarshal(raw, &args)
 				}
-				if len(result) == 0 {
-					result = json.RawMessage("null")
-				}
+				result := toolResults[id] // nil if the paired tool_result is missing
 				transcript[i].ToolCalls = append(transcript[i].ToolCalls, InputToolCall{
 					Name:   name,
 					Args:   args,
 					Result: result,
 				})
+			}
+		}
+		// Decode content bytes to native structures for YAML.
+		for i := range transcript {
+			raw := rawContent[i]
+			if len(raw) == 0 {
+				continue
+			}
+			var decoded any
+			if err := json.Unmarshal(raw, &decoded); err == nil {
+				transcript[i].Content = decoded
+			} else {
+				transcript[i].Content = string(raw)
 			}
 		}
 		criteria := make([]InputCriterion, 0, len(fbMap))
@@ -185,8 +210,10 @@ func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
 		})
 	}
 	return &InputPayload{
-		SchemaVersion: "eval-input-v1",
-		EvalID:        e.ID,
+		SchemaVersion:   "eval-input-v1",
+		EvalID:          e.ID,
+		MockMCPTools:    e.MockMCPTools,
+		HeaderOverrides: e.HeaderOverrides,
 		AgentVersion: InputAgentVersion{
 			ID:     e.AgentVersionID,
 			Bundle: bundle,

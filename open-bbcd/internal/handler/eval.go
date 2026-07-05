@@ -75,22 +75,42 @@ func NewEvalHandler(
 // name. JSON callers get the eval row back; form callers 303 to detail.
 func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
-	var datasetVersionID string
+	// Body fields (JSON or form).
+	var (
+		datasetVersionID string
+		mockMCP          = true // default checked
+		headerOverrides  = map[string]string{}
+	)
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		var body struct {
-			DatasetVersionID string `json:"dataset_version_id"`
+			DatasetVersionID string            `json:"dataset_version_id"`
+			MockMCPTools     *bool             `json:"mock_mcp_tools,omitempty"`
+			HeaderOverrides  map[string]string `json:"header_overrides,omitempty"`
 		}
 		if err := DecodeJSON(r, &body); err != nil {
 			http.Error(w, "invalid JSON", http.StatusBadRequest)
 			return
 		}
 		datasetVersionID = body.DatasetVersionID
+		if body.MockMCPTools != nil {
+			mockMCP = *body.MockMCPTools
+		}
+		if body.HeaderOverrides != nil {
+			headerOverrides = body.HeaderOverrides
+		}
 	} else {
 		if err := r.ParseForm(); err != nil {
 			Error(w, err)
 			return
 		}
 		datasetVersionID = r.FormValue("dataset_version_id")
+		mockMCP = r.FormValue("mock_mcp_tools") != "" // HTML checkbox: absent when unchecked
+		if raw := r.FormValue("header_overrides_json"); raw != "" {
+			if err := json.Unmarshal([]byte(raw), &headerOverrides); err != nil {
+				http.Error(w, "invalid header_overrides_json", http.StatusBadRequest)
+				return
+			}
+		}
 	}
 	if datasetVersionID == "" {
 		http.Error(w, "dataset_version_id required", http.StatusBadRequest)
@@ -114,7 +134,7 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Error(w, types.ErrDatasetMissingCriteria)
 		return
 	}
-	e, err := h.repo.Create(r.Context(), versionID, datasetVersionID)
+	e, err := h.repo.Create(r.Context(), versionID, datasetVersionID, mockMCP, headerOverrides)
 	if err != nil {
 		Error(w, err)
 		return
@@ -256,6 +276,35 @@ func (h *EvalHandler) UIListByAgentVersion(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// evalSessionView wraps EvalSession with pre-parsed structured views of
+// the JSONB transcript + judgments so templates render as tables instead
+// of raw JSON dumps.
+type evalSessionView struct {
+	*types.EvalSession
+	Judgments []judgmentView
+	Turns     []turnView
+}
+
+type judgmentView struct {
+	MessageID string
+	Criterion string
+	Passed    bool
+	Reason    string
+}
+
+type turnView struct {
+	Role      string
+	Text      string
+	ToolCalls []turnToolCallView
+}
+
+type turnToolCallView struct {
+	Name       string
+	ArgsJSON   string
+	ResultJSON string
+	Source     string
+}
+
 // UIDetail handles GET /evals/{eval_id}.
 func (h *EvalHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("eval_id")
@@ -264,16 +313,122 @@ func (h *EvalHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	sessions, err := h.repo.ListSessions(r.Context(), id)
+	rows, err := h.repo.ListSessions(r.Context(), id)
 	if err != nil {
 		Error(w, err)
 		return
+	}
+	sessions := make([]evalSessionView, 0, len(rows))
+	for _, s := range rows {
+		sessions = append(sessions, evalSessionView{
+			EvalSession: s,
+			Judgments:   parseJudgments(s.Judgments),
+			Turns:       parseTranscript(s.Transcript),
+		})
 	}
 	renderTemplate(w, h.detailTmpl, "layout", map[string]any{
 		"Active":   "evals",
 		"Eval":     e,
 		"Sessions": sessions,
 	})
+}
+
+// parseJudgments decodes the JSONB judgments column into a display slice.
+// Tolerates malformed rows — returns nil rather than erroring the page.
+func parseJudgments(raw []byte) []judgmentView {
+	if len(raw) == 0 {
+		return nil
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return nil
+	}
+	out := make([]judgmentView, 0, len(arr))
+	for _, m := range arr {
+		out = append(out, judgmentView{
+			MessageID: asString(m["message_id"]),
+			Criterion: asString(m["criterion"]),
+			Passed:    asBool(m["passed"]),
+			Reason:    asString(m["reason"]),
+		})
+	}
+	return out
+}
+
+// parseTranscript decodes the JSONB transcript column into a display slice.
+// Each turn extracts a best-effort text summary (Anthropic content-block
+// arrays get concatenated to their text-typed blocks) and lifts tool_calls
+// out for compact rendering.
+func parseTranscript(raw []byte) []turnView {
+	if len(raw) == 0 {
+		return nil
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return nil
+	}
+	out := make([]turnView, 0, len(arr))
+	for _, m := range arr {
+		v := turnView{
+			Role: asString(m["role"]),
+			Text: extractText(m["content"]),
+		}
+		if calls, ok := m["tool_calls"].([]any); ok {
+			for _, c := range calls {
+				cm, _ := c.(map[string]any)
+				if cm == nil {
+					continue
+				}
+				args, _ := json.Marshal(cm["args"])
+				result, _ := json.Marshal(cm["result"])
+				v.ToolCalls = append(v.ToolCalls, turnToolCallView{
+					Name:       asString(cm["name"]),
+					ArgsJSON:   string(args),
+					ResultJSON: string(result),
+					Source:     asString(cm["source"]),
+				})
+			}
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// extractText coerces a content field into human-readable text. Handles:
+// plain string, Anthropic content-block array ({type:text,text:...}), or
+// anything else via best-effort JSON dump.
+func extractText(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []any:
+		var parts []string
+		for _, item := range t {
+			blk, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if asString(blk["type"]) == "text" {
+				parts = append(parts, asString(blk["text"]))
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+func asString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+func asBool(v any) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return false
 }
 
 // UINewModal handles GET /agent_versions/{version_id}/evals/new.

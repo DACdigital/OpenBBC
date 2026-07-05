@@ -19,6 +19,14 @@
     <div class="agent-meta-item"><dt>Criteria</dt><dd>{{with .Eval.PassedCriteria}}{{.}}{{else}}—{{end}}{{with .Eval.TotalCriteria}}/{{.}}{{end}}</dd></div>
     <div class="agent-meta-item"><dt>Created</dt><dd>{{.Eval.CreatedAt.Format "2006-01-02 15:04"}}</dd></div>
     {{if .Eval.CompletedAt}}<div class="agent-meta-item"><dt>Completed</dt><dd>{{.Eval.CompletedAt.Format "2006-01-02 15:04"}}</dd></div>{{end}}
+    <div class="agent-meta-item"><dt>Tool mocking</dt><dd>{{if .Eval.MockMCPTools}}mocked{{else}}real MCPs{{end}}</dd></div>
+    {{if and (not .Eval.MockMCPTools) .Eval.HeaderOverrides}}
+      <div class="agent-meta-item"><dt>Header overrides</dt><dd>
+        <ul class="eval-header-list">
+          {{range $k, $v := .Eval.HeaderOverrides}}<li><code>{{$k}}</code>: <code>{{$v}}</code></li>{{end}}
+        </ul>
+      </dd></div>
+    {{end}}
   </dl>
 
   {{if .Eval.ErrorMessage}}
@@ -38,17 +46,65 @@
         <tr>
           <td>
             <details>
-              <summary>
-                {{if .SessionTitle}}
-                  <a href="/agent_versions/{{.AgentVersionID}}/chat/{{.SessionID}}">{{.SessionTitle}}</a>
-                {{else}}
-                  <a href="/agent_versions/{{.AgentVersionID}}/chat/{{.SessionID}}">{{.SessionID}}</a>
-                {{end}}
-              </summary>
-              <p><strong>Transcript:</strong></p>
-              <pre class="json-preview">{{printf "%s" .Transcript}}</pre>
-              <p><strong>Judgments:</strong></p>
-              <pre class="json-preview">{{printf "%s" .Judgments}}</pre>
+              <summary class="eval-session-summary">{{if .SessionTitle}}{{.SessionTitle}}{{else}}{{.SessionID}}{{end}}</summary>
+
+              <div class="eval-session-actions">
+                <a class="btn-small" href="/agent_versions/{{.AgentVersionID}}/chat/{{.SessionID}}">Open original chat ↗</a>
+              </div>
+
+              <h3 class="eval-subhead">Judgments</h3>
+              {{if .Judgments}}
+                <table class="data-table judgments-table">
+                  <thead><tr>
+                    <th class="col-pass">Result</th>
+                    <th>Criterion</th>
+                    <th>Judge reason</th>
+                  </tr></thead>
+                  <tbody>
+                  {{range .Judgments}}
+                    <tr>
+                      <td class="col-pass">
+                        {{if .Passed}}
+                          <span class="badge badge-deployed">PASS</span>
+                        {{else}}
+                          <span class="badge badge-failed">FAIL</span>
+                        {{end}}
+                      </td>
+                      <td class="crit-text">{{.Criterion}}</td>
+                      <td class="reason-text">{{.Reason}}</td>
+                    </tr>
+                  {{end}}
+                  </tbody>
+                </table>
+              {{else}}
+                <p class="empty-state">No judgments recorded.</p>
+              {{end}}
+
+              <h3 class="eval-subhead">Transcript</h3>
+              {{if .Turns}}
+                <div class="eval-transcript">
+                  {{range .Turns}}
+                    <div class="eval-turn eval-turn-{{.Role}}">
+                      <div class="eval-turn-role">{{.Role}}</div>
+                      {{if .Text}}<div class="eval-turn-text">{{.Text}}</div>{{end}}
+                      {{if .ToolCalls}}
+                        {{range .ToolCalls}}
+                          <div class="eval-tool-call">
+                            <div class="eval-tool-call-head">
+                              <span class="eval-tool-name">{{.Name}}</span>
+                              <span class="eval-tool-source">({{.Source}})</span>
+                            </div>
+                            <div class="eval-tool-args"><strong>args:</strong> <code>{{.ArgsJSON}}</code></div>
+                            <div class="eval-tool-result"><strong>result:</strong> <code>{{.ResultJSON}}</code></div>
+                          </div>
+                        {{end}}
+                      {{end}}
+                    </div>
+                  {{end}}
+                </div>
+              {{else}}
+                <p class="empty-state">No transcript recorded.</p>
+              {{end}}
             </details>
           </td>
           <td class="col-count">{{.PassedCriteria}}/{{.TotalCriteria}}</td>

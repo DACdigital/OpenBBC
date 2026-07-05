@@ -31,7 +31,13 @@ func (f *fakeStore) GetFeedbackForSession(_ context.Context, sid string) (map[st
 
 func TestExportBuild_ShapesPayload(t *testing.T) {
 	fs := &fakeStore{
-		eval:   &types.Eval{ID: "e-1", AgentVersionID: "av-1", DatasetVersionID: "dv-1"},
+		eval: &types.Eval{
+			ID:               "e-1",
+			AgentVersionID:   "av-1",
+			DatasetVersionID: "dv-1",
+			MockMCPTools:     false,
+			HeaderOverrides:  map[string]string{"X-Tenant": "acme"},
+		},
 		bundle: []byte(`{"main_prompt":"hi","tools":[]}`),
 		refs: []*types.DatasetSessionRef{
 			{SessionID: "s-1", SessionTitle: "greet flow"},
@@ -54,6 +60,12 @@ func TestExportBuild_ShapesPayload(t *testing.T) {
 	}
 	if got.SchemaVersion != "eval-input-v1" || got.EvalID != "e-1" {
 		t.Errorf("bad header: %+v", got)
+	}
+	if got.MockMCPTools {
+		t.Errorf("MockMCPTools = true, want false (mirror eval config)")
+	}
+	if got.HeaderOverrides["X-Tenant"] != "acme" {
+		t.Errorf("HeaderOverrides = %#v, want X-Tenant=acme", got.HeaderOverrides)
 	}
 	if len(got.DatasetVersion.Sessions) != 1 || got.DatasetVersion.Sessions[0].SessionID != "s-1" {
 		t.Errorf("session ref lost: %+v", got.DatasetVersion.Sessions)
@@ -112,10 +124,16 @@ func TestExportBuild_HoistsToolCallsFromContentBlocks(t *testing.T) {
 	if tc.Name != "search" {
 		t.Errorf("tool name = %q, want 'search'", tc.Name)
 	}
-	if string(tc.Args) != `{"q":"cats"}` {
-		t.Errorf("tool args = %s, want {\"q\":\"cats\"}", string(tc.Args))
+	// Args + Result are decoded to native structures (map[string]any) so
+	// YAML encodes them as blocks, not byte-arrays.
+	args, ok := tc.Args.(map[string]any)
+	if !ok || args["q"] != "cats" {
+		t.Errorf("tool args = %#v, want map with q=cats", tc.Args)
 	}
-	if string(tc.Result) != `{"hits":42}` {
-		t.Errorf("tool result = %s, want {\"hits\":42}", string(tc.Result))
+	result, ok := tc.Result.(map[string]any)
+	if !ok {
+		t.Errorf("tool result not a map: %#v", tc.Result)
+	} else if hits, _ := result["hits"].(float64); hits != 42 {
+		t.Errorf("tool result hits = %v, want 42", result["hits"])
 	}
 }
