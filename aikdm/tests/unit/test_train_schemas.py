@@ -18,6 +18,11 @@ def test_section_patch_requires_non_empty_new():
         SectionPatch(section_id="main_prompt", new="", rationale="x")
 
 
+def test_section_patch_rejects_whitespace_only_new():
+    with pytest.raises(ValidationError):
+        SectionPatch(section_id="main_prompt", new="   ", rationale="x")
+
+
 def test_section_patch_forbids_extra_fields():
     with pytest.raises(ValidationError):
         SectionPatch(section_id="main_prompt", new="hi", rationale="x", extra="nope")

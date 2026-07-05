@@ -17,7 +17,7 @@ class SectionPatch(BaseModel):
     @classmethod
     def _new_non_empty(cls, v: str) -> str:
         if not v.strip():
-            raise ValueError("SectionPatch.new must be non-empty")
+            raise ValueError("must be non-empty")
         return v
 
 
