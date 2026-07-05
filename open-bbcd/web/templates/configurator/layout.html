@@ -13,6 +13,10 @@
         <form method="post" action="/agent_versions/{{.VersionID}}/chat/sessions" style="display:inline">
           <button type="submit" class="btn-primary">Run</button>
         </form>
+        <button class="btn-secondary"
+                hx-get="/agent_versions/{{.VersionID}}/evals/new"
+                hx-target="body" hx-swap="beforeend">Evaluate</button>
+        <a href="/agent_versions/{{.VersionID}}/evals" class="btn-secondary">View evals</a>
       {{else}}
         <button type="button" class="btn-secondary" disabled
           style="opacity:0.4;cursor:not-allowed"
@@ -20,6 +24,10 @@
         <button type="button" class="btn-primary" disabled
           style="opacity:0.4;cursor:not-allowed"
           title="No bundle generated for this version yet">Run</button>
+        <button type="button" class="btn-secondary" disabled
+          style="opacity:0.4;cursor:not-allowed"
+          title="No bundle generated for this version yet">Evaluate</button>
+        <a href="/agent_versions/{{.VersionID}}/evals" class="btn-secondary">View evals</a>
       {{end}}
       {{if eq .AgentStatus "READY"}}
         <button class="btn-primary"
