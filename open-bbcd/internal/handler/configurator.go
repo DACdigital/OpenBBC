@@ -32,7 +32,7 @@ type ConfigStore interface {
 	GetFlowMapConfig(ctx context.Context, versionID string) (cfg []byte, parseErr string, err error)
 	UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error
 	UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error
-	CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error)
+	CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error)
 	Delete(ctx context.Context, versionID string) error
 }
 
@@ -540,11 +540,11 @@ func diffPrompts(current, submitted types.Prompts) []promptDiffEntry {
 	return out
 }
 
-// SavePrompts handles the prompts editor's "Save as new version" submit
-// (called from the confirmation modal's Confirm button). Forks a new
-// DRAFT version with MCP attachments copied forward, then 303-redirects
-// to the new version's Prompts tab.
-func (h *ConfiguratorHandler) SavePrompts(w http.ResponseWriter, r *http.Request) {
+// savePromptsAsNewVersion is the shared body for SavePrompts (DRAFT) and
+// LandPrompts (READY). Parses the form, forks a new version chained via
+// parent_version_id (with MCP attachments copied forward), and 303-redirects
+// to the new version's prompts tab.
+func (h *ConfiguratorHandler) savePromptsAsNewVersion(w http.ResponseWriter, r *http.Request, status types.AgentStatus) {
 	versionID := r.PathValue("version_id")
 	submitted, err := parsePromptsForm(r)
 	if err != nil {
@@ -556,12 +556,28 @@ func (h *ConfiguratorHandler) SavePrompts(w http.ResponseWriter, r *http.Request
 		Error(w, err)
 		return
 	}
-	newID, err := h.repo.CreateVersionFromPrompts(r.Context(), versionID, promptsJSON)
+	newID, err := h.repo.CreateVersionFromPrompts(r.Context(), versionID, promptsJSON, status)
 	if err != nil {
 		Error(w, err)
 		return
 	}
 	http.Redirect(w, r, "/agent_versions/"+newID+"/configure/prompts", http.StatusSeeOther)
+}
+
+// SavePrompts handles POST /agent_versions/{version_id}/configure/prompts —
+// the prompts editor's "Save as new version" flow. New version is DRAFT
+// because the user may still want to iterate before deploying.
+func (h *ConfiguratorHandler) SavePrompts(w http.ResponseWriter, r *http.Request) {
+	h.savePromptsAsNewVersion(w, r, types.AgentStatusDraft)
+}
+
+// LandPrompts handles POST /agent_versions/{version_id}/configure/prompts/land
+// — used by the training glue script after `aikdm train-agent` has produced
+// a supervised, y/N-confirmed trained bundle. New version is READY because
+// the training loop already scored the bundle and the operator explicitly
+// opted in; a manual finalize step here would be redundant.
+func (h *ConfiguratorHandler) LandPrompts(w http.ResponseWriter, r *http.Request) {
+	h.savePromptsAsNewVersion(w, r, types.AgentStatusReady)
 }
 
 // DeleteConfirm renders the version-delete confirmation modal fragment.

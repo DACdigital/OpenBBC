@@ -9,8 +9,8 @@
 #   3. Print initial→final score delta + per-epoch summary.
 #   4. Prompt: create a new agent version from the trained bundle? y/N.
 #   5. On yes: POST the bundle's prompts to
-#         POST /agent_versions/{parent}/configure/prompts
-#      which forks a new DRAFT version chained via parent_version_id
+#         POST /agent_versions/{parent}/configure/prompts/land
+#      which forks a new READY version chained via parent_version_id
 #      and copies MCP attachments forward. Prints the new version URL.
 #
 # Bundle + report are left in the temp dir path printed at the end so
@@ -101,7 +101,7 @@ case "$ans" in
     *) echo "skipped."; exit 0;;
 esac
 
-echo "→ posting bundle prompts to openbbcd (forks new version from $parent_version_id)"
+echo "→ landing trained bundle in openbbcd (forks a READY version from $parent_version_id)"
 new_url=$(
     cd "$root/aikdm" && uv run python <<PY
 import sys, yaml, urllib.parse, urllib.request, urllib.error
@@ -117,7 +117,7 @@ for skill in b.get("skills") or []:
         form.append((f"skill_prompt[{name}]", prompt))
 
 body = urllib.parse.urlencode(form).encode("utf-8")
-url = "$OPENBBCD_URL/agent_versions/$parent_version_id/configure/prompts"
+url = "$OPENBBCD_URL/agent_versions/$parent_version_id/configure/prompts/land"
 
 # openbbcd returns 303 → we want the Location, not the followed page.
 class Grab(urllib.request.HTTPRedirectHandler):

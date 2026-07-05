@@ -309,9 +309,12 @@ func (r *AgentVersionRepository) SetPrompts(ctx context.Context, versionID strin
 }
 
 // CreateVersionFromPrompts forks a new agent_versions row from the parent
-// version. The new row carries the submitted prompts and starts in DRAFT
-// status. parent_version_id links the version chain; agent_id stays the
-// same (architecture is shared agent-wide).
+// version. The new row carries the submitted prompts and is created with the
+// caller-supplied status — SavePrompts passes AgentStatusDraft (the user may
+// still iterate before deploying) and LandPrompts passes AgentStatusReady
+// (training is a supervised, y/N-gated action that already scored the bundle).
+// parent_version_id links the version chain; agent_id stays the same
+// (architecture is shared agent-wide).
 //
 // MCP attachments are copied forward in the same transaction so the new
 // version inherits its predecessor's per-version wiring without manual
@@ -319,7 +322,7 @@ func (r *AgentVersionRepository) SetPrompts(ctx context.Context, versionID strin
 // copying.
 //
 // Returns the new version's id.
-func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error) {
+func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
@@ -339,9 +342,9 @@ func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, p
 	var newID string
 	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO agent_versions (agent_id, parent_version_id, status, prompts)
-		VALUES ($1::uuid, $2::uuid, 'DRAFT', $3::jsonb)
+		VALUES ($1::uuid, $2::uuid, $4::text, $3::jsonb)
 		RETURNING id::text
-	`, agentID, parentVersionID, promptsJSON).Scan(&newID); err != nil {
+	`, agentID, parentVersionID, promptsJSON, string(status)).Scan(&newID); err != nil {
 		return "", fmt.Errorf("insert new version: %w", err)
 	}
 

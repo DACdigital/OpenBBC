@@ -51,8 +51,8 @@ func (s *configStore) UpdateFlowMapConfig(ctx context.Context, versionID string,
 	return s.versions.UpdateFlowMapConfig(ctx, versionID, cfg)
 }
 
-func (s *configStore) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error) {
-	return s.versions.CreateVersionFromPrompts(ctx, parentVersionID, promptsJSON)
+func (s *configStore) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
+	return s.versions.CreateVersionFromPrompts(ctx, parentVersionID, promptsJSON, status)
 }
 
 func (s *configStore) UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error {
@@ -211,6 +211,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/prompts", configuratorHandler.Prompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts/confirm", configuratorHandler.ConfirmSavePrompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts", configuratorHandler.SavePrompts)
+	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts/land", configuratorHandler.LandPrompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/new", configuratorHandler.SkillNew)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/skills", configuratorHandler.SkillCreate)
