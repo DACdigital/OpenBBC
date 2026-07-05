@@ -95,3 +95,39 @@ func (a *evalStoreAdapter) GetMessages(ctx context.Context, sessionID string) ([
 func (a *evalStoreAdapter) GetFeedbackForSession(ctx context.Context, sessionID string) (map[string]*types.ChatMessageFeedback, error) {
 	return a.feedback.GetForSession(ctx, sessionID)
 }
+
+// GetToolBackends resolves each wired endpoint on the agent version's
+// agent to its HTTP-endpoint backend config (base_url + default_headers).
+// MCP-client backends are filtered out. Rows with malformed config JSON
+// are skipped rather than aborting the whole eval.
+func (a *evalStoreAdapter) GetToolBackends(ctx context.Context, agentVersionID string) (map[string]eval.InputToolBackend, error) {
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT aeb.endpoint_id, tb.config
+		FROM agent_versions av
+		JOIN agent_endpoint_backend aeb ON aeb.agent_id = av.agent_id
+		JOIN tool_backends tb ON tb.id = aeb.backend_id
+		WHERE av.id = $1::uuid AND tb.kind = 'http_endpoint'
+	`, agentVersionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]eval.InputToolBackend{}
+	for rows.Next() {
+		var endpointID string
+		var raw []byte
+		if err := rows.Scan(&endpointID, &raw); err != nil {
+			return nil, err
+		}
+		var cfg types.HTTPBackendConfig
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			continue
+		}
+		out[endpointID] = eval.InputToolBackend{
+			BaseURL:        cfg.BaseURL,
+			DefaultHeaders: cfg.DefaultHeaders,
+		}
+	}
+	return out, rows.Err()
+}
