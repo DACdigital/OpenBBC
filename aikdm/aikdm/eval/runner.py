@@ -10,7 +10,6 @@ from aikdm.eval import judge as judge_mod
 from aikdm.eval import simulator as sim_mod
 from aikdm.eval import target as target_mod
 from aikdm.eval.schemas import InputSession, ResultSession
-from aikdm.eval.tool_mock import ToolMock
 
 
 @dataclass
@@ -29,11 +28,11 @@ async def run_session(
     simulator_agent,
     judge_agent,
     target_model: str,
+    tool_caller,
 ) -> SessionOutcome:
     ref_transcript = [m.model_dump() for m in session.transcript]
     system_prompt = target_mod.build_system_prompt(bundle)
-    tools_spec, schema_by_name = target_mod.build_tool_specs(bundle)
-    tool_mock = ToolMock(ref_transcript, schema_by_name)
+    tools_spec, _ = target_mod.build_tool_specs(bundle)
 
     simulated: list[dict[str, Any]] = []
     max_user_turns = _count_user_turns(ref_transcript) + 4
@@ -55,7 +54,7 @@ async def run_session(
             system_prompt=system_prompt,
             tools_spec=tools_spec,
             conversation=simulated,
-            tool_mock=tool_mock,
+            tool_caller=tool_caller,
         )
         tokens_in += t.tokens_in
         tokens_out += t.tokens_out

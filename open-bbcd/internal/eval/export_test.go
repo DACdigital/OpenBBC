@@ -10,11 +10,12 @@ import (
 )
 
 type fakeStore struct {
-	eval     *types.Eval
-	bundle   []byte
-	refs     []*types.DatasetSessionRef
-	msgs     map[string][]*types.ChatMessage
-	feedback map[string]map[string]*types.ChatMessageFeedback
+	eval         *types.Eval
+	bundle       []byte
+	refs         []*types.DatasetSessionRef
+	msgs         map[string][]*types.ChatMessage
+	feedback     map[string]map[string]*types.ChatMessageFeedback
+	toolBackends map[string]InputToolBackend
 }
 
 func (f *fakeStore) GetEval(_ context.Context, _ string) (*types.Eval, error) { return f.eval, nil }
@@ -27,6 +28,9 @@ func (f *fakeStore) GetMessages(_ context.Context, sid string) ([]*types.ChatMes
 }
 func (f *fakeStore) GetFeedbackForSession(_ context.Context, sid string) (map[string]*types.ChatMessageFeedback, error) {
 	return f.feedback[sid], nil
+}
+func (f *fakeStore) GetToolBackends(_ context.Context, _ string) (map[string]InputToolBackend, error) {
+	return f.toolBackends, nil
 }
 
 func TestExportBuild_ShapesPayload(t *testing.T) {
@@ -135,5 +139,53 @@ func TestExportBuild_HoistsToolCallsFromContentBlocks(t *testing.T) {
 		t.Errorf("tool result not a map: %#v", tc.Result)
 	} else if hits, _ := result["hits"].(float64); hits != 42 {
 		t.Errorf("tool result hits = %v, want 42", result["hits"])
+	}
+}
+
+func TestExportBuild_IncludesToolBackends_WhenMockDisabled(t *testing.T) {
+	fs := &fakeStore{
+		eval: &types.Eval{
+			ID:               "e-3",
+			AgentVersionID:   "av-1",
+			DatasetVersionID: "dv-1",
+			MockMCPTools:     false,
+		},
+		bundle: []byte(`{"main_prompt":"hi","tools":[]}`),
+		toolBackends: map[string]InputToolBackend{
+			"products.list": {
+				BaseURL:        "http://localhost:3001",
+				DefaultHeaders: map[string]string{"Authorization": "Bearer tok_test_abc123"},
+			},
+		},
+	}
+	got, err := Build(context.Background(), fs, "e-3")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(got.ToolBackends) != 1 {
+		t.Fatalf("ToolBackends size = %d, want 1", len(got.ToolBackends))
+	}
+	if got.ToolBackends["products.list"].BaseURL != "http://localhost:3001" {
+		t.Errorf("base_url = %q", got.ToolBackends["products.list"].BaseURL)
+	}
+	if got.ToolBackends["products.list"].DefaultHeaders["Authorization"] != "Bearer tok_test_abc123" {
+		t.Errorf("default_headers lost auth: %+v", got.ToolBackends["products.list"].DefaultHeaders)
+	}
+}
+
+func TestExportBuild_SkipsToolBackends_WhenMockEnabled(t *testing.T) {
+	fs := &fakeStore{
+		eval:   &types.Eval{ID: "e-4", AgentVersionID: "av-1", DatasetVersionID: "dv-1", MockMCPTools: true},
+		bundle: []byte(`{"main_prompt":"hi","tools":[]}`),
+		toolBackends: map[string]InputToolBackend{
+			"should-not-appear": {BaseURL: "http://x", DefaultHeaders: nil},
+		},
+	}
+	got, err := Build(context.Background(), fs, "e-4")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got.ToolBackends != nil {
+		t.Errorf("ToolBackends = %v, want nil (mock=true)", got.ToolBackends)
 	}
 }

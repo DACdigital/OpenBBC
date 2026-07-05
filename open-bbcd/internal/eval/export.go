@@ -18,12 +18,21 @@ import (
 // per-backend layout intentionally — an eval targets a single agent
 // version, so a flat set of overrides is sufficient).
 type InputPayload struct {
-	SchemaVersion   string              `yaml:"schema_version"`
-	EvalID          string              `yaml:"eval_id"`
-	MockMCPTools    bool                `yaml:"mock_mcp_tools"`
-	HeaderOverrides map[string]string   `yaml:"header_overrides,omitempty"`
-	AgentVersion    InputAgentVersion   `yaml:"agent_version"`
-	DatasetVersion  InputDatasetVersion `yaml:"dataset_version"`
+	SchemaVersion   string                      `yaml:"schema_version"`
+	EvalID          string                      `yaml:"eval_id"`
+	MockMCPTools    bool                        `yaml:"mock_mcp_tools"`
+	HeaderOverrides map[string]string           `yaml:"header_overrides,omitempty"`
+	ToolBackends    map[string]InputToolBackend `yaml:"tool_backends,omitempty"`
+	AgentVersion    InputAgentVersion           `yaml:"agent_version"`
+	DatasetVersion  InputDatasetVersion         `yaml:"dataset_version"`
+}
+
+// InputToolBackend carries per-tool backend wiring so aikdm can make real
+// HTTP calls when mock_mcp_tools=false. Keyed by endpoint_id in the payload.
+// Only populated when the eval's MockMCPTools is false.
+type InputToolBackend struct {
+	BaseURL        string            `yaml:"base_url"`
+	DefaultHeaders map[string]string `yaml:"default_headers,omitempty"`
 }
 
 type InputAgentVersion struct {
@@ -72,6 +81,10 @@ type Store interface {
 	GetSessionRefs(ctx context.Context, datasetVersionID string) ([]*types.DatasetSessionRef, error)
 	GetMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error)
 	GetFeedbackForSession(ctx context.Context, sessionID string) (map[string]*types.ChatMessageFeedback, error)
+	// GetToolBackends returns endpoint_id → backend info for every tool on
+	// the agent version's agent that has a wired HTTP-endpoint backend.
+	// Called only when the eval has MockMCPTools=false; may return nil.
+	GetToolBackends(ctx context.Context, agentVersionID string) (map[string]InputToolBackend, error)
 }
 
 // Build assembles the full payload for the given eval id.
@@ -209,11 +222,19 @@ func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
 			Criteria:   criteria,
 		})
 	}
+	var toolBackends map[string]InputToolBackend
+	if !e.MockMCPTools {
+		toolBackends, err = s.GetToolBackends(ctx, e.AgentVersionID)
+		if err != nil {
+			return nil, fmt.Errorf("read tool backends: %w", err)
+		}
+	}
 	return &InputPayload{
 		SchemaVersion:   "eval-input-v1",
 		EvalID:          e.ID,
 		MockMCPTools:    e.MockMCPTools,
 		HeaderOverrides: e.HeaderOverrides,
+		ToolBackends:    toolBackends,
 		AgentVersion: InputAgentVersion{
 			ID:     e.AgentVersionID,
 			Bundle: bundle,

@@ -16,7 +16,10 @@ from aikdm.config import Settings
 from aikdm.eval import judge as judge_mod
 from aikdm.eval import runner as runner_mod
 from aikdm.eval import simulator as sim_mod
+from aikdm.eval import target as target_mod
 from aikdm.eval.schemas import AikdmMeta, EvalInput, EvalResult, ResultSession
+from aikdm.eval.tool_mock import ToolMock
+from aikdm.eval.tool_real import RealHTTPToolCaller
 
 
 async def run_eval(inp: EvalInput, settings: Settings) -> EvalResult:
@@ -29,6 +32,26 @@ async def run_eval(inp: EvalInput, settings: Settings) -> EvalResult:
 
     sem = asyncio.Semaphore(settings.parallelism)
 
+    # Choose the tool caller once. ToolMock's replay index is keyed on the
+    # session transcript, so we build it per-session. RealHTTPToolCaller is
+    # transcript-independent — one instance shared across all sessions.
+    if inp.mock_mcp_tools:
+        _, schema_by_name = target_mod.build_tool_specs(inp.agent_version.bundle)
+
+        def make_caller(session):
+            ref = [m.model_dump() for m in session.transcript]
+            return ToolMock(ref, schema_by_name)
+    else:
+        backends = {name: b.model_dump() for name, b in inp.tool_backends.items()}
+        real_caller = RealHTTPToolCaller(
+            bundle=inp.agent_version.bundle,
+            tool_backends=backends,
+            header_overrides=dict(inp.header_overrides),
+        )
+
+        def make_caller(_session):
+            return real_caller
+
     async def one(session):
         async with sem:
             try:
@@ -38,6 +61,7 @@ async def run_eval(inp: EvalInput, settings: Settings) -> EvalResult:
                     simulator_agent=simulator_agent,
                     judge_agent=judge_agent,
                     target_model=target_model_str,
+                    tool_caller=make_caller(session),
                 )
             except Exception as e:
                 # Downgrade single-session error to a zero-score outcome
