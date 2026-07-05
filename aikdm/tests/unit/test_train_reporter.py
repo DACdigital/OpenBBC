@@ -36,7 +36,7 @@ def test_write_report_creates_both_json_and_csv(tmp_path: Path):
     assert j["schema_version"] == "training-report-v1"
     assert j["epochs"][0]["promoted"] is True
 
-    with open(tmp_path / "training-report.csv") as f:
+    with open(tmp_path / "training-report.csv", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert len(rows) == 2
     assert rows[0]["epoch"] == "1"
@@ -46,7 +46,7 @@ def test_write_report_creates_both_json_and_csv(tmp_path: Path):
 
 def test_write_report_csv_has_expected_columns(tmp_path: Path):
     write_report(_report([]), tmp_path)
-    with open(tmp_path / "training-report.csv") as f:
+    with open(tmp_path / "training-report.csv", encoding="utf-8") as f:
         reader = csv.reader(f)
         header = next(reader)
     assert header == [

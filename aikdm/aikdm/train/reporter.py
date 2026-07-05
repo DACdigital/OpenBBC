@@ -6,7 +6,7 @@ from __future__ import annotations
 import csv
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -39,7 +39,7 @@ def write_report(report: TrainingReport, out_dir: Path) -> None:
 @dataclass
 class ProgressEmitter:
     """NDJSON line emitter — one JSON object per line, one line per event."""
-    sink: TextIO = sys.stderr
+    sink: TextIO = field(default_factory=lambda: sys.stderr)
 
     def __call__(self, event: str, **fields: Any) -> None:
         obj: dict[str, Any] = {"event": event}
