@@ -36,6 +36,8 @@ def apply_patches(bundle: dict[str, Any], patches: list[SectionPatch]) -> dict[s
             continue
         if p.section_id.startswith("skill.") and p.section_id.endswith(".prompt"):
             skill_name = p.section_id[len("skill.") : -len(".prompt")]
+            if not skill_name:
+                raise PatchError(f"malformed section_id {p.section_id!r}")
             skill = _find_skill(out, skill_name)
             if skill is None:
                 raise PatchError(f"unknown skill {skill_name!r} in section_id {p.section_id!r}")

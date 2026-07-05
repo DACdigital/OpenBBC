@@ -64,6 +64,13 @@ def test_apply_patches_unknown_skill_raises():
         ])
 
 
+def test_apply_patches_malformed_skill_section_raises():
+    with pytest.raises(PatchError, match="malformed"):
+        apply_patches(_bundle(), [
+            SectionPatch(section_id="skill.prompt", new="x", rationale="x"),
+        ])
+
+
 def test_apply_patches_empty_list_is_deep_copy():
     b = _bundle()
     out = apply_patches(b, [])
