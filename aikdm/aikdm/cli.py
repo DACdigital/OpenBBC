@@ -22,6 +22,7 @@ from aikdm.train.reporter import ProgressEmitter as TrainProgressEmitter, write_
 from aikdm.loader import (
     InputIOError,
     InputValidationError,
+    _BlockStyleDumper,
     load_flow_map_config,
     load_prompt_schema,
     write_bundle,
@@ -188,12 +189,20 @@ def train_agent(input_path: Path, epochs: int, patience: int, out_dir: Path) -> 
         _print_error("llm_unavailable", str(e))
         sys.exit(3)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    bundle_path = out_dir / "bundle.yaml"
-    bundle_path.write_text(_yaml.safe_dump(final_bundle, sort_keys=False), encoding="utf-8")
-    # Fill in the bundle path now that we know it.
-    report = report.model_copy(update={"final_bundle_path": str(bundle_path)})
-    write_report(report, out_dir)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        bundle_path = out_dir / "bundle.yaml"
+        bundle_path.write_text(
+            _yaml.dump(final_bundle, Dumper=_BlockStyleDumper, sort_keys=False,
+                       default_flow_style=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        # Fill in the bundle path now that we know it.
+        report = report.model_copy(update={"final_bundle_path": str(bundle_path)})
+        write_report(report, out_dir)
+    except OSError as e:
+        _print_error("output_io", str(e))
+        sys.exit(2)
 
     emitter("training_done", initial_score=report.initial_score,
             final_score=report.final_score,

@@ -88,6 +88,7 @@ def test_train_agent_produces_bundle_and_report(monkeypatch, tmp_path: Path):
     assert report["final_score"] == 0.7
     assert report["stopped_reason"] == "max_epochs"
     assert report["epochs"][0]["promoted"] is True
+    assert report["final_bundle_path"].endswith("bundle.yaml")
 
     # CSV report has one row per epoch with the right columns.
     with open(out_dir / "training-report.csv", encoding="utf-8") as f:
