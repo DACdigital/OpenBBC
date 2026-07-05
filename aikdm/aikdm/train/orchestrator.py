@@ -53,12 +53,27 @@ async def run_training(
         started = time.time()
         baseline_at_epoch = best_score
 
-        turn = await propose_patches(
-            agent=teacher_agent,
-            bundle=best_bundle,
-            eval_result=best_result.model_dump(),
-            tried=tried,
-        )
+        try:
+            turn = await propose_patches(
+                agent=teacher_agent,
+                bundle=best_bundle,
+                eval_result=best_result.model_dump(),
+                tried=tried,
+            )
+        except Exception as e:
+            epoch_records.append(EpochRecord(
+                epoch=epoch, baseline_score=baseline_at_epoch,
+                candidate_score=baseline_at_epoch, promoted=False,
+                patches=[], teacher_notes="",
+                duration_seconds=time.time() - started,
+                tokens_in=0, tokens_out=0,
+                error=f"propose_patches: {e}",
+            ))
+            no_improve_streak += 1
+            emit("epoch_done", epoch=epoch, promoted=False, error=str(e))
+            if no_improve_streak >= patience:
+                stopped_reason = "plateau"; break
+            continue
         patches = turn.output.patches
         notes = turn.output.focus_notes
         emit("teacher_done", epoch=epoch, patches_count=len(patches), focus_notes=notes)

@@ -18,6 +18,10 @@ from aikdm.config import ConfigError, load_settings
 from aikdm.eval.orchestrator import run_eval
 from aikdm.eval.schemas import EvalInput
 from aikdm.train.orchestrator import run_training
+# Alias avoids collision with aikdm.progress.ProgressEmitter used by generate-agent.
+# The two emitters have different interfaces today (.emit vs __call__, timestamp
+# vs no timestamp). Consolidating them is tracked as a follow-up — see the
+# agent-finetuning design doc's "follow-ups" section.
 from aikdm.train.reporter import ProgressEmitter as TrainProgressEmitter, write_report
 from aikdm.loader import (
     InputIOError,
