@@ -49,10 +49,19 @@ class InputDatasetVersion(BaseModel):
     sessions: list[InputSession] = Field(default_factory=list)
 
 
+class InputToolBackend(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    base_url: str
+    default_headers: dict[str, str] = Field(default_factory=dict)
+
+
 class EvalInput(BaseModel):
     model_config = ConfigDict(extra="ignore")
     schema_version: Literal["eval-input-v1"]
     eval_id: str
+    mock_mcp_tools: bool = True
+    header_overrides: dict[str, str] = Field(default_factory=dict)
+    tool_backends: dict[str, InputToolBackend] = Field(default_factory=dict)
     agent_version: InputAgentVersion
     dataset_version: InputDatasetVersion
 
