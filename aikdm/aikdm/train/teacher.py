@@ -93,7 +93,7 @@ Good patch:
 </example>
 
 <constraints>
-- Emit 1-3 patches per epoch. Never more.
+- Emit 0-3 patches per epoch. Never more.
 - Each patch fully replaces ONE section — output the entire new section
   text, including XML sub-tags. Do not output diffs or partial fragments.
 - Only edit sections whose content plausibly caused a failing judgment.
@@ -198,7 +198,7 @@ def _render_sections(bundle: dict[str, Any]) -> str:
                 if s.get("name") == name:
                     body = str(s.get("prompt", ""))
                     break
-        out.append(f'  <section id="{sid}">\n{body}\n  </section>')
+        out.append(f'  <section id="{sid}">\n```\n{body}\n```\n  </section>')
     return "\n".join(out)
 
 
