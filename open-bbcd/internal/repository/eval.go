@@ -16,24 +16,35 @@ type EvalRepository struct{ db *sql.DB }
 func NewEvalRepository(db *sql.DB) *EvalRepository { return &EvalRepository{db: db} }
 
 const evalColumns = `id::text, agent_version_id::text, dataset_version_id::text, status,
+	mock_mcp_tools, header_overrides,
 	score, total_criteria, passed_criteria, error_message, aikdm_meta,
 	created_at, started_at, completed_at`
 
 func scanEval(s scanner) (*types.Eval, error) {
 	e := &types.Eval{}
 	var status string
+	var mockMCP bool
+	var headerRaw []byte
 	var score sql.NullFloat64
 	var total, passed sql.NullInt64
 	var startedAt, completedAt sql.NullTime
 	var meta []byte
 	if err := s.Scan(
 		&e.ID, &e.AgentVersionID, &e.DatasetVersionID, &status,
+		&mockMCP, &headerRaw,
 		&score, &total, &passed, &e.ErrorMessage, &meta,
 		&e.CreatedAt, &startedAt, &completedAt,
 	); err != nil {
 		return nil, err
 	}
 	e.Status = types.EvalStatus(status)
+	e.MockMCPTools = mockMCP
+	if len(headerRaw) > 0 {
+		_ = json.Unmarshal(headerRaw, &e.HeaderOverrides)
+	}
+	if e.HeaderOverrides == nil {
+		e.HeaderOverrides = map[string]string{}
+	}
 	if score.Valid {
 		v := score.Float64
 		e.Score = &v
@@ -58,14 +69,21 @@ func scanEval(s scanner) (*types.Eval, error) {
 	return e, nil
 }
 
-// Create inserts a PENDING eval. Callers are responsible for validating
-// dataset-version-closed / criteria-complete before calling.
-func (r *EvalRepository) Create(ctx context.Context, agentVersionID, datasetVersionID string) (*types.Eval, error) {
+// Create inserts a PENDING eval with the given config. Callers are responsible
+// for validating dataset-version-closed / criteria-complete before calling.
+func (r *EvalRepository) Create(ctx context.Context, agentVersionID, datasetVersionID string, mockMCP bool, headerOverrides map[string]string) (*types.Eval, error) {
+	if headerOverrides == nil {
+		headerOverrides = map[string]string{}
+	}
+	headers, err := json.Marshal(headerOverrides)
+	if err != nil {
+		return nil, err
+	}
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO evals (agent_version_id, dataset_version_id, status)
-		VALUES ($1::uuid, $2::uuid, 'PENDING')
+		INSERT INTO evals (agent_version_id, dataset_version_id, status, mock_mcp_tools, header_overrides)
+		VALUES ($1::uuid, $2::uuid, 'PENDING', $3, $4::jsonb)
 		RETURNING `+evalColumns,
-		agentVersionID, datasetVersionID,
+		agentVersionID, datasetVersionID, mockMCP, headers,
 	)
 	return scanEval(row)
 }

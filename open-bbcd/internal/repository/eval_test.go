@@ -19,7 +19,7 @@ func TestEval_CreateGetList(t *testing.T) {
 	_ = db.QueryRow(`INSERT INTO dataset_versions (dataset_id, status, version_num, closed_at) VALUES ($1::uuid, 'CLOSED', 1, now()) RETURNING id::text`, datasetID).Scan(&dvID)
 
 	repo := NewEvalRepository(db)
-	e, err := repo.Create(context.Background(), versionID, dvID)
+	e, err := repo.Create(context.Background(), versionID, dvID, true, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestEval_StartStateMachine(t *testing.T) {
 	_ = db.QueryRow(`INSERT INTO dataset_versions (dataset_id, status, version_num, closed_at) VALUES ($1::uuid, 'CLOSED', 1, now()) RETURNING id::text`, datasetID).Scan(&dvID)
 
 	repo := NewEvalRepository(db)
-	e, _ := repo.Create(context.Background(), versionID, dvID)
+	e, _ := repo.Create(context.Background(), versionID, dvID, true, nil)
 	if err := repo.Start(context.Background(), e.ID); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestEval_SubmitDone(t *testing.T) {
 	_, _ = db.Exec(`INSERT INTO dataset_version_sessions (dataset_version_id, session_id) VALUES ($1::uuid, $2::uuid)`, dvID, sessionID)
 
 	repo := NewEvalRepository(db)
-	e, _ := repo.Create(context.Background(), versionID, dvID)
+	e, _ := repo.Create(context.Background(), versionID, dvID, true, nil)
 	_ = repo.Start(context.Background(), e.ID)
 
 	result := &types.EvalResult{
@@ -117,7 +117,7 @@ func TestEval_SubmitFailed(t *testing.T) {
 	_ = db.QueryRow(`INSERT INTO dataset_versions (dataset_id, status, version_num, closed_at) VALUES ($1::uuid, 'CLOSED', 1, now()) RETURNING id::text`, datasetID).Scan(&dvID)
 
 	repo := NewEvalRepository(db)
-	e, _ := repo.Create(context.Background(), versionID, dvID)
+	e, _ := repo.Create(context.Background(), versionID, dvID, true, nil)
 	_ = repo.Start(context.Background(), e.ID)
 	if err := repo.Fail(context.Background(), e.ID, "aikdm crashed"); err != nil {
 		t.Fatalf("Fail: %v", err)

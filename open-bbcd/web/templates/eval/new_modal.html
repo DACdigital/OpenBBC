@@ -2,7 +2,7 @@
 <div class="modal" onclick="if(event.target===this)this.remove()">
   <div class="modal-content">
     <h2>Evaluate</h2>
-    <form method="post" action="/agent_versions/{{.VersionID}}/evals">
+    <form method="post" action="/agent_versions/{{.VersionID}}/evals" onsubmit="serialiseEvalHeaders(this)">
       <label>
         Dataset
         <select name="dataset_id" class="field-input" onchange="pickLatest(this)">
@@ -18,6 +18,22 @@
       </label>
       <div id="eval-inflight-warn" class="warn-text" hidden>
         There is already an eval in progress for this pair. Create another anyway?
+      </div>
+      <div class="eval-modal-mcp-config">
+        <label class="eval-mcp-checkbox">
+          <input type="checkbox" name="mock_mcp_tools" checked onchange="toggleMcpConfig(this)">
+          Mock MCP tools
+        </label>
+        <p class="eval-mcp-hint" id="eval-mcp-hint">
+          Tool calls will be mocked using bundle schemas — no real HTTP calls.
+          Uncheck to run against real MCPs.
+        </p>
+        <div class="eval-headers-editor" id="eval-headers-editor" hidden data-target-input="header_overrides_json">
+          <label class="feedback-criteria-label">Header overrides (applied to real HTTP calls)</label>
+          <div class="eval-headers-rows"></div>
+          <button type="button" class="btn-secondary btn-add-header">+ Add header</button>
+        </div>
+        <input type="hidden" name="header_overrides_json" value="{}">
       </div>
       <div class="modal-actions">
         <button type="submit" class="btn-primary">Create eval</button>
@@ -54,5 +70,44 @@ function syncWarning(versionSel) {
   const opt = versionSel.selectedOptions[0];
   warn.hidden = !(opt && opt.dataset.inflight === '1');
 }
+function toggleMcpConfig(cb) {
+  const editor = document.getElementById('eval-headers-editor');
+  const hint = document.getElementById('eval-mcp-hint');
+  editor.hidden = cb.checked;
+  hint.textContent = cb.checked
+    ? 'Tool calls will be mocked using bundle schemas — no real HTTP calls. Uncheck to run against real MCPs.'
+    : 'Tool calls will hit real MCP backends configured on this agent. Provide any header overrides below.';
+}
+function serialiseEvalHeaders(form) {
+  const editor = form.querySelector('.eval-headers-editor');
+  const target = form.querySelector('input[name="header_overrides_json"]');
+  if (!editor || !target) return;
+  const rows = editor.querySelectorAll('.eval-header-row');
+  const out = {};
+  rows.forEach(r => {
+    const k = r.querySelector('.eval-header-key').value.trim();
+    const v = r.querySelector('.eval-header-value').value.trim();
+    if (k) out[k] = v;
+  });
+  target.value = JSON.stringify(out);
+}
+document.addEventListener('click', (e) => {
+  const add = e.target.closest('.btn-add-header');
+  if (add) {
+    const editor = add.closest('.eval-headers-editor');
+    const rows = editor.querySelector('.eval-headers-rows');
+    const row = document.createElement('div');
+    row.className = 'eval-header-row';
+    row.innerHTML =
+      '<input type="text" class="field-input eval-header-key" placeholder="Header name">' +
+      '<input type="text" class="field-input eval-header-value" placeholder="Value">' +
+      '<button type="button" class="btn-remove-criterion">✕</button>';
+    rows.appendChild(row);
+    row.querySelector('.eval-header-key').focus();
+    return;
+  }
+  const rm = e.target.closest('.eval-header-row .btn-remove-criterion');
+  if (rm) rm.closest('.eval-header-row').remove();
+});
 </script>
 {{end}}

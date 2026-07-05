@@ -104,6 +104,37 @@
     .pagination-summary{color:#8b949e;font-size:13px;font-variant-numeric:tabular-nums}
     .json-preview{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:10px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;color:#c9d1d9;overflow:auto;max-height:280px;white-space:pre-wrap}
     .warn-text{color:#f9d050;background:#332405;border:1px solid #bb8009;border-radius:6px;padding:8px 12px;font-size:13px}
+    .eval-session-summary{cursor:pointer;padding:6px 0;font-weight:600;user-select:none}
+    .eval-session-summary:hover{color:#79c0ff}
+    .eval-session-actions{margin:10px 0 14px;display:flex;justify-content:flex-end;gap:8px}
+    .eval-subhead{font-size:12px;color:#a8b3c1;text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin:14px 0 6px}
+    .judgments-table{margin:8px 0 16px;width:100%}
+    .judgments-table .col-pass{width:70px;text-align:center}
+    .judgments-table .crit-text{font-size:13px;color:#e6edf3;white-space:normal}
+    .judgments-table .reason-text{font-size:12px;color:#a8b3c1;white-space:normal;font-style:italic}
+    .eval-transcript{display:flex;flex-direction:column;gap:10px;margin:8px 0 16px}
+    .eval-turn{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:10px 12px}
+    .eval-turn-user{border-left:3px solid #388bfd}
+    .eval-turn-assistant{border-left:3px solid #7ee787}
+    .eval-turn-tool{border-left:3px solid #c2a4ff}
+    .eval-turn-role{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#a8b3c1;font-weight:600;margin-bottom:6px}
+    .eval-turn-text{font-size:13px;color:#c9d1d9;white-space:pre-wrap;line-height:1.5}
+    .eval-tool-call{margin-top:8px;padding:8px 10px;background:#161b22;border:1px solid #21262d;border-radius:5px;font-size:12px;color:#c9d1d9}
+    .eval-tool-call-head{margin-bottom:4px}
+    .eval-tool-name{font-weight:600;color:#c2a4ff}
+    .eval-tool-source{color:#8b949e;font-size:11px;margin-left:6px}
+    .eval-tool-args, .eval-tool-result{margin-top:2px}
+    .eval-tool-call code{color:#79c0ff;font-family:ui-monospace,SFMono-Regular,monospace}
+    .eval-modal-mcp-config{margin:12px 0;padding-top:12px;border-top:1px solid #21262d}
+    .eval-mcp-checkbox{display:flex;align-items:center;gap:8px;font-size:13px;color:#e6edf3;font-weight:600;cursor:pointer}
+    .eval-mcp-checkbox input{width:16px;height:16px}
+    .eval-mcp-hint{margin:6px 0 10px;font-size:12px;color:#8b949e}
+    .eval-headers-editor{margin:8px 0}
+    .eval-headers-rows{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
+    .eval-header-row{display:flex;gap:6px;align-items:center}
+    .eval-header-row input{flex:1}
+    .eval-header-list{list-style:none;padding:0;margin:0;font-size:12px}
+    .eval-header-list li code{background:#161b22;border:1px solid #21262d;border-radius:4px;padding:1px 6px;margin-right:4px;color:#79c0ff;font-family:ui-monospace,SFMono-Regular,monospace}
   </style>
   <link rel="stylesheet" href="/static/drawflow.min.css">
   <link rel="stylesheet" href="/static/configurator.css">

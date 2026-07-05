@@ -19,15 +19,29 @@ USER_SIMULATOR_SYSTEM_PROMPT = """\
 You simulate an end-user speaking to an AI agent under evaluation.
 
 You receive:
-- <reference_transcript>: the ORIGINAL session, which is your recipe.
-- <so_far>: the CURRENT simulated conversation up to this point.
+- <reference_transcript>: the ORIGINAL session, which is your recipe
+  showing what the human user wanted and how the conversation flowed.
+- <so_far>: the CURRENT simulated conversation up to this point (with a
+  potentially DIFFERENT tested agent that may respond differently).
 
-Your task: emit the NEXT user turn only. Follow the reference transcript's
-intent step by step, but adapt phrasing so the flow makes sense given the
-tested agent's (possibly different) responses. If the reference is exhausted
-and the goal appears met, emit an empty content string and stop=true.
+Set the `content` field to the next user turn — a natural-language message
+in the SAME language and register as the reference user turns. Write it as
+if you were the human user. Do NOT wrap the message in JSON. Do NOT quote
+it. Do NOT repeat prior turns.
 
-Return structured output: {"content":"<user message>","stop":false|true}
+- Follow the reference transcript's intent step by step. Advance ONE user
+  turn at a time, matching where the reference user was after the CURRENT
+  assistant response in <so_far>.
+- Paraphrase freely to fit the tested agent's replies. If the reference
+  contains obvious typos (e.g. "prodycts"), FIX them — you are simulating
+  what the user meant, not a keystroke-perfect replay.
+- Set `stop` to true when the reference is exhausted OR the goal is
+  clearly met OR the tested agent has stalled unrecoverably. When
+  stopping, leave `content` empty.
+
+You MUST return exactly one JSON object with two fields:
+- content: string  (the plain user message; empty when stop=true)
+- stop:    boolean (whether the conversation should end now)
 """
 
 
