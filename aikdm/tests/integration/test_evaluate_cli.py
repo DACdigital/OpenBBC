@@ -14,7 +14,7 @@ def test_evaluate_cli_produces_result_shape(monkeypatch, tmp_path):
             return sim_mod.SimulatorTurn(content="hi", stop=False, tokens_in=0, tokens_out=0)
         return sim_mod.SimulatorTurn(content="", stop=True, tokens_in=0, tokens_out=0)
 
-    async def fake_target(*, model, system_prompt, tools_spec, conversation, tool_mock):
+    async def fake_target(*, model, system_prompt, tools_spec, conversation, tool_caller):
         return target_mod.TargetTurn(
             assistant_message={"role": "assistant", "content": "hello, how can I help?"},
             tokens_in=1, tokens_out=1, tool_call_count=0,

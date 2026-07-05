@@ -7,10 +7,15 @@ from aikdm.eval import target as target_mod
 from aikdm.eval.schemas import InputCriterion, InputMessage, InputSession, Judgment
 
 
+class _StubCaller:
+    def call(self, name, args):
+        return {"source": "mocked", "result": {"stub": True}}
+
+
 def test_run_session_stops_when_simulator_says_stop(monkeypatch):
     async def fake_next(*, agent, reference_transcript, simulated_so_far):
         return sim_mod.SimulatorTurn(content="", stop=True, tokens_in=1, tokens_out=1)
-    async def fake_target(*, model, system_prompt, tools_spec, conversation, tool_mock):
+    async def fake_target(*, model, system_prompt, tools_spec, conversation, tool_caller):
         raise AssertionError("should not be called when simulator stops immediately")
     async def fake_judge(*, agent, transcript, criteria_items):
         return judge_mod.JudgeResult(
@@ -28,6 +33,7 @@ def test_run_session_stops_when_simulator_says_stop(monkeypatch):
     outcome = asyncio.run(runner_mod.run_session(
         session=session, bundle={"main_prompt": "sys", "tools": [], "skills": []},
         simulator_agent=object(), judge_agent=object(), target_model="claude-haiku-4-5",
+        tool_caller=_StubCaller(),
     ))
     assert outcome.result.total_criteria == 1
     assert outcome.result.passed_criteria == 1

@@ -2,8 +2,9 @@
 to the tested agent (bundle's main_prompt + concatenated skill prompts as
 system, bundle's tools as function definitions). Uses LiteLLM directly for
 the tool loop, since we need to intercept every tool_use call and dispatch
-it through the mock (rather than actually hitting an HTTP backend or MCP
-server)."""
+it through the caller — either ToolMock (replay + synthesise) or
+RealHTTPToolCaller (real HTTP against wired backends). The caller is
+duck-typed: only `.call(name, args) -> {"source","result",...}` is used."""
 
 from __future__ import annotations
 
@@ -11,8 +12,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import litellm  # type: ignore[import-untyped]
-
-from aikdm.eval.tool_mock import ToolMock
 
 
 @dataclass
@@ -65,7 +64,7 @@ def _merge_param_schemas(t: dict[str, Any]) -> dict[str, Any]:
 
 async def target_turn(
     *, model: str, system_prompt: str, tools_spec: list[dict[str, Any]],
-    conversation: list[dict[str, Any]], tool_mock: ToolMock,
+    conversation: list[dict[str, Any]], tool_caller,
 ) -> TargetTurn:
     """One assistant turn against the tested agent. Loops through tool calls
     (up to a hard cap of 8) until the model returns a plain text answer."""
@@ -97,10 +96,10 @@ async def target_turn(
             name = tc.function.name
             import json as _json
             args = _json.loads(tc.function.arguments or "{}")
-            mock_out = tool_mock.call(name, args)
+            caller_out = tool_caller.call(name, args)
             assistant_entry["tool_calls"].append({
                 "name": name, "args": args,
-                "result": mock_out["result"], "source": mock_out["source"],
+                "result": caller_out["result"], "source": caller_out["source"],
             })
             tool_call_count += 1
             msgs.append({
@@ -111,7 +110,7 @@ async def target_turn(
             })
             msgs.append({
                 "role": "tool", "tool_call_id": tc.id,
-                "content": _json.dumps(mock_out["result"]),
+                "content": _json.dumps(caller_out["result"]),
             })
         conversation.append(assistant_entry)
     return TargetTurn(
