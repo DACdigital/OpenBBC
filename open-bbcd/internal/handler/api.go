@@ -165,6 +165,16 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("init eval handler", err)
 	}
 
+	trainingSessionRepo := repository.NewTrainingSessionRepository(db)
+	trainingHandler, err := NewTrainingSessionHandler(&trainingSessionStore{
+		sessions: trainingSessionRepo,
+		versions: versionRepo,
+		evals:    evalRepo,
+	})
+	if err != nil {
+		fatal("training session handler", err)
+	}
+
 	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, feedbackRepo, datasetRepo, web.Assets, logger)
 	if err != nil {
 		fatal("init chat handler", err)
@@ -292,6 +302,16 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /evals/{eval_id}", evalHandler.UIDetail)
 	mux.HandleFunc("GET /agent_versions/{version_id}/evals", evalHandler.UIListByAgentVersion)
 	mux.HandleFunc("GET /agent_versions/{version_id}/evals/new", evalHandler.UINewModal)
+
+	// Training sessions
+	mux.HandleFunc("GET /training-sessions", trainingHandler.UIList)
+	mux.HandleFunc("GET /training-sessions/{session_id}", trainingHandler.UIDetail)
+	mux.HandleFunc("GET /training-sessions/{session_id}.json", trainingHandler.JSONFetch)
+	mux.HandleFunc("GET /training-sessions/{session_id}/report.json", trainingHandler.ReportJSON)
+	mux.HandleFunc("POST /training-sessions", trainingHandler.Create)
+	mux.HandleFunc("POST /training-sessions/{session_id}/start", trainingHandler.Start)
+	mux.HandleFunc("POST /training-sessions/{session_id}/complete", trainingHandler.Complete)
+	mux.HandleFunc("POST /training-sessions/{session_id}/fail", trainingHandler.Fail)
 
 	// Per-agent deploy/undeploy + confirm modals
 	mux.HandleFunc("POST /agents/{agent_id}/deploy", deployHandler.Deploy)
