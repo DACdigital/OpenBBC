@@ -69,14 +69,38 @@ func openTestDB(t *testing.T) *sql.DB {
 	// start from a clean slate.
 	// Note: agent_version_endpoint_backend was renamed to agent_endpoint_backend
 	// in migration 017; use the current name here.
+	// training_sessions and evals are listed first because they hold RESTRICT
+	// FKs that prevent agent_versions from being cascade-truncated otherwise.
 	if _, err := db.Exec(`TRUNCATE
+		training_sessions, eval_sessions, evals,
 		deployed_messages, deployed_sessions, chat_messages, chat_sessions,
+		dataset_version_sessions, dataset_versions, datasets,
 		resources, agent_versions, agents,
 		tool_backends, agent_endpoint_backend, agent_version_mcp_backend
 		RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return db
+}
+
+// seedDatasetVersion creates a minimal datasets + dataset_versions pair
+// and returns the dataset_version id.
+func seedDatasetVersion(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	var id string
+	err := db.QueryRow(`
+		WITH d AS (
+			INSERT INTO datasets (name) VALUES ('test-dataset-' || gen_random_uuid())
+			RETURNING id
+		)
+		INSERT INTO dataset_versions (dataset_id, status, version_num)
+		SELECT id, 'CLOSED', 1 FROM d
+		RETURNING id::text
+	`).Scan(&id)
+	if err != nil {
+		t.Fatalf("seedDatasetVersion: %v", err)
+	}
+	return id
 }
 
 // seedAgent creates a minimal agents + agent_versions pair and returns the
