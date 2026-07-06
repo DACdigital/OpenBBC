@@ -74,8 +74,10 @@ func NewAgentDetailHandler(
 // Avg is a plain mean of DONE eval scores; Count is the number of DONE
 // evals contributing. Both are zero when no evals have completed yet.
 type versionStat struct {
-	Avg   float64
-	Count int
+	Avg       float64
+	Count     int
+	LastScore float64
+	HasLast   bool
 }
 
 // agentDetailPageData is the shape passed to the agent-detail layout.
@@ -195,6 +197,13 @@ func (h *AgentDetailHandler) Versions(w http.ResponseWriter, r *http.Request) {
 			avg, count, err := h.evalRepo.AverageScoreByAgentVersion(r.Context(), v.Version.ID)
 			if err == nil {
 				stats[v.Version.ID] = versionStat{Avg: avg, Count: count}
+			}
+			last, hasLast, err := h.evalRepo.LastScoreByAgentVersion(r.Context(), v.Version.ID)
+			if err == nil {
+				st := stats[v.Version.ID]
+				st.LastScore = last
+				st.HasLast = hasLast
+				stats[v.Version.ID] = st
 			}
 		}
 	}

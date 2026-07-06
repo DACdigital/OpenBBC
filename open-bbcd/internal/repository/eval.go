@@ -281,6 +281,25 @@ func (r *EvalRepository) AverageScoreByAgentVersion(ctx context.Context, agentVe
 	return
 }
 
+// LastScoreByAgentVersion returns the score of the most recent DONE eval
+// for this version and whether one exists. Ignores PENDING / IN_PROGRESS /
+// FAILED evals.
+func (r *EvalRepository) LastScoreByAgentVersion(ctx context.Context, agentVersionID string) (score float64, ok bool, err error) {
+	err = r.db.QueryRowContext(ctx, `
+		SELECT score FROM evals
+		WHERE agent_version_id = $1::uuid AND status = 'DONE' AND score IS NOT NULL
+		ORDER BY completed_at DESC NULLS LAST, created_at DESC
+		LIMIT 1
+	`, agentVersionID).Scan(&score)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	return score, true, nil
+}
+
 func (r *EvalRepository) classifyMissingOrConflict(ctx context.Context, id string, conflictErr error) error {
 	var status string
 	err := r.db.QueryRowContext(ctx, `SELECT status FROM evals WHERE id = $1::uuid`, id).Scan(&status)

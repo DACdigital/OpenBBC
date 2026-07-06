@@ -152,7 +152,7 @@ func (h *EvalHandler) Start(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	http.Redirect(w, r, "/evals/"+r.PathValue("eval_id"), http.StatusSeeOther)
 }
 
 // Export handles GET /evals/{eval_id}/export.yaml.
