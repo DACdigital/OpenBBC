@@ -35,6 +35,13 @@ uv run aikdm train-agent \                        # train a bundle for N epochs
   --out /path/to/output-dir/
 ```
 
+Trigger a training session (Train button on eval detail creates a PENDING session,
+then run the script to drive it to DONE):
+
+```bash
+OPENBBCD_URL=http://localhost:8080 scripts/train_from_session.sh <session_id>
+```
+
 ### Architecture (what spans multiple files)
 
 - **Out-of-process, open-bbcd-unaware.** Single command (`aikdm generate-agent`) takes a `FlowMapConfig` YAML in, emits a bundle YAML out, streams NDJSON progress to stderr. No DB driver, no HTTP back to open-bbcd. Anything (open-bbcd subprocess, cron, Argo) can invoke it.
