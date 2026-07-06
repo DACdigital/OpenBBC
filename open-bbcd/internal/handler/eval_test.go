@@ -254,3 +254,46 @@ func TestEval_Fail_TransitionsToFailed(t *testing.T) {
 		t.Errorf("post-Fail state: status=%q, err=%q; want FAILED / 'aikdm crashed'", status, errMsg)
 	}
 }
+
+// TestEvalHandler_UIDetail_ShowsSourceAgentLink — GET /evals/{id} renders
+// the enriched agent name + version number in a link to the prompts tab.
+func TestEvalHandler_UIDetail_ShowsSourceAgentLink(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+
+	// Create an eval so we have a real eval ID.
+	body, _ := json.Marshal(map[string]string{"dataset_version_id": dvID})
+	rc := httptest.NewRequest(http.MethodPost, "/agent_versions/"+versionID+"/evals", bytes.NewReader(body))
+	rc.SetPathValue("version_id", versionID)
+	rc.Header.Set("Content-Type", "application/json")
+	wc := httptest.NewRecorder()
+	h.Create(wc, rc)
+	if wc.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", wc.Code, wc.Body.String())
+	}
+	var e types.Eval
+	_ = json.Unmarshal(wc.Body.Bytes(), &e)
+
+	// Render the detail page.
+	rd := httptest.NewRequest(http.MethodGet, "/evals/"+e.ID, nil)
+	rd.SetPathValue("eval_id", e.ID)
+	wd := httptest.NewRecorder()
+	h.UIDetail(wd, rd)
+	if wd.Code != http.StatusOK {
+		t.Fatalf("UIDetail = %d, want 200. Body: %s", wd.Code, wd.Body.String())
+	}
+
+	body2 := wd.Body.String()
+	// The enriched agent name (seeded as "h-a" in setupEvalAPI) must appear.
+	if !strings.Contains(body2, "h-a") {
+		t.Errorf("detail page missing agent name 'h-a'. Body snippet: %s", body2[:min(500, len(body2))])
+	}
+	// The link href must point to the source agent version's prompts tab.
+	wantHref := "/agent_versions/" + versionID + "/configure/prompts"
+	if !strings.Contains(body2, wantHref) {
+		t.Errorf("detail page missing href %q. Body snippet: %s", wantHref, body2[:min(500, len(body2))])
+	}
+	// The "Source agent version" label must be present.
+	if !strings.Contains(body2, "Source agent version") {
+		t.Errorf("detail page missing 'Source agent version' label")
+	}
+}

@@ -313,6 +313,19 @@ func (h *EvalHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
+	enriched, err := h.repo.EnrichRows(r.Context(), []*types.Eval{e})
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	var agentName, datasetName string
+	var agentVersionNum, datasetVersionNum int
+	if len(enriched) > 0 {
+		agentName = enriched[0].AgentName
+		agentVersionNum = enriched[0].AgentVersionNum
+		datasetName = enriched[0].DatasetName
+		datasetVersionNum = enriched[0].DatasetVersionNum
+	}
 	rows, err := h.repo.ListSessions(r.Context(), id)
 	if err != nil {
 		Error(w, err)
@@ -327,9 +340,13 @@ func (h *EvalHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	renderTemplate(w, h.detailTmpl, "layout", map[string]any{
-		"Active":   "evals",
-		"Eval":     e,
-		"Sessions": sessions,
+		"Active":            "evals",
+		"Eval":              e,
+		"AgentName":         agentName,
+		"AgentVersionNum":   agentVersionNum,
+		"DatasetName":       datasetName,
+		"DatasetVersionNum": datasetVersionNum,
+		"Sessions":          sessions,
 	})
 }
 
