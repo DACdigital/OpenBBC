@@ -35,3 +35,13 @@ type TrainingSession struct {
 	CreatedAt       time.Time             `json:"created_at"`
 	UpdatedAt       time.Time             `json:"updated_at"`
 }
+
+// CompleteSummary carries the scalars extracted from a training-report so the
+// server can UPDATE them into typed columns as well as store the full report
+// blob. Constructed by the handler from the /complete request body.
+type CompleteSummary struct {
+	InitialScore   float64
+	FinalScore     float64
+	TotalEpochsRun int
+	StoppedReason  string
+}

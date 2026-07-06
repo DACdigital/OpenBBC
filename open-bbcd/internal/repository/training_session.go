@@ -75,16 +75,6 @@ func (r *TrainingSessionRepository) GetActiveByEval(ctx context.Context, evalID 
 	return s, err
 }
 
-// CompleteSummary carries the scalars we extract from the training-report
-// JSON so the Complete tx can UPDATE them into typed columns as well as store
-// the full report blob.
-type CompleteSummary struct {
-	InitialScore   float64
-	FinalScore     float64
-	TotalEpochsRun int
-	StoppedReason  string
-}
-
 // Start marks a PENDING session IN_PROGRESS, stamps started_at, and records
 // the epochs/patience config the script is about to use.
 func (r *TrainingSessionRepository) Start(ctx context.Context, id string, epochs, patience int) error {
@@ -105,16 +95,7 @@ func (r *TrainingSessionRepository) Start(ctx context.Context, id string, epochs
 		return err
 	}
 	if n == 0 {
-		// Distinguish 404 (row missing) from 409 (wrong status) so callers
-		// can map to correct HTTP codes.
-		var status string
-		if err := r.db.QueryRowContext(ctx, `SELECT status FROM training_sessions WHERE id = $1::uuid`, id).Scan(&status); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return types.ErrNotFound
-			}
-			return err
-		}
-		return types.ErrTrainingSessionConflict
+		return r.classifyMissingOrConflict(ctx, id, types.ErrTrainingSessionConflict)
 	}
 	return nil
 }
@@ -129,7 +110,7 @@ func (r *TrainingSessionRepository) Complete(
 	id string,
 	promptsJSON []byte,
 	trainingReport json.RawMessage,
-	summary CompleteSummary,
+	summary types.CompleteSummary,
 ) (string, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -199,16 +180,27 @@ func (r *TrainingSessionRepository) Fail(ctx context.Context, id, errorMessage s
 		return err
 	}
 	if n == 0 {
-		var s string
-		if err := r.db.QueryRowContext(ctx, `SELECT status FROM training_sessions WHERE id = $1::uuid`, id).Scan(&s); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return types.ErrNotFound
-			}
-			return err
-		}
-		return types.ErrTrainingSessionConflict
+		return r.classifyMissingOrConflict(ctx, id, types.ErrTrainingSessionConflict)
 	}
 	return nil
+}
+
+// classifyMissingOrConflict is called after an UPDATE affects 0 rows. It
+// distinguishes "no such id" (ErrNotFound) from "wrong current status"
+// (returns the caller-supplied conflictErr). Mirrors the same helper in
+// EvalRepository.
+func (r *TrainingSessionRepository) classifyMissingOrConflict(ctx context.Context, id string, conflictErr error) error {
+	var status string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT status FROM training_sessions WHERE id = $1::uuid`, id,
+	).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return conflictErr
 }
 
 type rowScanner interface {

@@ -183,7 +183,7 @@ func TestComplete_AtomicVersionCreation(t *testing.T) {
 	prompts, _ := json.Marshal(types.Prompts{MainPrompt: "trained", SkillPrompts: map[string]string{}})
 	report := json.RawMessage(`{"schema_version":"training-report-v1","initial_score":0.4,"final_score":0.7,"total_epochs_run":3,"stopped_reason":"max_epochs","epochs":[]}`)
 
-	newVersionID, err := repo.Complete(ctx, vrepo, id, prompts, report, CompleteSummary{
+	newVersionID, err := repo.Complete(ctx, vrepo, id, prompts, report, types.CompleteSummary{
 		InitialScore: 0.4, FinalScore: 0.7, TotalEpochsRun: 3, StoppedReason: "max_epochs",
 	})
 	if err != nil {
@@ -229,7 +229,7 @@ func TestComplete_FromWrongStatus(t *testing.T) {
 	// Not calling Start — session is still PENDING.
 
 	prompts, _ := json.Marshal(types.Prompts{MainPrompt: "x", SkillPrompts: map[string]string{}})
-	_, err := repo.Complete(ctx, vrepo, id, prompts, json.RawMessage(`{}`), CompleteSummary{})
+	_, err := repo.Complete(ctx, vrepo, id, prompts, json.RawMessage(`{}`), types.CompleteSummary{})
 	if !errors.Is(err, types.ErrTrainingSessionConflict) {
 		t.Fatalf("expected conflict, got %v", err)
 	}
