@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,7 @@ import (
 )
 
 // setupEvalAPI seeds a minimal (agent, version, dataset, closed_dv) and
-// returns a bound handler + the ids.
+// returns a bound handler, the ids, and the *sql.DB for direct seeding.
 func setupEvalAPI(t *testing.T) (*EvalHandler, string, string) {
 	t.Helper()
 	db := openTestDBForHandlers(t)
@@ -27,12 +28,53 @@ func setupEvalAPI(t *testing.T) (*EvalHandler, string, string) {
 	datasetRepo := repository.NewDatasetRepository(db)
 	chatRepo := repository.NewChatRepository(db)
 	feedbackRepo := repository.NewFeedbackRepository(db)
-	adapter := &evalStoreAdapter{db: db, evalRepo: evalRepo, dataset: datasetRepo, chat: chatRepo, feedback: feedbackRepo}
-	h, err := NewEvalHandler(evalRepo, datasetRepo, adapter, testWebFS())
+	tsRepo := repository.NewTrainingSessionRepository(db)
+	adapter := &evalStoreAdapter{db: db, evalRepo: evalRepo, dataset: datasetRepo, chat: chatRepo, feedback: feedbackRepo, trainingSessions: tsRepo}
+	h, err := NewEvalHandler(evalRepo, datasetRepo, adapter, adapter, testWebFS())
 	if err != nil {
 		t.Fatalf("NewEvalHandler: %v", err)
 	}
 	return h, versionID, dvID
+}
+
+// getEvalTestDB returns the *sql.DB underlying an EvalHandler's adapter,
+// allowing tests to seed rows directly.
+func getEvalTestDB(t *testing.T, h *EvalHandler) *sql.DB {
+	t.Helper()
+	db := unwrapDB(h)
+	if db == nil {
+		t.Fatal("getEvalTestDB: could not unwrap DB from EvalHandler")
+	}
+	return db
+}
+
+// insertDoneEval creates an eval with status=DONE and given score directly
+// via SQL, bypassing the handler's create path.
+func insertDoneEval(t *testing.T, db *sql.DB, versionID, datasetVersionID string, score float64) string {
+	t.Helper()
+	var id string
+	if err := db.QueryRow(`
+		INSERT INTO evals (agent_version_id, dataset_version_id, status, score, completed_at)
+		VALUES ($1::uuid, $2::uuid, 'DONE', $3, now())
+		RETURNING id::text
+	`, versionID, datasetVersionID, score).Scan(&id); err != nil {
+		t.Fatalf("insertDoneEval: %v", err)
+	}
+	return id
+}
+
+// insertTrainingSession creates a PENDING training session for the given eval.
+func insertTrainingSession(t *testing.T, db *sql.DB, evalID, parentVersionID string) string {
+	t.Helper()
+	var id string
+	if err := db.QueryRow(`
+		INSERT INTO training_sessions (source_eval_id, parent_version_id)
+		VALUES ($1::uuid, $2::uuid)
+		RETURNING id::text
+	`, evalID, parentVersionID).Scan(&id); err != nil {
+		t.Fatalf("insertTrainingSession: %v", err)
+	}
+	return id
 }
 
 func TestEval_Create_RefusesNonClosedDatasetVersion(t *testing.T) {
@@ -295,5 +337,63 @@ func TestEvalHandler_UIDetail_ShowsSourceAgentLink(t *testing.T) {
 	// The "Source agent version" label must be present.
 	if !strings.Contains(body2, "Source agent version") {
 		t.Errorf("detail page missing 'Source agent version' label")
+	}
+}
+
+func TestEvalHandler_UIDetail_TrainButtonAppearsWhenEligible(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+	db := getEvalTestDB(t, h)
+	evalID := insertDoneEval(t, db, versionID, dvID, 0.5)
+
+	req := httptest.NewRequest(http.MethodGet, "/evals/"+evalID, nil)
+	req.SetPathValue("eval_id", evalID)
+	rec := httptest.NewRecorder()
+	h.UIDetail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `action="/training-sessions"`) {
+		t.Error("expected Train form action='/training-sessions'")
+	}
+	if !strings.Contains(body, `name="source_eval_id"`) {
+		t.Error("expected hidden source_eval_id input")
+	}
+}
+
+func TestEvalHandler_UIDetail_TrainButtonHiddenWhenActiveSession(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+	db := getEvalTestDB(t, h)
+	evalID := insertDoneEval(t, db, versionID, dvID, 0.5)
+	_ = insertTrainingSession(t, db, evalID, versionID)
+
+	req := httptest.NewRequest(http.MethodGet, "/evals/"+evalID, nil)
+	req.SetPathValue("eval_id", evalID)
+	rec := httptest.NewRecorder()
+	h.UIDetail(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, `action="/training-sessions"`) {
+		t.Error("Train form should NOT be present when active session exists")
+	}
+	if !strings.Contains(body, "Training pending") {
+		t.Error("expected 'Training pending' link/badge in place of Train button")
+	}
+}
+
+func TestEvalHandler_UIDetail_TrainButtonHiddenForPerfectScore(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+	db := getEvalTestDB(t, h)
+	evalID := insertDoneEval(t, db, versionID, dvID, 1.0)
+
+	req := httptest.NewRequest(http.MethodGet, "/evals/"+evalID, nil)
+	req.SetPathValue("eval_id", evalID)
+	rec := httptest.NewRecorder()
+	h.UIDetail(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, `action="/training-sessions"`) {
+		t.Error("Train form should NOT be present for perfect-score evals")
 	}
 }

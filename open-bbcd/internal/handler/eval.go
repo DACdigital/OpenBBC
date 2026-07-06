@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -14,21 +15,32 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// EvalDetailStore is the narrow interface EvalHandler uses for the detail
+// page to look up the active training session for an eval.
+type EvalDetailStore interface {
+	// GetActiveTrainingSessionForEval returns the PENDING or IN_PROGRESS
+	// training session for this eval, or nil if none. Used to decide whether
+	// the Train button should show or a "Training pending" link instead.
+	GetActiveTrainingSessionForEval(ctx context.Context, evalID string) (*types.TrainingSession, error)
+}
+
 // EvalHandler owns /evals and /agent_versions/{id}/evals routes.
 type EvalHandler struct {
-	repo       *repository.EvalRepository
-	dataset    *repository.DatasetRepository
-	adapter    eval.Store
-	listTmpl   *template.Template
-	detailTmpl *template.Template
-	modalTmpl  *template.Template
-	perAVTmpl  *template.Template
+	repo          *repository.EvalRepository
+	dataset       *repository.DatasetRepository
+	adapter       eval.Store
+	trainingStore EvalDetailStore
+	listTmpl      *template.Template
+	detailTmpl    *template.Template
+	modalTmpl     *template.Template
+	perAVTmpl     *template.Template
 }
 
 func NewEvalHandler(
 	repo *repository.EvalRepository,
 	dataset *repository.DatasetRepository,
 	adapter eval.Store,
+	trainingStore EvalDetailStore,
 	webFS fs.FS,
 ) (*EvalHandler, error) {
 	funcs := template.FuncMap{
@@ -36,6 +48,26 @@ func NewEvalHandler(
 		"add":         func(a, b int) int { return a + b },
 		"sub":         func(a, b int) int { return a - b },
 		"pct":         func(f float64) string { return formatPercent(f) },
+		"deref": func(v any) any {
+			switch p := v.(type) {
+			case *string:
+				if p == nil {
+					return ""
+				}
+				return *p
+			case *int:
+				if p == nil {
+					return 0
+				}
+				return *p
+			case *float64:
+				if p == nil {
+					return 0.0
+				}
+				return *p
+			}
+			return v
+		},
 	}
 	listTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
@@ -65,7 +97,7 @@ func NewEvalHandler(
 		return nil, err
 	}
 	return &EvalHandler{
-		repo: repo, dataset: dataset, adapter: adapter,
+		repo: repo, dataset: dataset, adapter: adapter, trainingStore: trainingStore,
 		listTmpl: listTmpl, detailTmpl: detailTmpl, modalTmpl: modalTmpl, perAVTmpl: perAVTmpl,
 	}, nil
 }
@@ -339,14 +371,20 @@ func (h *EvalHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 			Turns:       parseTranscript(s.Transcript),
 		})
 	}
+	activeTraining, err := h.trainingStore.GetActiveTrainingSessionForEval(r.Context(), id)
+	if err != nil {
+		Error(w, err)
+		return
+	}
 	renderTemplate(w, h.detailTmpl, "layout", map[string]any{
-		"Active":            "evals",
-		"Eval":              e,
-		"AgentName":         agentName,
-		"AgentVersionNum":   agentVersionNum,
-		"DatasetName":       datasetName,
-		"DatasetVersionNum": datasetVersionNum,
-		"Sessions":          sessions,
+		"Active":                "evals",
+		"Eval":                  e,
+		"AgentName":             agentName,
+		"AgentVersionNum":       agentVersionNum,
+		"DatasetName":           datasetName,
+		"DatasetVersionNum":     datasetVersionNum,
+		"Sessions":              sessions,
+		"ActiveTrainingSession": activeTraining,
 	})
 }
 

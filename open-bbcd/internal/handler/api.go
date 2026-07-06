@@ -153,19 +153,21 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("init datasets handler", err)
 	}
 
+	trainingSessionRepo := repository.NewTrainingSessionRepository(db)
+
 	evalAdapter := &evalStoreAdapter{
-		db:       db,
-		evalRepo: evalRepo,
-		dataset:  datasetRepo,
-		chat:     chatRepo,
-		feedback: feedbackRepo,
+		db:               db,
+		evalRepo:         evalRepo,
+		dataset:          datasetRepo,
+		chat:             chatRepo,
+		feedback:         feedbackRepo,
+		trainingSessions: trainingSessionRepo,
 	}
-	evalHandler, err := NewEvalHandler(evalRepo, datasetRepo, evalAdapter, web.Assets)
+	evalHandler, err := NewEvalHandler(evalRepo, datasetRepo, evalAdapter, evalAdapter, web.Assets)
 	if err != nil {
 		fatal("init eval handler", err)
 	}
 
-	trainingSessionRepo := repository.NewTrainingSessionRepository(db)
 	trainingHandler, err := NewTrainingSessionHandler(&trainingSessionStore{
 		sessions: trainingSessionRepo,
 		versions: versionRepo,
