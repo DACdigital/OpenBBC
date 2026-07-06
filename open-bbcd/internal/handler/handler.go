@@ -77,6 +77,10 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrDatasetVersionNotClosed),
 		errors.Is(err, types.ErrDatasetMissingCriteria):
 		status = http.StatusBadRequest
+	case errors.Is(err, types.ErrTrainingSessionConflict):
+		status = http.StatusConflict
+	case errors.Is(err, types.ErrTrainingSessionEvalNotEligible):
+		status = http.StatusBadRequest
 	case errors.Is(err, types.ErrLLMUnavailable),
 		errors.Is(err, types.ErrToolHandlerFailed):
 		status = http.StatusBadGateway
