@@ -14,8 +14,8 @@ CREATE TABLE training_sessions (
     error_message     TEXT         NOT NULL DEFAULT '',
     epochs            INTEGER           NULL,
     patience          INTEGER           NULL,
-    initial_score     REAL              NULL,
-    final_score       REAL              NULL,
+    initial_score     DOUBLE PRECISION       NULL,
+    final_score       DOUBLE PRECISION       NULL,
     total_epochs_run  INTEGER           NULL,
     stopped_reason    TEXT              NULL,
     training_report   JSONB             NULL,
@@ -24,6 +24,7 @@ CREATE TABLE training_sessions (
 );
 
 CREATE INDEX idx_ts_source_eval ON training_sessions(source_eval_id);
+CREATE INDEX idx_ts_parent_version ON training_sessions(parent_version_id);
 CREATE INDEX idx_ts_new_version ON training_sessions(new_version_id) WHERE new_version_id IS NOT NULL;
 CREATE INDEX idx_ts_status_requested ON training_sessions(status, requested_at DESC);
 
@@ -35,5 +36,6 @@ CREATE UNIQUE INDEX idx_ts_one_active_per_eval
 DROP INDEX IF EXISTS idx_ts_one_active_per_eval;
 DROP INDEX IF EXISTS idx_ts_status_requested;
 DROP INDEX IF EXISTS idx_ts_new_version;
+DROP INDEX IF EXISTS idx_ts_parent_version;
 DROP INDEX IF EXISTS idx_ts_source_eval;
 DROP TABLE IF EXISTS training_sessions;
