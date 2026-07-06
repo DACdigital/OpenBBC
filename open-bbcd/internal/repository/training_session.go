@@ -75,6 +75,142 @@ func (r *TrainingSessionRepository) GetActiveByEval(ctx context.Context, evalID 
 	return s, err
 }
 
+// CompleteSummary carries the scalars we extract from the training-report
+// JSON so the Complete tx can UPDATE them into typed columns as well as store
+// the full report blob.
+type CompleteSummary struct {
+	InitialScore   float64
+	FinalScore     float64
+	TotalEpochsRun int
+	StoppedReason  string
+}
+
+// Start marks a PENDING session IN_PROGRESS, stamps started_at, and records
+// the epochs/patience config the script is about to use.
+func (r *TrainingSessionRepository) Start(ctx context.Context, id string, epochs, patience int) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE training_sessions
+		SET status = 'IN_PROGRESS',
+		    started_at = now(),
+		    epochs = $2,
+		    patience = $3,
+		    updated_at = now()
+		WHERE id = $1::uuid AND status = 'PENDING'
+	`, id, epochs, patience)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// Distinguish 404 (row missing) from 409 (wrong status) so callers
+		// can map to correct HTTP codes.
+		var status string
+		if err := r.db.QueryRowContext(ctx, `SELECT status FROM training_sessions WHERE id = $1::uuid`, id).Scan(&status); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return types.ErrNotFound
+			}
+			return err
+		}
+		return types.ErrTrainingSessionConflict
+	}
+	return nil
+}
+
+// Complete forks a READY agent_version and marks the session DONE in one tx.
+// Returns the new version id. The `versionRepo` parameter provides access to
+// the tx-scoped insert helper — both operations share the same *sql.Tx so
+// either everything lands or nothing does.
+func (r *TrainingSessionRepository) Complete(
+	ctx context.Context,
+	versionRepo *AgentVersionRepository,
+	id string,
+	promptsJSON []byte,
+	trainingReport json.RawMessage,
+	summary CompleteSummary,
+) (string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Guard status + capture parent_version_id inside the tx.
+	var parentVersionID, status string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT parent_version_id::text, status FROM training_sessions WHERE id = $1::uuid
+	`, id).Scan(&parentVersionID, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", types.ErrNotFound
+		}
+		return "", err
+	}
+	if status != string(types.TrainingSessionStatusInProgress) {
+		return "", types.ErrTrainingSessionConflict
+	}
+
+	// Fork the READY version using the shared tx-scoped helper.
+	newVersionID, err := versionRepo.insertVersionFromPromptsTx(ctx, tx, parentVersionID, promptsJSON, types.AgentStatusReady)
+	if err != nil {
+		return "", err
+	}
+
+	// Update the session row atomically.
+	_, err = tx.ExecContext(ctx, `
+		UPDATE training_sessions
+		SET status = 'DONE',
+		    completed_at = now(),
+		    new_version_id = $2::uuid,
+		    initial_score = $3,
+		    final_score = $4,
+		    total_epochs_run = $5,
+		    stopped_reason = $6,
+		    training_report = $7::jsonb,
+		    updated_at = now()
+		WHERE id = $1::uuid
+	`, id, newVersionID, summary.InitialScore, summary.FinalScore, summary.TotalEpochsRun, summary.StoppedReason, []byte(trainingReport))
+	if err != nil {
+		return "", err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return newVersionID, nil
+}
+
+// Fail transitions PENDING or IN_PROGRESS → FAILED with the given message.
+func (r *TrainingSessionRepository) Fail(ctx context.Context, id, errorMessage string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE training_sessions
+		SET status = 'FAILED',
+		    completed_at = now(),
+		    error_message = $2,
+		    updated_at = now()
+		WHERE id = $1::uuid AND status IN ('PENDING','IN_PROGRESS')
+	`, id, errorMessage)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		var s string
+		if err := r.db.QueryRowContext(ctx, `SELECT status FROM training_sessions WHERE id = $1::uuid`, id).Scan(&s); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return types.ErrNotFound
+			}
+			return err
+		}
+		return types.ErrTrainingSessionConflict
+	}
+	return nil
+}
+
 type rowScanner interface {
 	Scan(dest ...interface{}) error
 }
