@@ -274,3 +274,57 @@ func TestFail_FromActiveStates(t *testing.T) {
 		t.Errorf("second Fail should conflict, got %v", err)
 	}
 }
+
+func TestList_PaginatedNewestFirst(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewTrainingSessionRepository(db)
+	ctx := context.Background()
+
+	// Seed 3 sessions for 3 different evals.
+	var ids []string
+	for i := 0; i < 3; i++ {
+		evalID, versionID := seedEvalForTraining(t, db)
+		id, _ := repo.Create(ctx, evalID, versionID)
+		ids = append(ids, id)
+	}
+
+	rows, err := repo.List(ctx, 25, 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("row count = %d, want 3", len(rows))
+	}
+	// Newest first — the last id we created should be first.
+	if rows[0].ID != ids[2] {
+		t.Errorf("first row id = %q, want %q (newest)", rows[0].ID, ids[2])
+	}
+}
+
+func TestEnrichRows_JoinsAgentAndEval(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewTrainingSessionRepository(db)
+	ctx := context.Background()
+
+	evalID, versionID := seedEvalForTraining(t, db)
+	id, _ := repo.Create(ctx, evalID, versionID)
+
+	sess, _ := repo.GetByID(ctx, id)
+	views, err := repo.EnrichRows(ctx, []*types.TrainingSession{sess})
+	if err != nil {
+		t.Fatalf("EnrichRows: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("view count = %d, want 1", len(views))
+	}
+	v := views[0]
+	if v.AgentName == "" {
+		t.Error("AgentName should be non-empty")
+	}
+	if v.ParentVersionNum < 1 {
+		t.Errorf("ParentVersionNum = %d, want >=1", v.ParentVersionNum)
+	}
+	if v.SourceEvalScore == nil {
+		t.Error("SourceEvalScore should be populated for DONE eval")
+	}
+}

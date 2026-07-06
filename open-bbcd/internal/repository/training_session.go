@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/lib/pq"
+
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -268,4 +270,104 @@ func scanTrainingSession(row rowScanner) (*types.TrainingSession, error) {
 		s.TrainingReport = json.RawMessage(trainingReport)
 	}
 	return &s, nil
+}
+
+// TrainingSessionRowView pairs a session with human-readable labels resolved
+// via the same recursive-CTE approach used by EvalRepository.EnrichRows.
+type TrainingSessionRowView struct {
+	Session          *types.TrainingSession
+	AgentName        string
+	ParentVersionNum int
+	NewVersionNum    int      // 0 when new_version_id is NULL
+	SourceEvalScore  *float64 // NULL when eval not DONE
+}
+
+// List returns sessions newest-first with limit/offset.
+func (r *TrainingSessionRepository) List(ctx context.Context, limit, offset int) ([]*types.TrainingSession, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id::text, source_eval_id::text, parent_version_id::text,
+		       (new_version_id)::text, status,
+		       requested_at, started_at, completed_at,
+		       error_message, epochs, patience,
+		       initial_score, final_score, total_epochs_run, stopped_reason,
+		       training_report,
+		       created_at, updated_at
+		FROM training_sessions
+		ORDER BY requested_at DESC
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*types.TrainingSession
+	for rows.Next() {
+		s, err := scanTrainingSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// EnrichRows resolves parent+new version numbers and agent names in a single
+// query, using the same RECURSIVE CTE pattern as EvalRepository.EnrichRows.
+func (r *TrainingSessionRepository) EnrichRows(ctx context.Context, sessions []*types.TrainingSession) ([]TrainingSessionRowView, error) {
+	if len(sessions) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		ids = append(ids, s.ID)
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		WITH RECURSIVE chain AS (
+		    SELECT id, parent_version_id, 1 AS num
+		    FROM agent_versions WHERE parent_version_id IS NULL
+		    UNION ALL
+		    SELECT av.id, av.parent_version_id, c.num + 1
+		    FROM agent_versions av JOIN chain c ON av.parent_version_id = c.id
+		)
+		SELECT
+		    ts.id::text,
+		    a.name,
+		    COALESCE(cp.num, 1) AS parent_num,
+		    COALESCE(cn.num, 0) AS new_num,
+		    e.score
+		FROM training_sessions ts
+		JOIN agent_versions av_parent ON av_parent.id = ts.parent_version_id
+		JOIN agents a ON a.id = av_parent.agent_id
+		LEFT JOIN chain cp ON cp.id = ts.parent_version_id
+		LEFT JOIN chain cn ON cn.id = ts.new_version_id
+		LEFT JOIN evals e ON e.id = ts.source_eval_id
+		WHERE ts.id::text = ANY($1)
+	`, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	labels := map[string]TrainingSessionRowView{}
+	for rows.Next() {
+		var sessID string
+		var v TrainingSessionRowView
+		var evalScore sql.NullFloat64
+		if err := rows.Scan(&sessID, &v.AgentName, &v.ParentVersionNum, &v.NewVersionNum, &evalScore); err != nil {
+			return nil, err
+		}
+		if evalScore.Valid {
+			s := evalScore.Float64
+			v.SourceEvalScore = &s
+		}
+		labels[sessID] = v
+	}
+	out := make([]TrainingSessionRowView, 0, len(sessions))
+	for _, s := range sessions {
+		lbl := labels[s.ID]
+		lbl.Session = s
+		out = append(out, lbl)
+	}
+	return out, rows.Err()
 }
