@@ -84,4 +84,13 @@ var (
 	ErrDatasetMissingCriteria  = errors.New("eval: dataset version has feedback rows with no judge_criteria")
 	ErrEvalNotPending          = errors.New("eval: cannot start; not in PENDING state")
 	ErrEvalAlreadyFinal        = errors.New("eval: already in DONE or FAILED state")
+
+	// ErrTrainingSessionConflict is returned when an operation would create a
+	// second active training session for an eval (partial unique index violation)
+	// or when a state transition is attempted from the wrong current status.
+	ErrTrainingSessionConflict = errors.New("training session state conflict")
+
+	// ErrTrainingSessionEvalNotEligible is returned when a POST /training-sessions
+	// is attempted against an eval that isn't DONE or has a perfect score.
+	ErrTrainingSessionEvalNotEligible = errors.New("eval is not eligible for training")
 )

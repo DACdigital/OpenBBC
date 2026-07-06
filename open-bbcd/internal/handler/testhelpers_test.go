@@ -38,6 +38,7 @@ func openTestDBForHandlers(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`TRUNCATE
+		training_sessions,
 		eval_sessions, evals,
 		chat_message_feedback,
 		dataset_version_sessions, dataset_versions, datasets,

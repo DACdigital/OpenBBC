@@ -1,0 +1,69 @@
+{{define "content"}}
+<section>
+  <div class="page-header">
+    <h1>Training session</h1>
+    <span class="badge badge-{{statusClass (printf "%s" .Session.Status)}}">{{.Session.Status}}</span>
+  </div>
+
+  <dl class="agent-meta">
+    <div class="agent-meta-item"><dt>Source eval</dt><dd>
+      <a href="/evals/{{.Session.SourceEvalID}}">e-{{.Session.SourceEvalID}}</a>
+      {{if .View.SourceEvalScore}} (score {{printf "%.2f" (deref .View.SourceEvalScore)}}){{end}}
+    </dd></div>
+    <div class="agent-meta-item"><dt>Parent agent version</dt><dd>
+      <a href="/agent_versions/{{.Session.ParentVersionID}}/configure/prompts">{{.View.AgentName}} v{{.View.ParentVersionNum}}</a>
+    </dd></div>
+    <div class="agent-meta-item"><dt>Trained agent version</dt><dd>
+      {{if .Session.NewVersionID}}
+        <a href="/agent_versions/{{deref .Session.NewVersionID}}/configure/prompts">{{.View.AgentName}} v{{.View.NewVersionNum}} ↗</a>
+      {{else}}—{{end}}
+    </dd></div>
+    <div class="agent-meta-item"><dt>Requested</dt><dd>{{.Session.RequestedAt.Format "2006-01-02 15:04"}}</dd></div>
+    {{if .Session.StartedAt}}<div class="agent-meta-item"><dt>Started</dt><dd>{{.Session.StartedAt.Format "2006-01-02 15:04"}}</dd></div>{{end}}
+    {{if .Session.CompletedAt}}<div class="agent-meta-item"><dt>Completed</dt><dd>{{.Session.CompletedAt.Format "2006-01-02 15:04"}}</dd></div>{{end}}
+    {{if and .Session.Epochs .Session.Patience}}
+      <div class="agent-meta-item"><dt>Config</dt><dd>{{deref .Session.Epochs}} epochs · patience {{deref .Session.Patience}}</dd></div>
+    {{end}}
+    {{if and .Session.InitialScore .Session.FinalScore}}
+      <div class="agent-meta-item"><dt>Score</dt><dd>{{printf "%.4f" (deref .Session.InitialScore)}} → {{printf "%.4f" (deref .Session.FinalScore)}}</dd></div>
+    {{end}}
+    {{if .Session.StoppedReason}}<div class="agent-meta-item"><dt>Stopped</dt><dd>{{deref .Session.StoppedReason}}</dd></div>{{end}}
+  </dl>
+
+  {{if eq (printf "%s" .Session.Status) "FAILED"}}
+    <p class="warn-text">Error: {{.Session.ErrorMessage}}</p>
+  {{end}}
+
+  {{if .Epochs}}
+    <h2 class="section-title">Epochs</h2>
+    <table class="data-table">
+      <thead><tr>
+        <th class="col-count">#</th>
+        <th>Score</th>
+        <th class="col-count">Result</th>
+        <th class="col-count">Patches</th>
+        <th>Teacher notes</th>
+        <th class="col-count">Duration</th>
+        <th class="col-count">Tokens (in/out)</th>
+      </tr></thead>
+      <tbody>
+      {{range .Epochs}}
+        <tr>
+          <td class="col-count">{{.Epoch}}</td>
+          <td>{{printf "%.4f" .BaselineScore}} → {{printf "%.4f" .CandidateScore}}</td>
+          <td class="col-count">{{if .Promoted}}✓{{else if .Error}}—{{else}}✗{{end}}</td>
+          <td class="col-count">{{len .Patches}}</td>
+          <td>{{.TeacherNotes}}</td>
+          <td class="col-count">{{printf "%.1fs" .DurationSeconds}}</td>
+          <td class="col-count">{{.TokensIn}}/{{.TokensOut}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{end}}
+
+  {{if .Session.TrainingReport}}
+    <p><a class="btn-secondary" href="/training-sessions/{{.Session.ID}}/report.json">Download training-report.json</a></p>
+  {{end}}
+</section>
+{{end}}

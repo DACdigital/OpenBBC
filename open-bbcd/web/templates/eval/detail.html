@@ -4,10 +4,22 @@
     <h1>Eval</h1>
     <div class="page-header-actions">
       <a class="btn-secondary" href="/evals/{{.Eval.ID}}/export.yaml">Export YAML</a>
-      {{if eq (printf "%s" .Eval.Status) "PENDING"}}
-        <form method="post" action="/evals/{{.Eval.ID}}/start" style="display:inline">
-          <button type="submit" class="btn-primary" title="Mark eval IN_PROGRESS. A separate worker will pick it up and run training.">Train</button>
-        </form>
+      {{if and (eq (printf "%s" .Eval.Status) "DONE") (not .ActiveTrainingSession)}}
+        {{if .Eval.Score}}
+          {{if lt (deref .Eval.Score) 1.0}}
+            <form method="post" action="/training-sessions" style="display:inline">
+              <input type="hidden" name="source_eval_id" value="{{.Eval.ID}}">
+              <button type="submit" class="btn-primary" title="Queue a training session for this eval. New agent version will be created when training completes.">Train</button>
+            </form>
+          {{end}}
+        {{end}}
+      {{end}}
+      {{if .ActiveTrainingSession}}
+        {{if eq (printf "%s" .ActiveTrainingSession.Status) "PENDING"}}
+          <a class="btn-secondary" href="/training-sessions/{{.ActiveTrainingSession.ID}}">Training pending ↗</a>
+        {{else if eq (printf "%s" .ActiveTrainingSession.Status) "IN_PROGRESS"}}
+          <a class="btn-secondary" href="/training-sessions/{{.ActiveTrainingSession.ID}}">Training in progress ↗</a>
+        {{end}}
       {{end}}
       {{if or (eq (printf "%s" .Eval.Status) "PENDING") (eq (printf "%s" .Eval.Status) "IN_PROGRESS")}}
         <form method="post" enctype="multipart/form-data" action="/evals/{{.Eval.ID}}/upload-result" style="display:inline">

@@ -12,17 +12,19 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
-// evalStoreAdapter satisfies eval.Store by fanning out to the concrete
-// repositories. Keeps eval.export ignorant of repo types.
+// evalStoreAdapter satisfies eval.Store and EvalDetailStore by fanning out to
+// the concrete repositories. Keeps eval.export ignorant of repo types.
 type evalStoreAdapter struct {
-	db       *sql.DB
-	evalRepo *repository.EvalRepository
-	dataset  *repository.DatasetRepository
-	chat     *repository.ChatRepository
-	feedback *repository.FeedbackRepository
+	db               *sql.DB
+	evalRepo         *repository.EvalRepository
+	dataset          *repository.DatasetRepository
+	chat             *repository.ChatRepository
+	feedback         *repository.FeedbackRepository
+	trainingSessions *repository.TrainingSessionRepository
 }
 
 var _ eval.Store = (*evalStoreAdapter)(nil)
+var _ EvalDetailStore = (*evalStoreAdapter)(nil)
 
 func (a *evalStoreAdapter) GetEval(ctx context.Context, id string) (*types.Eval, error) {
 	return a.evalRepo.GetByID(ctx, id)
@@ -130,4 +132,8 @@ func (a *evalStoreAdapter) GetToolBackends(ctx context.Context, agentVersionID s
 		}
 	}
 	return out, rows.Err()
+}
+
+func (a *evalStoreAdapter) GetActiveTrainingSessionForEval(ctx context.Context, evalID string) (*types.TrainingSession, error) {
+	return a.trainingSessions.GetActiveByEval(ctx, evalID)
 }

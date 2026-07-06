@@ -308,6 +308,42 @@ func (r *AgentVersionRepository) SetPrompts(ctx context.Context, versionID strin
 	return nil
 }
 
+// insertVersionFromPromptsTx inserts a new agent_versions row inside an
+// existing transaction. Copies MCP attachments forward. Returns the new id.
+// Extracted so training-session Complete can bundle version-creation + session
+// state update in one transaction. Public callers use CreateVersionFromPrompts.
+func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context, tx *sql.Tx, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
+	var agentID string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT agent_id::text FROM agent_versions WHERE id = $1`, parentVersionID,
+	).Scan(&agentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", types.ErrNotFound
+		}
+		return "", err
+	}
+
+	var newID string
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO agent_versions (agent_id, parent_version_id, status, prompts)
+		VALUES ($1::uuid, $2::uuid, $3::text, $4::jsonb)
+		RETURNING id::text
+	`, agentID, parentVersionID, string(status), promptsJSON).Scan(&newID); err != nil {
+		return "", fmt.Errorf("insert new version: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO agent_version_mcp_backend (agent_version_id, backend_id, note)
+		SELECT $2::uuid, backend_id, note
+		FROM agent_version_mcp_backend
+		WHERE agent_version_id = $1::uuid
+	`, parentVersionID, newID); err != nil {
+		return "", fmt.Errorf("copy mcp attachments: %w", err)
+	}
+
+	return newID, nil
+}
+
 // CreateVersionFromPrompts forks a new agent_versions row from the parent
 // version. The new row carries the submitted prompts and is created with the
 // caller-supplied status — SavePrompts passes AgentStatusDraft (the user may
@@ -329,33 +365,9 @@ func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, p
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var agentID string
-	if err := tx.QueryRowContext(ctx,
-		`SELECT agent_id::text FROM agent_versions WHERE id = $1`, parentVersionID,
-	).Scan(&agentID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", types.ErrNotFound
-		}
+	newID, err := r.insertVersionFromPromptsTx(ctx, tx, parentVersionID, promptsJSON, status)
+	if err != nil {
 		return "", err
-	}
-
-	var newID string
-	if err := tx.QueryRowContext(ctx, `
-		INSERT INTO agent_versions (agent_id, parent_version_id, status, prompts)
-		VALUES ($1::uuid, $2::uuid, $3::text, $4::jsonb)
-		RETURNING id::text
-	`, agentID, parentVersionID, string(status), promptsJSON).Scan(&newID); err != nil {
-		return "", fmt.Errorf("insert new version: %w", err)
-	}
-
-	// Copy MCP attachments forward.
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO agent_version_mcp_backend (agent_version_id, backend_id, note)
-		SELECT $2::uuid, backend_id, note
-		FROM agent_version_mcp_backend
-		WHERE agent_version_id = $1::uuid
-	`, parentVersionID, newID); err != nil {
-		return "", fmt.Errorf("copy mcp attachments: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

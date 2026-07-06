@@ -51,7 +51,8 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrSessionLocked),
 		errors.Is(err, types.ErrDatasetVersionClosed),
 		errors.Is(err, types.ErrEvalNotPending),
-		errors.Is(err, types.ErrEvalAlreadyFinal):
+		errors.Is(err, types.ErrEvalAlreadyFinal),
+		errors.Is(err, types.ErrTrainingSessionConflict):
 		status = http.StatusConflict
 	case errors.Is(err, types.ErrSessionAgentMismatch):
 		status = http.StatusForbidden
@@ -75,7 +76,8 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrFeedbackCriteriaRequired),
 		errors.Is(err, types.ErrDatasetNameRequired),
 		errors.Is(err, types.ErrDatasetVersionNotClosed),
-		errors.Is(err, types.ErrDatasetMissingCriteria):
+		errors.Is(err, types.ErrDatasetMissingCriteria),
+		errors.Is(err, types.ErrTrainingSessionEvalNotEligible):
 		status = http.StatusBadRequest
 	case errors.Is(err, types.ErrLLMUnavailable),
 		errors.Is(err, types.ErrToolHandlerFailed):
