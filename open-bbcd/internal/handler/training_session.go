@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -152,8 +153,78 @@ func (h *TrainingSessionHandler) Start(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type completeBody struct {
+	Bundle         map[string]any  `json:"bundle"`
+	TrainingReport json.RawMessage `json:"training_report"`
+}
+
 func (h *TrainingSessionHandler) Complete(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	id := r.PathValue("session_id")
+	var body completeBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Extract Prompts from the bundle.
+	mainPrompt, ok := body.Bundle["main_prompt"].(string)
+	if !ok || strings.TrimSpace(mainPrompt) == "" {
+		http.Error(w, "bundle.main_prompt is required (string)", http.StatusBadRequest)
+		return
+	}
+	prompts := types.Prompts{
+		MainPrompt:   mainPrompt,
+		SkillPrompts: map[string]string{},
+	}
+	if skills, ok := body.Bundle["skills"].([]any); ok {
+		for _, s := range skills {
+			sm, ok := s.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := sm["name"].(string)
+			prompt, _ := sm["prompt"].(string)
+			if name != "" {
+				prompts.SkillPrompts[name] = prompt
+			}
+		}
+	}
+	promptsJSON, err := json.Marshal(prompts)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	// Extract summary scalars from the training_report.
+	var summary types.CompleteSummary
+	if len(body.TrainingReport) > 0 {
+		var raw struct {
+			InitialScore   float64 `json:"initial_score"`
+			FinalScore     float64 `json:"final_score"`
+			TotalEpochsRun int     `json:"total_epochs_run"`
+			StoppedReason  string  `json:"stopped_reason"`
+		}
+		if err := json.Unmarshal(body.TrainingReport, &raw); err != nil {
+			http.Error(w, "invalid training_report: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		summary.InitialScore = raw.InitialScore
+		summary.FinalScore = raw.FinalScore
+		summary.TotalEpochsRun = raw.TotalEpochsRun
+		summary.StoppedReason = raw.StoppedReason
+	}
+
+	newVersionID, err := h.store.Complete(r.Context(), id, promptsJSON, body.TrainingReport, summary)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"new_version_id": newVersionID,
+		"session_url":    "/training-sessions/" + id,
+	})
 }
 
 type failBody struct {

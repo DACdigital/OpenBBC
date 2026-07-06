@@ -291,3 +291,107 @@ func TestErrConflictIsRecognised(t *testing.T) {
 		t.Fatal("errors.Is broken")
 	}
 }
+
+func TestComplete_HappyPath(t *testing.T) {
+	stub := &stubTrainingStore{completeNewID: "av-new"}
+	h := newTrainingHandler(t, stub)
+
+	body := `{
+		"bundle": {
+			"main_prompt": "trained",
+			"skills": [{"name":"greet","prompt":"say hi politely"}]
+		},
+		"training_report": {
+			"schema_version": "training-report-v1",
+			"initial_score": 0.4,
+			"final_score": 0.7,
+			"total_epochs_run": 3,
+			"stopped_reason": "max_epochs",
+			"epochs": []
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/training-sessions/sess-1/complete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("session_id", "sess-1")
+	rec := httptest.NewRecorder()
+	h.Complete(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		NewVersionID string `json:"new_version_id"`
+		SessionURL   string `json:"session_url"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.NewVersionID != "av-new" {
+		t.Errorf("new_version_id = %q", resp.NewVersionID)
+	}
+	if resp.SessionURL != "/training-sessions/sess-1" {
+		t.Errorf("session_url = %q", resp.SessionURL)
+	}
+
+	// Verify the extracted prompts match the sent bundle.
+	var prompts types.Prompts
+	if err := json.Unmarshal(stub.lastCompletePrompts, &prompts); err != nil {
+		t.Fatalf("prompts unmarshal: %v", err)
+	}
+	if prompts.MainPrompt != "trained" {
+		t.Errorf("MainPrompt = %q", prompts.MainPrompt)
+	}
+	if prompts.SkillPrompts["greet"] != "say hi politely" {
+		t.Errorf("skill 'greet' prompt = %q", prompts.SkillPrompts["greet"])
+	}
+
+	// Verify the summary extraction.
+	if stub.lastCompleteSummary.InitialScore != 0.4 {
+		t.Errorf("initial_score = %v", stub.lastCompleteSummary.InitialScore)
+	}
+	if stub.lastCompleteSummary.FinalScore != 0.7 {
+		t.Errorf("final_score = %v", stub.lastCompleteSummary.FinalScore)
+	}
+	if stub.lastCompleteSummary.TotalEpochsRun != 3 {
+		t.Errorf("total_epochs_run = %d", stub.lastCompleteSummary.TotalEpochsRun)
+	}
+	if stub.lastCompleteSummary.StoppedReason != "max_epochs" {
+		t.Errorf("stopped_reason = %q", stub.lastCompleteSummary.StoppedReason)
+	}
+}
+
+func TestComplete_MalformedBundle(t *testing.T) {
+	stub := &stubTrainingStore{}
+	h := newTrainingHandler(t, stub)
+
+	// bundle is missing main_prompt.
+	body := `{"bundle": {"skills": []}, "training_report": {"final_score": 0.7}}`
+	req := httptest.NewRequest(http.MethodPost, "/training-sessions/sess-1/complete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("session_id", "sess-1")
+	rec := httptest.NewRecorder()
+	h.Complete(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400", rec.Code)
+	}
+	if stub.lastCompleteID != "" {
+		t.Error("store.Complete should NOT be called on malformed bundle")
+	}
+}
+
+func TestComplete_WrongStatus_409(t *testing.T) {
+	stub := &stubTrainingStore{completeErr: types.ErrTrainingSessionConflict}
+	h := newTrainingHandler(t, stub)
+
+	body := `{"bundle": {"main_prompt":"x","skills":[]}, "training_report": {"final_score":0.7}}`
+	req := httptest.NewRequest(http.MethodPost, "/training-sessions/sess-1/complete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("session_id", "sess-1")
+	rec := httptest.NewRecorder()
+	h.Complete(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("code = %d, want 409", rec.Code)
+	}
+}
