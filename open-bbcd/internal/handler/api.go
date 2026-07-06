@@ -308,7 +308,7 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	// Training sessions
 	mux.HandleFunc("GET /training-sessions", trainingHandler.UIList)
 	mux.HandleFunc("GET /training-sessions/{session_id}", trainingHandler.UIDetail)
-	mux.HandleFunc("GET /training-sessions/{session_id}.json", trainingHandler.JSONFetch)
+	mux.HandleFunc("GET /training-sessions/{session_id}/json", trainingHandler.JSONFetch)
 	mux.HandleFunc("GET /training-sessions/{session_id}/report.json", trainingHandler.ReportJSON)
 	mux.HandleFunc("POST /training-sessions", trainingHandler.Create)
 	mux.HandleFunc("POST /training-sessions/{session_id}/start", trainingHandler.Start)

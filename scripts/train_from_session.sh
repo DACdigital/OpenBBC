@@ -7,7 +7,7 @@
 # (or FAILED). Refuses if the session isn't PENDING at start.
 #
 # Flow:
-#   1. GET  /training-sessions/{id}.json           (fetch inputs)
+#   1. GET  /training-sessions/{id}/json           (fetch inputs)
 #   2. GET  /evals/{source_eval_id}/export.yaml    (fetch eval-input.yaml)
 #   3. POST /training-sessions/{id}/start          (→ IN_PROGRESS)
 #   4. uv run aikdm train-agent --input ... --out ...
@@ -44,7 +44,7 @@ input="$work/input.yaml"
 out_dir="$work/out"
 
 echo "→ fetching training session $session_id"
-session_json=$(curl -fsSL -H 'Accept: application/json' "$OPENBBCD_URL/training-sessions/$session_id.json")
+session_json=$(curl -fsSL -H 'Accept: application/json' "$OPENBBCD_URL/training-sessions/$session_id/json")
 
 status=$(cd "$root/aikdm" && uv run python -c "import json,sys;print(json.loads(sys.argv[1])['status'])" "$session_json")
 if [ "$status" != "PENDING" ]; then

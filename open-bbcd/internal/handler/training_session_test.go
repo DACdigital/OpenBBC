@@ -244,7 +244,7 @@ func TestJSONFetch_ReturnsSessionJSON(t *testing.T) {
 	}}
 	h := newTrainingHandler(t, stub)
 
-	req := httptest.NewRequest(http.MethodGet, "/training-sessions/sess-1.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions/sess-1/json", nil)
 	req.SetPathValue("session_id", "sess-1")
 	rec := httptest.NewRecorder()
 	h.JSONFetch(rec, req)
