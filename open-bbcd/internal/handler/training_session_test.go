@@ -395,3 +395,126 @@ func TestComplete_WrongStatus_409(t *testing.T) {
 		t.Errorf("code = %d, want 409", rec.Code)
 	}
 }
+
+// listStub extends stubTrainingStore with per-test list/get returns.
+type listStub struct {
+	stubTrainingStore
+	sessions   []*types.TrainingSession
+	views      []repository.TrainingSessionRowView
+	getSession *types.TrainingSession
+}
+
+func (s *listStub) List(_ context.Context, _, _ int) ([]*types.TrainingSession, error) {
+	return s.sessions, nil
+}
+func (s *listStub) EnrichRows(_ context.Context, _ []*types.TrainingSession) ([]repository.TrainingSessionRowView, error) {
+	return s.views, nil
+}
+func (s *listStub) GetByID(_ context.Context, _ string) (*types.TrainingSession, error) {
+	return s.getSession, nil
+}
+
+func iptr(i int) *int         { return &i }
+func strptr(s string) *string { return &s }
+
+func TestUIList_RendersRows(t *testing.T) {
+	sess := &types.TrainingSession{
+		ID: "s-1", SourceEvalID: "e-1", Status: types.TrainingSessionStatusDone,
+		InitialScore: score(0.4), FinalScore: score(0.7),
+	}
+	stub := &listStub{
+		sessions: []*types.TrainingSession{sess},
+		views: []repository.TrainingSessionRowView{
+			{Session: sess, AgentName: "AcmeAgent", ParentVersionNum: 3, NewVersionNum: 4, SourceEvalScore: score(0.4)},
+		},
+	}
+	h := newTrainingHandler(t, stub)
+
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions", nil)
+	rec := httptest.NewRecorder()
+	h.UIList(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "AcmeAgent") {
+		t.Errorf("body should mention agent name")
+	}
+	if !strings.Contains(body, "0.40") || !strings.Contains(body, "0.70") {
+		t.Errorf("body should show both scores")
+	}
+	if !strings.Contains(body, "/training-sessions/s-1") {
+		t.Errorf("body should link to session detail")
+	}
+}
+
+func TestUIDetail_ShowsFieldsForDone(t *testing.T) {
+	newVer := "av-new"
+	report := json.RawMessage(`{
+		"schema_version":"training-report-v1",
+		"initial_score":0.4,"final_score":0.7,"total_epochs_run":2,"stopped_reason":"max_epochs",
+		"epochs":[
+			{"epoch":1,"baseline_score":0.4,"candidate_score":0.5,"promoted":true,"patches":[],"teacher_notes":"tightened","duration_seconds":1.0,"tokens_in":10,"tokens_out":2,"error":""},
+			{"epoch":2,"baseline_score":0.5,"candidate_score":0.7,"promoted":true,"patches":[],"teacher_notes":"added example","duration_seconds":2.0,"tokens_in":20,"tokens_out":4,"error":""}
+		]
+	}`)
+	stub := &listStub{
+		getSession: &types.TrainingSession{
+			ID: "s-1", SourceEvalID: "e-1", ParentVersionID: "av-1", NewVersionID: &newVer,
+			Status: types.TrainingSessionStatusDone,
+			InitialScore: score(0.4), FinalScore: score(0.7),
+			TotalEpochsRun: iptr(2),
+			StoppedReason:  strptr("max_epochs"),
+			TrainingReport: report,
+		},
+		views: []repository.TrainingSessionRowView{{
+			AgentName: "AcmeAgent", ParentVersionNum: 3, NewVersionNum: 4, SourceEvalScore: score(0.4),
+		}},
+	}
+	h := newTrainingHandler(t, stub)
+
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions/s-1", nil)
+	req.SetPathValue("session_id", "s-1")
+	rec := httptest.NewRecorder()
+	h.UIDetail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"AcmeAgent", "v3", "v4", "0.4000", "0.7000", "max_epochs", "tightened", "added example"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+	// Trained version link
+	if !strings.Contains(body, "/agent_versions/av-new/configure/prompts") {
+		t.Errorf("body should link to trained version prompts tab")
+	}
+}
+
+func TestUIDetail_ShowsErrorForFailed(t *testing.T) {
+	stub := &listStub{
+		getSession: &types.TrainingSession{
+			ID: "s-1", SourceEvalID: "e-1", ParentVersionID: "av-1",
+			Status: types.TrainingSessionStatusFailed, ErrorMessage: "boom",
+		},
+		views: []repository.TrainingSessionRowView{{
+			AgentName: "AcmeAgent", ParentVersionNum: 3,
+		}},
+	}
+	h := newTrainingHandler(t, stub)
+
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions/s-1", nil)
+	req.SetPathValue("session_id", "s-1")
+	rec := httptest.NewRecorder()
+	h.UIDetail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "boom") {
+		t.Errorf("body should render error message")
+	}
+}

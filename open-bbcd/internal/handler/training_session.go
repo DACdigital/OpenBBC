@@ -276,10 +276,101 @@ func (h *TrainingSessionHandler) ReportJSON(w http.ResponseWriter, r *http.Reque
 	_, _ = w.Write(pretty.Bytes())
 }
 
+type trainingListPageData struct {
+	Active string
+	Rows   []repository.TrainingSessionRowView
+}
+
 func (h *TrainingSessionHandler) UIList(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	sessions, err := h.store.List(r.Context(), 100, 0)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	rows, err := h.store.EnrichRows(r.Context(), sessions)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, h.listTmpl, "layout", trainingListPageData{
+		Active: "training-sessions",
+		Rows:   rows,
+	})
+}
+
+// epochView flattens one EpochRecord for the detail template.
+type epochView struct {
+	Epoch           int
+	BaselineScore   float64
+	CandidateScore  float64
+	Promoted        bool
+	Patches         []any
+	TeacherNotes    string
+	DurationSeconds float64
+	TokensIn        int
+	TokensOut       int
+	Error           string
+}
+
+type trainingDetailPageData struct {
+	Active  string
+	Session *types.TrainingSession
+	View    repository.TrainingSessionRowView
+	Epochs  []epochView
 }
 
 func (h *TrainingSessionHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	id := r.PathValue("session_id")
+	sess, err := h.store.GetByID(r.Context(), id)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	views, err := h.store.EnrichRows(r.Context(), []*types.TrainingSession{sess})
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	var view repository.TrainingSessionRowView
+	if len(views) > 0 {
+		view = views[0]
+	}
+	epochs := parseEpochsForView(sess.TrainingReport)
+
+	renderTemplate(w, h.detailTmpl, "layout", trainingDetailPageData{
+		Active:  "training-sessions",
+		Session: sess,
+		View:    view,
+		Epochs:  epochs,
+	})
+}
+
+// parseEpochsForView decodes training_report.epochs[] into a display slice.
+// Malformed reports return nil (empty epochs table) rather than erroring.
+func parseEpochsForView(raw json.RawMessage) []epochView {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload struct {
+		Epochs []struct {
+			Epoch           int     `json:"epoch"`
+			BaselineScore   float64 `json:"baseline_score"`
+			CandidateScore  float64 `json:"candidate_score"`
+			Promoted        bool    `json:"promoted"`
+			Patches         []any   `json:"patches"`
+			TeacherNotes    string  `json:"teacher_notes"`
+			DurationSeconds float64 `json:"duration_seconds"`
+			TokensIn        int     `json:"tokens_in"`
+			TokensOut       int     `json:"tokens_out"`
+			Error           string  `json:"error"`
+		} `json:"epochs"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	out := make([]epochView, 0, len(payload.Epochs))
+	for _, e := range payload.Epochs {
+		out = append(out, epochView(e))
+	}
+	return out
 }

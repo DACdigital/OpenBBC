@@ -1,4 +1,46 @@
 {{define "content"}}
-<h1>Training sessions</h1>
-<p>Coming soon</p>
+<section>
+  <div class="page-header">
+    <h1>Training sessions</h1>
+  </div>
+
+  {{if .Rows}}
+    <table class="data-table clickable">
+      <thead>
+        <tr>
+          <th class="col-date">Requested</th>
+          <th>Source</th>
+          <th>Trained version</th>
+          <th class="col-count">Score</th>
+          <th class="col-status">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range .Rows}}
+        {{$href := printf "/training-sessions/%s" .Session.ID}}
+        <tr class="clickable" onclick="location.href=this.dataset.href" data-href="{{$href}}">
+          <td class="col-date">{{.Session.RequestedAt.Format "2006-01-02 15:04"}}</td>
+          <td>
+            <a class="agent-link" href="/evals/{{.Session.SourceEvalID}}">e-{{.Session.SourceEvalID}}</a>
+            · {{.AgentName}} v{{.ParentVersionNum}}
+          </td>
+          <td>
+            {{if .Session.NewVersionID}}
+              <a class="agent-link" href="/agent_versions/{{deref .Session.NewVersionID}}/configure/prompts">v{{.NewVersionNum}} ↗</a>
+            {{else}}—{{end}}
+          </td>
+          <td class="col-count">
+            {{if and .Session.InitialScore .Session.FinalScore}}
+              {{printf "%.2f" (deref .Session.InitialScore)}} → {{printf "%.2f" (deref .Session.FinalScore)}}
+            {{else}}—{{end}}
+          </td>
+          <td class="col-status"><span class="badge badge-{{statusClass (printf "%s" .Session.Status)}}">{{.Session.Status}}</span></td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{else}}
+    <p class="empty-state">No training sessions yet. Click "Train" on any completed eval (score &lt; 100%) to queue one.</p>
+  {{end}}
+</section>
 {{end}}
