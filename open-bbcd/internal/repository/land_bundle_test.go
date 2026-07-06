@@ -114,7 +114,7 @@ func TestCreateVersionFromPrompts_ForksAndCopiesMCP(t *testing.T) {
 		SkillPrompts: map[string]string{"place_order": "edited skill"},
 	})
 
-	newID, err := repo.CreateVersionFromPrompts(ctx, parentID, newPrompts)
+	newID, err := repo.CreateVersionFromPrompts(ctx, parentID, newPrompts, types.AgentStatusDraft)
 	if err != nil {
 		t.Fatalf("CreateVersionFromPrompts: %v", err)
 	}
@@ -152,5 +152,33 @@ func TestCreateVersionFromPrompts_ForksAndCopiesMCP(t *testing.T) {
 	}
 	if len(atts) != 1 || atts[0].BackendID != mcp || atts[0].Note != "escalations only" {
 		t.Fatalf("mcp copy wrong: %+v", atts)
+	}
+}
+
+func TestCreateVersionFromPrompts_LandsReadyWhenStatusReady(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewAgentVersionRepository(db)
+	ctx := context.Background()
+
+	_, parentID := seedAgent(t, db)
+
+	newPrompts, _ := json.Marshal(types.Prompts{
+		MainPrompt:   "trained",
+		SkillPrompts: map[string]string{},
+	})
+
+	newID, err := repo.CreateVersionFromPrompts(ctx, parentID, newPrompts, types.AgentStatusReady)
+	if err != nil {
+		t.Fatalf("CreateVersionFromPrompts: %v", err)
+	}
+
+	var status string
+	if err := db.QueryRow(
+		`SELECT status FROM agent_versions WHERE id = $1::uuid`, newID,
+	).Scan(&status); err != nil {
+		t.Fatalf("read new version: %v", err)
+	}
+	if status != "READY" {
+		t.Fatalf("status: want READY, got %q", status)
 	}
 }

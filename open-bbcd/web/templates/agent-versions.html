@@ -22,7 +22,7 @@
 <dl class="agent-meta">
   <div class="agent-meta-item">
     <dt>Created</dt>
-    <dd>{{.CreatedAt.Format "Jan 2, 2006"}}</dd>
+    <dd>{{.CreatedAt.Format "2006-01-02 15:04"}}</dd>
   </div>
   {{if .DiscoveryFilePath}}
   <div class="agent-meta-item">
@@ -59,7 +59,7 @@
         <a class="agent-link" href="{{$href}}">v{{.VersionNum}}</a>
       </td>
       <td class="col-status"><span class="badge badge-{{.Version.Status | statusClass}}">{{.Version.Status}}</span></td>
-      <td class="col-date">{{.Version.CreatedAt.Format "Jan 2, 2006"}}</td>
+      <td class="col-date">{{.Version.CreatedAt.Format "2006-01-02 15:04"}}</td>
     </tr>
     {{end}}
   </tbody>

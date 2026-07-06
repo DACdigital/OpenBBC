@@ -6,12 +6,12 @@
 <dl class="agent-meta">
   <div class="agent-meta-item">
     <dt>Created</dt>
-    <dd>{{.Agent.CreatedAt.Format "Jan 2, 2006"}}</dd>
+    <dd>{{.Agent.CreatedAt.Format "2006-01-02 15:04"}}</dd>
   </div>
   {{if .Agent.FinalizedAt}}
   <div class="agent-meta-item">
     <dt>Finalized</dt>
-    <dd>{{.Agent.FinalizedAt.Format "Jan 2, 2006 15:04"}}</dd>
+    <dd>{{.Agent.FinalizedAt.Format "2006-01-02 15:04"}}</dd>
   </div>
   {{end}}
   {{if .Agent.DiscoveryFilePath}}
@@ -49,6 +49,7 @@
       <th class="col-status">Status</th>
       <th class="col-date">Created</th>
       <th class="col-count">Avg eval</th>
+      <th class="col-count">Last eval</th>
       <th class="col-actions">Evals</th>
     </tr>
   </thead>
@@ -60,10 +61,14 @@
         <a class="agent-link" href="{{$href}}">v{{.VersionNum}}</a>
       </td>
       <td class="col-status"><span class="badge badge-{{.Version.Status | statusClass}}">{{.Version.Status}}</span></td>
-      <td class="col-date">{{.Version.CreatedAt.Format "Jan 2, 2006"}}</td>
+      <td class="col-date">{{.Version.CreatedAt.Format "2006-01-02 15:04"}}</td>
       <td class="col-count" onclick="event.stopPropagation()">
         {{$s := index $.EvalStats .Version.ID}}
         {{if $s.Count}}{{printf "%.2f" $s.Avg}} · {{$s.Count}} evals{{else}}—{{end}}
+      </td>
+      <td class="col-count" onclick="event.stopPropagation()">
+        {{$s := index $.EvalStats .Version.ID}}
+        {{if $s.HasLast}}{{printf "%.2f" $s.LastScore}}{{else}}—{{end}}
       </td>
       <td class="col-actions" onclick="event.stopPropagation()">
         <button class="btn-small"

@@ -17,9 +17,16 @@ from aikdm import orchestrator
 from aikdm.config import ConfigError, load_settings
 from aikdm.eval.orchestrator import run_eval
 from aikdm.eval.schemas import EvalInput
+from aikdm.train.orchestrator import run_training
+# Alias avoids collision with aikdm.progress.ProgressEmitter used by generate-agent.
+# The two emitters have different interfaces today (.emit vs __call__, timestamp
+# vs no timestamp). Consolidating them is tracked as a follow-up — see the
+# agent-finetuning design doc's "follow-ups" section.
+from aikdm.train.reporter import ProgressEmitter as TrainProgressEmitter, write_report
 from aikdm.loader import (
     InputIOError,
     InputValidationError,
+    _BlockStyleDumper,
     load_flow_map_config,
     load_prompt_schema,
     write_bundle,
@@ -132,6 +139,79 @@ def evaluate(input_path: Path, output_path: Path) -> None:
         sys.exit(3)
 
     output_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+    sys.exit(0)
+
+
+@main.command("train-agent",
+              help="Train an agent bundle for N epochs against a dataset version.")
+@click.option("--input", "input_path", type=click.Path(path_type=Path),
+              required=True, help="Path to eval-input.yaml (same format as `evaluate`).")
+@click.option("--epochs", type=int, default=5, show_default=True,
+              help="Maximum number of training epochs.")
+@click.option("--patience", type=int, default=3, show_default=True,
+              help="Early stop after this many consecutive non-improvements.")
+@click.option("--out", "out_dir", type=click.Path(path_type=Path),
+              required=True, help="Output directory (must be empty or missing).")
+def train_agent(input_path: Path, epochs: int, patience: int, out_dir: Path) -> None:
+    input_path = input_path.expanduser()
+    out_dir = out_dir.expanduser()
+
+    if out_dir.exists() and any(out_dir.iterdir()):
+        _print_error("input_validation", f"output directory already populated: {out_dir}")
+        sys.exit(2)
+
+    load_dotenv(find_dotenv(usecwd=True))
+    try:
+        settings = load_settings()
+    except ConfigError as e:
+        _print_error("config", str(e))
+        sys.exit(2)
+
+    logging.basicConfig(level=settings.log_level.upper(), stream=sys.stderr)
+
+    try:
+        raw = _yaml.safe_load(input_path.read_text(encoding="utf-8"))
+    except OSError as e:
+        _print_error("input_io", str(e))
+        sys.exit(2)
+    except _yaml.YAMLError as e:
+        _print_error("input_validation", str(e))
+        sys.exit(2)
+
+    try:
+        inp = EvalInput.model_validate(raw)
+    except Exception as e:
+        _print_error("input_validation", str(e))
+        sys.exit(2)
+
+    emitter = TrainProgressEmitter()
+    try:
+        final_bundle, report = asyncio.run(run_training(
+            inp, settings, epochs=epochs, patience=patience, emitter=emitter,
+        ))
+    except Exception as e:
+        _print_error("llm_unavailable", str(e))
+        sys.exit(3)
+
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        bundle_path = out_dir / "bundle.yaml"
+        bundle_path.write_text(
+            _yaml.dump(final_bundle, Dumper=_BlockStyleDumper, sort_keys=False,
+                       default_flow_style=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        # Fill in the bundle path now that we know it.
+        report = report.model_copy(update={"final_bundle_path": str(bundle_path)})
+        write_report(report, out_dir)
+    except OSError as e:
+        _print_error("output_io", str(e))
+        sys.exit(2)
+
+    emitter("training_done", initial_score=report.initial_score,
+            final_score=report.final_score,
+            stopped_reason=report.stopped_reason,
+            epochs_run=report.total_epochs_run)
     sys.exit(0)
 
 

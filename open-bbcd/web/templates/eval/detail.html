@@ -3,7 +3,12 @@
   <div class="page-header">
     <h1>Eval</h1>
     <div class="page-header-actions">
-      <a class="btn-secondary" href="/evals/{{.Eval.ID}}/export.yaml">Download input.yaml</a>
+      <a class="btn-secondary" href="/evals/{{.Eval.ID}}/export.yaml">Export YAML</a>
+      {{if eq (printf "%s" .Eval.Status) "PENDING"}}
+        <form method="post" action="/evals/{{.Eval.ID}}/start" style="display:inline">
+          <button type="submit" class="btn-primary" title="Mark eval IN_PROGRESS. A separate worker will pick it up and run training.">Train</button>
+        </form>
+      {{end}}
       {{if or (eq (printf "%s" .Eval.Status) "PENDING") (eq (printf "%s" .Eval.Status) "IN_PROGRESS")}}
         <form method="post" enctype="multipart/form-data" action="/evals/{{.Eval.ID}}/upload-result" style="display:inline">
           <input type="file" name="result" accept="application/json" required>
@@ -15,6 +20,7 @@
 
   <dl class="agent-meta">
     <div class="agent-meta-item"><dt>Status</dt><dd><span class="badge badge-{{statusClass (printf "%s" .Eval.Status)}}">{{.Eval.Status}}</span></dd></div>
+    <div class="agent-meta-item"><dt>Source agent version</dt><dd><a href="/agent_versions/{{.Eval.AgentVersionID}}/configure/prompts">{{.AgentName}} v{{.AgentVersionNum}} ↗</a></dd></div>
     <div class="agent-meta-item"><dt>Score</dt><dd>{{with .Eval.Score}}{{pct .}}{{else}}—{{end}}</dd></div>
     <div class="agent-meta-item"><dt>Criteria</dt><dd>{{with .Eval.PassedCriteria}}{{.}}{{else}}—{{end}}{{with .Eval.TotalCriteria}}/{{.}}{{end}}</dd></div>
     <div class="agent-meta-item"><dt>Created</dt><dd>{{.Eval.CreatedAt.Format "2006-01-02 15:04"}}</dd></div>

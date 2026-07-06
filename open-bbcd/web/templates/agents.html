@@ -22,7 +22,7 @@
       <td><a class="agent-link" href="/agents/{{.AgentID}}/configure/versions">{{.Name}}</a></td>
       <td class="col-version">v{{$latest.VersionNum}}</td>
       <td class="col-status"><span class="badge badge-{{$latest.Version.Status | statusClass}}">{{$latest.Version.Status}}</span></td>
-      <td class="col-date">{{$latest.Version.CreatedAt.Format "Jan 2, 2006"}}</td>
+      <td class="col-date">{{$latest.Version.CreatedAt.Format "2006-01-02 15:04"}}</td>
       <td class="col-count">{{len .Versions}}</td>
     </tr>
     {{end}}

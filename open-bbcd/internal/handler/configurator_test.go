@@ -92,18 +92,19 @@ func TestConfiguratorRouter_ArchitectureIndexRedirectsToFlows(t *testing.T) {
 }
 
 type stubConfigStore struct {
-	cfg               types.FlowMapConfig
-	getErr            error
-	parseErr          string
-	updates           int
-	updateFn          func(cfg []byte) error
-	statusFn          func(versionID, expectedFrom, to string) error
-	currentStatus     string // optional override; defaults to "INITIALIZING"
-	architecture      []byte // optional agent-level architecture blob
-	prompts           []byte // optional version-level prompts blob (rendered by the Prompts tab)
-	createVersionFn   func(parentVersionID string, promptsJSON []byte) (string, error)
-	lastPromptsParent string
-	lastPromptsJSON   []byte
+	cfg                types.FlowMapConfig
+	getErr             error
+	parseErr           string
+	updates            int
+	updateFn           func(cfg []byte) error
+	statusFn           func(versionID, expectedFrom, to string) error
+	currentStatus      string // optional override; defaults to "INITIALIZING"
+	architecture       []byte // optional agent-level architecture blob
+	prompts            []byte // optional version-level prompts blob (rendered by the Prompts tab)
+	createVersionFn    func(parentVersionID string, promptsJSON []byte) (string, error)
+	lastPromptsParent  string
+	lastPromptsJSON    []byte
+	lastPromptsStatus  types.AgentStatus
 }
 
 func (s *stubConfigStore) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
@@ -155,7 +156,8 @@ func (s *stubConfigStore) UpdateStatus(ctx context.Context, versionID, expectedF
 	return nil
 }
 
-func (s *stubConfigStore) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte) (string, error) {
+func (s *stubConfigStore) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
+	s.lastPromptsStatus = status
 	if s.createVersionFn != nil {
 		return s.createVersionFn(parentVersionID, promptsJSON)
 	}
@@ -1195,6 +1197,48 @@ func TestConfigurator_SavePrompts_CreatesNewVersionAndRedirects(t *testing.T) {
 	}
 	if got.MainPrompt != "new main" || got.SkillPrompts["place_order"] != "new skill" {
 		t.Errorf("persisted prompts wrong: %+v", got)
+	}
+	if store.lastPromptsStatus != types.AgentStatusDraft {
+		t.Errorf("SavePrompts status: want DRAFT, got %q", store.lastPromptsStatus)
+	}
+}
+
+func TestConfigurator_LandPrompts_CreatesReadyVersionAndRedirects(t *testing.T) {
+	parentID := "22222222-2222-2222-2222-222222222222"
+	store := makePromptsConfigStore("READY", []byte(`{
+		"main_prompt":"old",
+		"skills":[{"name":"place_order","prompt":"old skill"}]
+	}`))
+	h := newConfigHandler(t, store)
+
+	form := url.Values{}
+	form.Set("main_prompt", "trained main")
+	form.Set("skill_prompt[place_order]", "trained skill")
+	req := httptest.NewRequest(http.MethodPost, "/agent_versions/"+parentID+"/configure/prompts/land", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("version_id", parentID)
+	w := httptest.NewRecorder()
+	h.LandPrompts(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status: want 303, got %d body=%s", w.Code, w.Body.String())
+	}
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/agent_versions/new-version-id/configure/prompts") {
+		t.Errorf("redirect target wrong: %q", loc)
+	}
+	if store.lastPromptsParent != parentID {
+		t.Errorf("parent passed to repo: want %q, got %q", parentID, store.lastPromptsParent)
+	}
+	var got types.Prompts
+	if err := json.Unmarshal(store.lastPromptsJSON, &got); err != nil {
+		t.Fatalf("parse persisted prompts: %v", err)
+	}
+	if got.MainPrompt != "trained main" || got.SkillPrompts["place_order"] != "trained skill" {
+		t.Errorf("persisted prompts wrong: %+v", got)
+	}
+	if store.lastPromptsStatus != types.AgentStatusReady {
+		t.Errorf("LandPrompts status: want READY, got %q", store.lastPromptsStatus)
 	}
 }
 

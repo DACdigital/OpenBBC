@@ -108,6 +108,50 @@ func TestEval_SubmitDone(t *testing.T) {
 	}
 }
 
+func TestLastScoreByAgentVersion(t *testing.T) {
+	_, _, db := withRepo(t)
+	ctx := context.Background()
+
+	var agentID, versionID string
+	_ = db.QueryRow(`INSERT INTO agents (name) VALUES ('last-score-a') RETURNING id::text`).Scan(&agentID)
+	_ = db.QueryRow(`INSERT INTO agent_versions (agent_id, status) VALUES ($1::uuid, 'READY') RETURNING id::text`, agentID).Scan(&versionID)
+	var datasetID, dvID string
+	_ = db.QueryRow(`INSERT INTO datasets (name) VALUES ('last-score-ds') RETURNING id::text`).Scan(&datasetID)
+	_ = db.QueryRow(`INSERT INTO dataset_versions (dataset_id, status, version_num, closed_at) VALUES ($1::uuid, 'CLOSED', 1, now()) RETURNING id::text`, datasetID).Scan(&dvID)
+
+	repo := NewEvalRepository(db)
+
+	// No evals yet — HasLast should be false.
+	_, ok, err := repo.LastScoreByAgentVersion(ctx, versionID)
+	if err != nil {
+		t.Fatalf("LastScoreByAgentVersion (empty): %v", err)
+	}
+	if ok {
+		t.Errorf("expected ok=false with no evals, got true")
+	}
+
+	// Seed two DONE evals with different completed_at; the newer one wins.
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO evals (agent_version_id, dataset_version_id, status, score, completed_at)
+		VALUES ($1::uuid, $2::uuid, 'DONE', 0.4, now() - interval '1 hour'),
+		       ($1::uuid, $2::uuid, 'DONE', 0.7, now())
+	`, versionID, dvID)
+	if err != nil {
+		t.Fatalf("seed evals: %v", err)
+	}
+
+	score, ok, err := repo.LastScoreByAgentVersion(ctx, versionID)
+	if err != nil {
+		t.Fatalf("LastScoreByAgentVersion: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected ok=true with DONE evals")
+	}
+	if score != 0.7 {
+		t.Errorf("expected last score 0.7 (most recent), got %v", score)
+	}
+}
+
 func TestEval_SubmitFailed(t *testing.T) {
 	_, _, db := withRepo(t)
 	var agentID, versionID, datasetID, dvID string

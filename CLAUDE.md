@@ -29,6 +29,10 @@ uv run aikdm generate-agent --help                # CLI help
 uv run aikdm generate-agent \                     # generate a bundle
   --config /path/to/flow-map-config.yaml \
   --output /path/to/bundle.yaml
+uv run aikdm train-agent \                        # train a bundle for N epochs
+  --input /path/to/eval-input.yaml \
+  --epochs 5 --patience 3 \
+  --out /path/to/output-dir/
 ```
 
 ### Architecture (what spans multiple files)
