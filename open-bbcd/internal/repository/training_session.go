@@ -7,7 +7,6 @@ import (
 	"errors"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
-	"github.com/lib/pq"
 )
 
 type TrainingSessionRepository struct {
@@ -29,8 +28,7 @@ func (r *TrainingSessionRepository) Create(ctx context.Context, sourceEvalID, pa
 		RETURNING id::text
 	`, sourceEvalID, parentVersionID).Scan(&id)
 	if err != nil {
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+		if isUniqueViolation(err) {
 			return "", types.ErrTrainingSessionConflict
 		}
 		return "", err
@@ -56,6 +54,8 @@ func (r *TrainingSessionRepository) GetByID(ctx context.Context, id string) (*ty
 // GetActiveByEval returns the PENDING or IN_PROGRESS session for an eval, or
 // nil if none. The partial unique index guarantees at most one row satisfies.
 func (r *TrainingSessionRepository) GetActiveByEval(ctx context.Context, evalID string) (*types.TrainingSession, error) {
+	// The partial unique index idx_ts_one_active_per_eval guarantees at most one
+	// PENDING/IN_PROGRESS row per source_eval_id; LIMIT 1 is an extra guard.
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id::text, source_eval_id::text, parent_version_id::text,
 		       (new_version_id)::text, status,

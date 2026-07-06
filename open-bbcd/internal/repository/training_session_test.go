@@ -45,6 +45,9 @@ func TestCreateTrainingSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
+	if got.RequestedAt.IsZero() {
+		t.Error("requested_at should be set by DB default now()")
+	}
 	if got.Status != types.TrainingSessionStatusPending {
 		t.Errorf("status = %q, want PENDING", got.Status)
 	}
