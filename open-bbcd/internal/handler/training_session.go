@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
-	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -213,6 +212,3 @@ func (h *TrainingSessionHandler) UIList(w http.ResponseWriter, r *http.Request) 
 func (h *TrainingSessionHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not implemented", http.StatusNotImplemented)
 }
-
-// ensure strings import is used (Task 8 will use it; present now to avoid churn).
-var _ = strings.TrimSpace
