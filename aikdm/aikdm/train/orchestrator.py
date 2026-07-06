@@ -44,6 +44,18 @@ async def run_training(
 
     emit("baseline_done", initial_score=initial_score)
 
+    if best_score >= 1.0:
+        emit("perfect_baseline", initial_score=initial_score)
+        return best_bundle, TrainingReport(
+            input_eval_id=inp.eval_id,
+            initial_score=initial_score,
+            final_score=best_score,
+            total_epochs_run=0,
+            stopped_reason="perfect_score",
+            epochs=[],
+            final_bundle_path="",
+        )
+
     tried: list[SectionPatch] = []
     epoch_records: list[EpochRecord] = []
     no_improve_streak = 0
@@ -145,6 +157,9 @@ async def run_training(
         ))
         emit("epoch_done", epoch=epoch, promoted=promoted,
              candidate_score=candidate_result.score, best_score=best_score)
+
+        if best_score >= 1.0:
+            stopped_reason = "perfect_score"; break
 
         if no_improve_streak >= patience:
             stopped_reason = "plateau"; break

@@ -48,6 +48,6 @@ class TrainingReport(BaseModel):
     initial_score: float
     final_score: float
     total_epochs_run: int
-    stopped_reason: Literal["max_epochs", "plateau"]
+    stopped_reason: Literal["max_epochs", "plateau", "perfect_score"]
     epochs: list[EpochRecord] = Field(default_factory=list)
     final_bundle_path: str
