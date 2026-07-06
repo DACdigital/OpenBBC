@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
+	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -84,30 +86,124 @@ func NewTrainingSessionHandler(store TrainingSessionStore) (*TrainingSessionHand
 	}, nil
 }
 
-// Stubs — bodies filled in later tasks.
-
 func (h *TrainingSessionHandler) Create(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	sourceEvalID := r.FormValue("source_eval_id")
+	if sourceEvalID == "" {
+		http.Error(w, "source_eval_id required", http.StatusBadRequest)
+		return
+	}
+	e, err := h.store.EvalForTraining(r.Context(), sourceEvalID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if e == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if e.Status != types.EvalStatusDone {
+		http.Error(w, "eval must be DONE to train from (status: "+string(e.Status)+")", http.StatusBadRequest)
+		return
+	}
+	if e.Score != nil && *e.Score >= 1.0 {
+		http.Error(w, "eval has a perfect score — no training needed", http.StatusBadRequest)
+		return
+	}
+	active, err := h.store.GetActiveByEval(r.Context(), sourceEvalID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if active != nil {
+		http.Error(w, "an active training session already exists for this eval: "+active.ID, http.StatusConflict)
+		return
+	}
+	id, err := h.store.Create(r.Context(), sourceEvalID, e.AgentVersionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	http.Redirect(w, r, "/training-sessions/"+id, http.StatusSeeOther)
+}
+
+type startBody struct {
+	Epochs   int `json:"epochs"`
+	Patience int `json:"patience"`
 }
 
 func (h *TrainingSessionHandler) Start(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	id := r.PathValue("session_id")
+	var body startBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Epochs < 1 || body.Patience < 1 {
+		http.Error(w, "epochs and patience must be >= 1", http.StatusBadRequest)
+		return
+	}
+	if err := h.store.Start(r.Context(), id, body.Epochs, body.Patience); err != nil {
+		Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *TrainingSessionHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not implemented", http.StatusNotImplemented)
 }
 
+type failBody struct {
+	ErrorMessage string `json:"error_message"`
+}
+
 func (h *TrainingSessionHandler) Fail(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	id := r.PathValue("session_id")
+	var body failBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.store.Fail(r.Context(), id, body.ErrorMessage); err != nil {
+		Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *TrainingSessionHandler) JSONFetch(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	id := r.PathValue("session_id")
+	s, err := h.store.GetByID(r.Context(), id)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s)
 }
 
 func (h *TrainingSessionHandler) ReportJSON(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	id := r.PathValue("session_id")
+	s, err := h.store.GetByID(r.Context(), id)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if len(s.TrainingReport) == 0 {
+		_, _ = w.Write([]byte("{}"))
+		return
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, s.TrainingReport, "", "  "); err != nil {
+		_, _ = w.Write(s.TrainingReport)
+		return
+	}
+	_, _ = w.Write(pretty.Bytes())
 }
 
 func (h *TrainingSessionHandler) UIList(w http.ResponseWriter, r *http.Request) {
@@ -117,3 +213,6 @@ func (h *TrainingSessionHandler) UIList(w http.ResponseWriter, r *http.Request) 
 func (h *TrainingSessionHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not implemented", http.StatusNotImplemented)
 }
+
+// ensure strings import is used (Task 8 will use it; present now to avoid churn).
+var _ = strings.TrimSpace
