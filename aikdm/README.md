@@ -1,6 +1,6 @@
 # aikdm
 
-Short for **aikademy** (AI + academy). Prompt-generation and evaluation toolkit for OpenBBC agents. This package covers alpha agent generation; evaluation and training are planned.
+Prompt-generation, evaluation, and training toolkit for OpenBBC agents. Ships three subcommands: `generate-agent` (initial alpha prompt from a FlowMapConfig), `evaluate` (score an agent version against a dataset), and `train-agent` (N-epoch teacher/judge hill-climb).
 
 ## What it does
 

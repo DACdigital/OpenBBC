@@ -31,7 +31,7 @@ OpenBBC speeds up time to market for custom agent deployments that integrate wit
 |-----------|-------------|
 | **CC Discovery Skill** | Claude Code skill that extracts business logic from your codebase |
 | **open-bbcd** | Golang service: backoffice, REST API, agent runtime |
-| **aicademy** | Python CLI for agent generation, training, evaluation |
+| **aikdm** | Python CLI for agent generation, evaluation, training |
 
 ## Key Features
 
@@ -46,7 +46,7 @@ OpenBBC speeds up time to market for custom agent deployments that integrate wit
 | Component | Technology |
 |-----------|------------|
 | open-bbcd | Golang |
-| aicademy | Python (click, Google ADK) |
+| aikdm | Python (click, Google ADK, LiteLLM) |
 | Storage | PostgreSQL |
 | Client protocol | AG-UI |
 | Backend protocol | MCP (SSE/Streamable HTTP) |
