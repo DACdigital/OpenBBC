@@ -126,6 +126,29 @@ The mux mixes server-rendered htmx UI with a JSON REST API. Fixed paths take pre
 |--------|------|-------------|
 | GET | `/health` | Liveness probe. |
 
+### JSON list endpoints (for cron / batch discovery)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/evals.json?status=PENDING&limit=100` | Machine-readable eval list. Optional `status` (PENDING/IN_PROGRESS/DONE/FAILED) and `limit` (1–500, default 100). |
+| GET | `/training-sessions.json?status=PENDING&limit=100` | Same shape, for training sessions. |
+
+## Batch / cron scripts
+
+Two shell scripts drain PENDING work in bulk, backed by the JSON list endpoints above. Both are `flock`-protected (overlapping cron invocations exit 0 silently), serial, and continue-on-error.
+
+| Script | Drains |
+|--------|--------|
+| `scripts/process_pending_evals.sh` | All PENDING evals via `scripts/run_eval.sh` per id. |
+| `scripts/process_pending_trainings.sh` | All PENDING training sessions via `scripts/train_from_session.sh --yes` per id. |
+
+Suggested crontab (see `docs/PRODUCTION.md`):
+
+```
+*/10 * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_evals.sh
+*/15 * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_trainings.sh
+```
+
 ## Configuration
 
 Config is env-driven (`internal/config/config.go`, `caarlos0/env` + `joho/godotenv`). `.env` is auto-loaded from the working directory if present.
