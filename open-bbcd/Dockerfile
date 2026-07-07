@@ -13,4 +13,6 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /out/open-bbcd /usr/local/bin/open-bbcd
 EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
+    CMD ["/usr/local/bin/open-bbcd", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/open-bbcd"]
