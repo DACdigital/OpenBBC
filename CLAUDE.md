@@ -61,15 +61,18 @@ Module: `github.com/DACdigital/OpenBBC/open-bbcd` · Go 1.22+ · PostgreSQL 15+ 
 ### Common commands (run from `open-bbcd/`)
 
 ```bash
-docker-compose up -d              # start Postgres
+docker compose up -d              # start Postgres + open-bbcd (from repo root)
 cp .env.example .env && source .env
 make migrate-up                   # apply all migrations (needs $DATABASE_URL)
 make run                          # go run ./cmd/open-bbcd
 make build                        # → bin/open-bbcd
 make test                         # go test -v -race ./...
+docker compose --profile aikdm run --rm aikdm generate-agent ...   # one-off aikdm run
 go test -v -race ./internal/handler -run TestWizardSubmit   # one test
 make migrate-create name=add_foo  # new goose SQL migration
 ```
+
+Note: `docker compose up -d` is the exception to "run from `open-bbcd/`" — it must be run from the repo root, where the top-level `docker-compose.yml` lives.
 
 `make migrate-up` requires `goose` on `$PATH` (`go install github.com/pressly/goose/v3/cmd/goose@latest`) and `$DATABASE_URL` exported.
 

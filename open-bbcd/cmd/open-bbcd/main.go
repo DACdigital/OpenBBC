@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -21,7 +22,23 @@ const (
 )
 
 func main() {
-	if err := run(); err != nil {
+	sub := ""
+	if len(os.Args) > 1 {
+		sub = os.Args[1]
+	}
+	var err error
+	switch sub {
+	case "", "serve":
+		err = run()
+	case "migrate":
+		err = runMigrate()
+	case "healthcheck":
+		err = runHealthcheck()
+	default:
+		fmt.Fprintf(os.Stderr, "unknown subcommand: %q (valid: serve, migrate, healthcheck)\n", sub)
+		os.Exit(2)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -45,6 +62,12 @@ func run() error {
 	}
 	defer db.Close()
 	logger.Info("database connected")
+
+	logger.Info("applying migrations")
+	if err := database.Migrate(db); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+	logger.Info("migrations applied")
 
 	store, err := storage.NewLocalDisk(cfg.Discovery.StorageDir)
 	if err != nil {
@@ -79,4 +102,49 @@ func run() error {
 	defer cancel()
 
 	return server.Shutdown(ctx)
+}
+
+func runMigrate() error {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	db, err := database.NewPostgres(cfg.Database.URL)
+	if err != nil {
+		return fmt.Errorf("connect to database: %w", err)
+	}
+	defer db.Close()
+	logger.Info("applying migrations")
+	if err := database.Migrate(db); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+	logger.Info("migrations applied")
+	return nil
+}
+
+// runHealthcheck probes localhost:$SERVER_PORT/health. Reads SERVER_PORT
+// directly (default 8080) rather than going through config.Load() so the
+// probe stays dependency-minimal — a broken DATABASE_URL must not fail the
+// healthcheck. Intentionally silent: exit code is the healthcheck signal.
+func runHealthcheck() error {
+	port := 8080
+	if v := os.Getenv("SERVER_PORT"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid SERVER_PORT: %w", err)
+		}
+		port = n
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/health", port)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("healthcheck GET: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("healthcheck: status %d", resp.StatusCode)
+	}
+	return nil
 }
