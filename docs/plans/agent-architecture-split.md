@@ -1,3 +1,7 @@
+> **Status: SHIPPED.** This plan was executed in migration `017_agent_level_architecture.sql` and PR #34. Kept for historical reference; do not treat as pending work.
+
+---
+
 # Agent-level architecture, version-level prompts
 
 ## Goal
