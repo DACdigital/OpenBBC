@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -26,6 +27,40 @@ func DecodeJSON(r *http.Request, v any) error {
 		return err
 	}
 	return nil
+}
+
+// isValidJobStatus checks the status against the shared PENDING → IN_PROGRESS →
+// DONE/FAILED state machine used by both evals and training sessions.
+func isValidJobStatus(s string) bool {
+	switch s {
+	case "PENDING", "IN_PROGRESS", "DONE", "FAILED":
+		return true
+	}
+	return false
+}
+
+// ParseListParams reads ?status=&limit= from the request. Empty status is
+// allowed (means "no filter"). Non-empty status is validated against the shared
+// job state machine. Limit must be a positive int; empty means default. On
+// validation failure, writes a JSON 400 to w and returns ok=false.
+//
+// Repo layer clamps limit to [1, 500]; the handler doesn't reject limit>500.
+func ParseListParams(w http.ResponseWriter, r *http.Request) (status string, limit int, ok bool) {
+	status = r.URL.Query().Get("status")
+	if status != "" && !isValidJobStatus(status) {
+		JSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid status"})
+		return "", 0, false
+	}
+	limit = 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			JSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid limit"})
+			return "", 0, false
+		}
+		limit = n
+	}
+	return status, limit, true
 }
 
 func Error(w http.ResponseWriter, err error) {

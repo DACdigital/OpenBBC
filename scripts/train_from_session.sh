@@ -11,14 +11,14 @@
 #   2. GET  /evals/{source_eval_id}/export.yaml    (fetch eval-input.yaml)
 #   3. POST /training-sessions/{id}/start          (→ IN_PROGRESS)
 #   4. uv run aikdm train-agent --input ... --out ...
-#   5. Print score-diff summary, ask y/N
+#   5. Print score-diff summary, ask y/N (skipped when --yes / -y is set)
 #   6. YES: POST /training-sessions/{id}/complete  (→ DONE, creates version)
 #      NO:  POST /training-sessions/{id}/fail       (→ FAILED with reason)
 
 set -euo pipefail
 
 usage() {
-    echo "usage: scripts/train_from_session.sh <session_id> [--epochs N] [--patience K]" >&2
+    echo "usage: scripts/train_from_session.sh <session_id> [--epochs N] [--patience K] [-y|--yes]" >&2
     exit 2
 }
 
@@ -28,10 +28,12 @@ shift
 
 epochs=5
 patience=3
+auto_yes=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --epochs)   epochs="${2:?}"; shift 2;;
         --patience) patience="${2:?}"; shift 2;;
+        -y|--yes)   auto_yes=1; shift;;
         *) echo "unknown flag: $1" >&2; usage;;
     esac
 done
@@ -107,14 +109,18 @@ echo
 echo "outputs remain at: $out_dir"
 echo
 
-read -r -p "commit this training session (creates a new READY agent version)? [y/N] " ans
-case "$ans" in
-    y|Y|yes|YES) ;;
-    *)
-        fail_session "operator declined at y/N prompt"
-        exit 0
-        ;;
-esac
+if [ "$auto_yes" -eq 1 ]; then
+    echo "→ --yes: skipping confirmation, proceeding to complete"
+else
+    read -r -p "commit this training session (creates a new READY agent version)? [y/N] " ans
+    case "$ans" in
+        y|Y|yes|YES) ;;
+        *)
+            fail_session "operator declined at y/N prompt"
+            exit 0
+            ;;
+    esac
+fi
 
 echo "→ completing session + creating READY agent version"
 result=$(

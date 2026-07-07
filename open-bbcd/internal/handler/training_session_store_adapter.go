@@ -30,8 +30,8 @@ func (s *trainingSessionStore) GetActiveByEval(ctx context.Context, evalID strin
 	return s.sessions.GetActiveByEval(ctx, evalID)
 }
 
-func (s *trainingSessionStore) List(ctx context.Context, limit, offset int) ([]*types.TrainingSession, error) {
-	return s.sessions.List(ctx, limit, offset)
+func (s *trainingSessionStore) List(ctx context.Context, status string, limit int) ([]*types.TrainingSession, error) {
+	return s.sessions.List(ctx, status, limit)
 }
 
 func (s *trainingSessionStore) EnrichRows(ctx context.Context, sessions []*types.TrainingSession) ([]repository.TrainingSessionRowView, error) {

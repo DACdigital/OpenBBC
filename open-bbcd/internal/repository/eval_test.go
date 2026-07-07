@@ -171,3 +171,73 @@ func TestEval_SubmitFailed(t *testing.T) {
 		t.Errorf("bad terminal state: %+v", got)
 	}
 }
+
+func TestEvalRepository_List_FiltersByStatus(t *testing.T) {
+	_, _, db := withRepo(t)
+	ctx := context.Background()
+
+	var agentID, versionID, datasetID, dvID string
+	_ = db.QueryRow(`INSERT INTO agents (name) VALUES ('e-list') RETURNING id::text`).Scan(&agentID)
+	_ = db.QueryRow(`INSERT INTO agent_versions (agent_id, status) VALUES ($1::uuid, 'READY') RETURNING id::text`, agentID).Scan(&versionID)
+	_ = db.QueryRow(`INSERT INTO datasets (name) VALUES ('e-ds-list') RETURNING id::text`).Scan(&datasetID)
+	_ = db.QueryRow(`INSERT INTO dataset_versions (dataset_id, status, version_num, closed_at) VALUES ($1::uuid, 'CLOSED', 1, now()) RETURNING id::text`, datasetID).Scan(&dvID)
+
+	repo := NewEvalRepository(db)
+
+	// Seed: 2 PENDING + 1 IN_PROGRESS + 1 DONE (via manual UPDATE for status transitions
+	// that would otherwise require chat sessions).
+	for i := 0; i < 2; i++ {
+		if _, err := repo.Create(ctx, versionID, dvID, true, nil); err != nil {
+			t.Fatalf("create pending %d: %v", i, err)
+		}
+	}
+	e3, err := repo.Create(ctx, versionID, dvID, true, nil)
+	if err != nil {
+		t.Fatalf("create e3: %v", err)
+	}
+	if err := repo.Start(ctx, e3.ID); err != nil {
+		t.Fatalf("start e3: %v", err)
+	}
+	// Manually mark one as DONE to exercise a fourth status without needing full
+	// Submit() plumbing (chat sessions, message feedback, etc.).
+	e4, err := repo.Create(ctx, versionID, dvID, true, nil)
+	if err != nil {
+		t.Fatalf("create e4: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE evals SET status='DONE', score=0.75, total_criteria=4, passed_criteria=3,
+		                 completed_at=now()
+		WHERE id = $1::uuid
+	`, e4.ID); err != nil {
+		t.Fatalf("mark e4 DONE: %v", err)
+	}
+
+	pending, err := repo.List(ctx, "PENDING", 100)
+	if err != nil {
+		t.Fatalf("List PENDING: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Errorf("PENDING count = %d, want 2", len(pending))
+	}
+	for _, e := range pending {
+		if e.Status != "PENDING" {
+			t.Errorf("row status = %q, want PENDING", e.Status)
+		}
+	}
+
+	all, err := repo.List(ctx, "", 100)
+	if err != nil {
+		t.Fatalf("List all: %v", err)
+	}
+	if len(all) < 4 {
+		t.Errorf("all count = %d, want >= 4", len(all))
+	}
+
+	limited, err := repo.List(ctx, "", 2)
+	if err != nil {
+		t.Fatalf("List limited: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Errorf("limited count = %d, want 2", len(limited))
+	}
+}

@@ -283,6 +283,25 @@ func (h *EvalHandler) UIList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ListJSON handles GET /evals.json.
+// Optional query params: status (PENDING|IN_PROGRESS|DONE|FAILED), limit
+// (positive int, default 100; repo clamps values > 500 to 500).
+func (h *EvalHandler) ListJSON(w http.ResponseWriter, r *http.Request) {
+	status, limit, ok := ParseListParams(w, r)
+	if !ok {
+		return
+	}
+	evals, err := h.repo.List(r.Context(), status, limit)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if evals == nil {
+		evals = []*types.Eval{}
+	}
+	JSON(w, http.StatusOK, evals)
+}
+
 // UIListByAgentVersion handles GET /agent_versions/{version_id}/evals.
 func (h *EvalHandler) UIListByAgentVersion(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")

@@ -30,6 +30,8 @@ type stubTrainingStore struct {
 	lastCompletePrompts []byte
 	lastCompleteReport  json.RawMessage
 	lastCompleteSummary types.CompleteSummary
+	listStatus          string
+	listLimit           int
 
 	// Preset returns
 	createErr     error
@@ -44,6 +46,7 @@ type stubTrainingStore struct {
 	failErr       error
 	eval          *types.Eval
 	evalErr       error
+	listResult    []*types.TrainingSession
 }
 
 func (s *stubTrainingStore) Create(_ context.Context, sourceEvalID, parentVersionID string) (string, error) {
@@ -57,8 +60,10 @@ func (s *stubTrainingStore) GetByID(_ context.Context, _ string) (*types.Trainin
 func (s *stubTrainingStore) GetActiveByEval(_ context.Context, _ string) (*types.TrainingSession, error) {
 	return s.getActive, s.getActiveErr
 }
-func (s *stubTrainingStore) List(_ context.Context, _, _ int) ([]*types.TrainingSession, error) {
-	return nil, nil
+func (s *stubTrainingStore) List(_ context.Context, status string, limit int) ([]*types.TrainingSession, error) {
+	s.listStatus = status
+	s.listLimit = limit
+	return s.listResult, nil
 }
 func (s *stubTrainingStore) EnrichRows(_ context.Context, _ []*types.TrainingSession) ([]repository.TrainingSessionRowView, error) {
 	return nil, nil
@@ -404,7 +409,7 @@ type listStub struct {
 	getSession *types.TrainingSession
 }
 
-func (s *listStub) List(_ context.Context, _, _ int) ([]*types.TrainingSession, error) {
+func (s *listStub) List(_ context.Context, _ string, _ int) ([]*types.TrainingSession, error) {
 	return s.sessions, nil
 }
 func (s *listStub) EnrichRows(_ context.Context, _ []*types.TrainingSession) ([]repository.TrainingSessionRowView, error) {
@@ -491,6 +496,70 @@ func TestUIDetail_ShowsFieldsForDone(t *testing.T) {
 	// Trained version link
 	if !strings.Contains(body, "/agent_versions/av-new/configure/prompts") {
 		t.Errorf("body should link to trained version prompts tab")
+	}
+}
+
+func TestTrainingSessionHandler_ListJSON_FiltersByStatus(t *testing.T) {
+	stub := &stubTrainingStore{listResult: []*types.TrainingSession{
+		{ID: "s1", Status: types.TrainingSessionStatusPending, SourceEvalID: "e1", ParentVersionID: "av1"},
+	}}
+	h := newTrainingHandler(t, stub)
+
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions.json?status=PENDING&limit=50", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	var out []types.TrainingSession
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if len(out) != 1 || out[0].ID != "s1" {
+		t.Errorf("unexpected result: %+v", out)
+	}
+	if stub.listStatus != "PENDING" || stub.listLimit != 50 {
+		t.Errorf("stub not called with expected args: status=%q limit=%d", stub.listStatus, stub.listLimit)
+	}
+}
+
+func TestTrainingSessionHandler_ListJSON_InvalidStatus_400(t *testing.T) {
+	stub := &stubTrainingStore{}
+	h := newTrainingHandler(t, stub)
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions.json?status=BOGUS", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400. body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTrainingSessionHandler_ListJSON_EmptyResult_ReturnsEmptyArray(t *testing.T) {
+	stub := &stubTrainingStore{listResult: nil}
+	h := newTrainingHandler(t, stub)
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions.json?status=PENDING", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != "[]" {
+		t.Errorf("body = %q, want []", body)
+	}
+}
+
+func TestTrainingSessionHandler_ListJSON_InvalidLimit_400(t *testing.T) {
+	stub := &stubTrainingStore{}
+	h := newTrainingHandler(t, stub)
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions.json?limit=abc", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400. body=%s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -118,6 +118,27 @@ func (r *EvalRepository) ListPendingOrInProgressForPair(ctx context.Context, age
 	)
 }
 
+// List returns evals newest-first, optionally filtered by status.
+// status="" means no filter. limit is clamped to [1, 500]; 0 or negative defaults to 100.
+func (r *EvalRepository) List(ctx context.Context, status string, limit int) ([]*types.Eval, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if status == "" {
+		return r.query(ctx,
+			`SELECT `+evalColumns+` FROM evals ORDER BY created_at DESC LIMIT $1`,
+			limit,
+		)
+	}
+	return r.query(ctx,
+		`SELECT `+evalColumns+` FROM evals WHERE status = $1 ORDER BY created_at DESC LIMIT $2`,
+		status, limit,
+	)
+}
+
 func (r *EvalRepository) query(ctx context.Context, sqlStr string, args ...any) ([]*types.Eval, error) {
 	rows, err := r.db.QueryContext(ctx, sqlStr, args...)
 	if err != nil {

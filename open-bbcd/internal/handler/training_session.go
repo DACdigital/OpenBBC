@@ -20,7 +20,7 @@ type TrainingSessionStore interface {
 	Create(ctx context.Context, sourceEvalID, parentVersionID string) (string, error)
 	GetByID(ctx context.Context, id string) (*types.TrainingSession, error)
 	GetActiveByEval(ctx context.Context, evalID string) (*types.TrainingSession, error)
-	List(ctx context.Context, limit, offset int) ([]*types.TrainingSession, error)
+	List(ctx context.Context, status string, limit int) ([]*types.TrainingSession, error)
 	EnrichRows(ctx context.Context, sessions []*types.TrainingSession) ([]repository.TrainingSessionRowView, error)
 	Start(ctx context.Context, id string, epochs, patience int) error
 	Complete(ctx context.Context, id string, promptsJSON []byte, trainingReport json.RawMessage, summary types.CompleteSummary) (string, error)
@@ -282,7 +282,7 @@ type trainingListPageData struct {
 }
 
 func (h *TrainingSessionHandler) UIList(w http.ResponseWriter, r *http.Request) {
-	sessions, err := h.store.List(r.Context(), 100, 0)
+	sessions, err := h.store.List(r.Context(), "", 100)
 	if err != nil {
 		Error(w, err)
 		return
@@ -296,6 +296,25 @@ func (h *TrainingSessionHandler) UIList(w http.ResponseWriter, r *http.Request) 
 		Active: "training-sessions",
 		Rows:   rows,
 	})
+}
+
+// ListJSON handles GET /training-sessions.json.
+// Optional query params: status (PENDING|IN_PROGRESS|DONE|FAILED), limit
+// (positive int, default 100; repo clamps values > 500 to 500).
+func (h *TrainingSessionHandler) ListJSON(w http.ResponseWriter, r *http.Request) {
+	status, limit, ok := ParseListParams(w, r)
+	if !ok {
+		return
+	}
+	sessions, err := h.store.List(r.Context(), status, limit)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if sessions == nil {
+		sessions = []*types.TrainingSession{}
+	}
+	JSON(w, http.StatusOK, sessions)
 }
 
 // epochView flattens one EpochRecord for the detail template.
