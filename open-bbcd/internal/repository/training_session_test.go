@@ -345,13 +345,22 @@ func TestTrainingSessionRepository_List_FiltersByStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List PENDING: %v", err)
 	}
-	if len(pending) < 1 {
-		t.Errorf("PENDING count = %d, want >= 1", len(pending))
+	if len(pending) != 1 {
+		t.Errorf("PENDING count = %d, want 1", len(pending))
 	}
 	for _, s := range pending {
 		if s.Status != types.TrainingSessionStatusPending {
 			t.Errorf("row status = %q, want PENDING", s.Status)
 		}
+	}
+
+	// Negative case: filter that excludes the seeded row proves WHERE clause is applied.
+	inProg, err := repo.List(ctx, "IN_PROGRESS", 100)
+	if err != nil {
+		t.Fatalf("List IN_PROGRESS: %v", err)
+	}
+	if len(inProg) != 0 {
+		t.Errorf("IN_PROGRESS count = %d, want 0", len(inProg))
 	}
 
 	all, err := repo.List(ctx, "", 100)
