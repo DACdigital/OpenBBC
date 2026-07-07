@@ -30,6 +30,8 @@ type stubTrainingStore struct {
 	lastCompletePrompts []byte
 	lastCompleteReport  json.RawMessage
 	lastCompleteSummary types.CompleteSummary
+	listStatus          string
+	listLimit           int
 
 	// Preset returns
 	createErr     error
@@ -44,6 +46,7 @@ type stubTrainingStore struct {
 	failErr       error
 	eval          *types.Eval
 	evalErr       error
+	listResult    []*types.TrainingSession
 }
 
 func (s *stubTrainingStore) Create(_ context.Context, sourceEvalID, parentVersionID string) (string, error) {
@@ -57,8 +60,10 @@ func (s *stubTrainingStore) GetByID(_ context.Context, _ string) (*types.Trainin
 func (s *stubTrainingStore) GetActiveByEval(_ context.Context, _ string) (*types.TrainingSession, error) {
 	return s.getActive, s.getActiveErr
 }
-func (s *stubTrainingStore) List(_ context.Context, _, _ int) ([]*types.TrainingSession, error) {
-	return nil, nil
+func (s *stubTrainingStore) List(_ context.Context, status string, limit int) ([]*types.TrainingSession, error) {
+	s.listStatus = status
+	s.listLimit = limit
+	return s.listResult, nil
 }
 func (s *stubTrainingStore) EnrichRows(_ context.Context, _ []*types.TrainingSession) ([]repository.TrainingSessionRowView, error) {
 	return nil, nil
@@ -404,7 +409,7 @@ type listStub struct {
 	getSession *types.TrainingSession
 }
 
-func (s *listStub) List(_ context.Context, _, _ int) ([]*types.TrainingSession, error) {
+func (s *listStub) List(_ context.Context, _ string, _ int) ([]*types.TrainingSession, error) {
 	return s.sessions, nil
 }
 func (s *listStub) EnrichRows(_ context.Context, _ []*types.TrainingSession) ([]repository.TrainingSessionRowView, error) {

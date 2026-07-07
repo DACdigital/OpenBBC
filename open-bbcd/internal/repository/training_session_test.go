@@ -288,7 +288,7 @@ func TestList_PaginatedNewestFirst(t *testing.T) {
 		ids = append(ids, id)
 	}
 
-	rows, err := repo.List(ctx, 25, 0)
+	rows, err := repo.List(ctx, "", 25)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -326,5 +326,47 @@ func TestEnrichRows_JoinsAgentAndEval(t *testing.T) {
 	}
 	if v.SourceEvalScore == nil {
 		t.Error("SourceEvalScore should be populated for DONE eval")
+	}
+}
+
+func TestTrainingSessionRepository_List_FiltersByStatus(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewTrainingSessionRepository(db)
+	ctx := context.Background()
+
+	// Partial unique index allows only one active session per source_eval_id,
+	// so we seed a single PENDING row here.
+	evalID, versionID := seedEvalForTraining(t, db)
+	if _, err := repo.Create(ctx, evalID, versionID); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	pending, err := repo.List(ctx, "PENDING", 100)
+	if err != nil {
+		t.Fatalf("List PENDING: %v", err)
+	}
+	if len(pending) < 1 {
+		t.Errorf("PENDING count = %d, want >= 1", len(pending))
+	}
+	for _, s := range pending {
+		if s.Status != types.TrainingSessionStatusPending {
+			t.Errorf("row status = %q, want PENDING", s.Status)
+		}
+	}
+
+	all, err := repo.List(ctx, "", 100)
+	if err != nil {
+		t.Fatalf("List all: %v", err)
+	}
+	if len(all) < len(pending) {
+		t.Errorf("all=%d < pending=%d; impossible", len(all), len(pending))
+	}
+
+	limited, err := repo.List(ctx, "", 1)
+	if err != nil {
+		t.Fatalf("List limited: %v", err)
+	}
+	if len(limited) != 1 {
+		t.Errorf("limited count = %d, want 1", len(limited))
 	}
 }

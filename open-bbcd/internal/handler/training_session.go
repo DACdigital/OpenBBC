@@ -20,7 +20,7 @@ type TrainingSessionStore interface {
 	Create(ctx context.Context, sourceEvalID, parentVersionID string) (string, error)
 	GetByID(ctx context.Context, id string) (*types.TrainingSession, error)
 	GetActiveByEval(ctx context.Context, evalID string) (*types.TrainingSession, error)
-	List(ctx context.Context, limit, offset int) ([]*types.TrainingSession, error)
+	List(ctx context.Context, status string, limit int) ([]*types.TrainingSession, error)
 	EnrichRows(ctx context.Context, sessions []*types.TrainingSession) ([]repository.TrainingSessionRowView, error)
 	Start(ctx context.Context, id string, epochs, patience int) error
 	Complete(ctx context.Context, id string, promptsJSON []byte, trainingReport json.RawMessage, summary types.CompleteSummary) (string, error)
@@ -282,7 +282,7 @@ type trainingListPageData struct {
 }
 
 func (h *TrainingSessionHandler) UIList(w http.ResponseWriter, r *http.Request) {
-	sessions, err := h.store.List(r.Context(), 100, 0)
+	sessions, err := h.store.List(r.Context(), "", 100)
 	if err != nil {
 		Error(w, err)
 		return

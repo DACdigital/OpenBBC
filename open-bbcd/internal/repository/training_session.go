@@ -282,9 +282,16 @@ type TrainingSessionRowView struct {
 	SourceEvalScore  *float64 // NULL when eval not DONE
 }
 
-// List returns sessions newest-first with limit/offset.
-func (r *TrainingSessionRepository) List(ctx context.Context, limit, offset int) ([]*types.TrainingSession, error) {
-	rows, err := r.db.QueryContext(ctx, `
+// List returns sessions newest-first, optionally filtered by status.
+// status="" means no filter. limit is clamped to [1, 500]; 0 or negative defaults to 100.
+func (r *TrainingSessionRepository) List(ctx context.Context, status string, limit int) ([]*types.TrainingSession, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	base := `
 		SELECT id::text, source_eval_id::text, parent_version_id::text,
 		       (new_version_id)::text, status,
 		       requested_at, started_at, completed_at,
@@ -293,9 +300,14 @@ func (r *TrainingSessionRepository) List(ctx context.Context, limit, offset int)
 		       training_report,
 		       created_at, updated_at
 		FROM training_sessions
-		ORDER BY requested_at DESC
-		LIMIT $1 OFFSET $2
-	`, limit, offset)
+	`
+	var rows *sql.Rows
+	var err error
+	if status == "" {
+		rows, err = r.db.QueryContext(ctx, base+`ORDER BY requested_at DESC LIMIT $1`, limit)
+	} else {
+		rows, err = r.db.QueryContext(ctx, base+`WHERE status = $1 ORDER BY requested_at DESC LIMIT $2`, status, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
