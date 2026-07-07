@@ -21,7 +21,7 @@ func newDeployedRepoTest(t *testing.T) (*DeployedRepository, *AgentVersionReposi
 		t.Fatalf("CreateFromWizard: %v", err)
 	}
 	if _, err := db.ExecContext(ctx,
-		`UPDATE agent_versions SET status='READY', bundle='{}'::jsonb WHERE id=$1`, version.ID,
+		`UPDATE agent_versions SET status='READY' WHERE id=$1`, version.ID,
 	); err != nil {
 		t.Fatalf("seed READY: %v", err)
 	}

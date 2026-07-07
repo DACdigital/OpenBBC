@@ -15,7 +15,10 @@ test:
 
 test-integration:
 	@if [ -z "$$DATABASE_URL" ]; then echo "set DATABASE_URL first"; exit 1; fi
-	go test -v -race ./...
+	# -p 1: run one test package at a time. Packages share the same Postgres
+	# database and each truncates the same tables on setup; running them in
+	# parallel produces cross-package deadlocks and phantom-row failures.
+	go test -v -race -p 1 ./...
 
 clean:
 	rm -rf $(BUILD_DIR)
