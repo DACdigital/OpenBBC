@@ -39,7 +39,7 @@ The three parts talk over files and HTTP, not shared libraries — you can run `
   ┌─────────────────────────────────────────────────────────────┐
   │  aikdm  (Python CLI, out-of-process)                        │
   │  ─ generate-agent : two-agent loop → prompt bundle          │
-  │  ─ evaluate       : score bundle against dataset (Geval)    │
+  │  ─ evaluate       : score bundle against dataset (judge)    │
   │  ─ train-agent    : N-epoch teacher/judge hill-climb        │
   └─────────────────────────────────────────────────────────────┘
 ```
