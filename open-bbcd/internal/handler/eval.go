@@ -7,7 +7,6 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/eval"
@@ -285,21 +284,12 @@ func (h *EvalHandler) UIList(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListJSON handles GET /evals.json.
-// Optional query params: status (PENDING|IN_PROGRESS|DONE|FAILED), limit (1-500, default 100).
+// Optional query params: status (PENDING|IN_PROGRESS|DONE|FAILED), limit
+// (positive int, default 100; repo clamps values > 500 to 500).
 func (h *EvalHandler) ListJSON(w http.ResponseWriter, r *http.Request) {
-	status := r.URL.Query().Get("status")
-	if status != "" && !isValidEvalStatus(status) {
-		http.Error(w, `{"error":"invalid status"}`, http.StatusBadRequest)
+	status, limit, ok := ParseListParams(w, r)
+	if !ok {
 		return
-	}
-	limit := 100
-	if v := r.URL.Query().Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			http.Error(w, `{"error":"invalid limit"}`, http.StatusBadRequest)
-			return
-		}
-		limit = n
 	}
 	evals, err := h.repo.List(r.Context(), status, limit)
 	if err != nil {
@@ -310,14 +300,6 @@ func (h *EvalHandler) ListJSON(w http.ResponseWriter, r *http.Request) {
 		evals = []*types.Eval{}
 	}
 	JSON(w, http.StatusOK, evals)
-}
-
-func isValidEvalStatus(s string) bool {
-	switch s {
-	case "PENDING", "IN_PROGRESS", "DONE", "FAILED":
-		return true
-	}
-	return false
 }
 
 // UIListByAgentVersion handles GET /agent_versions/{version_id}/evals.

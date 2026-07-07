@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
@@ -300,21 +299,12 @@ func (h *TrainingSessionHandler) UIList(w http.ResponseWriter, r *http.Request) 
 }
 
 // ListJSON handles GET /training-sessions.json.
-// Optional query params: status (PENDING|IN_PROGRESS|DONE|FAILED), limit (1-500, default 100).
+// Optional query params: status (PENDING|IN_PROGRESS|DONE|FAILED), limit
+// (positive int, default 100; repo clamps values > 500 to 500).
 func (h *TrainingSessionHandler) ListJSON(w http.ResponseWriter, r *http.Request) {
-	status := r.URL.Query().Get("status")
-	if status != "" && !isValidTrainingSessionStatus(status) {
-		http.Error(w, `{"error":"invalid status"}`, http.StatusBadRequest)
+	status, limit, ok := ParseListParams(w, r)
+	if !ok {
 		return
-	}
-	limit := 100
-	if v := r.URL.Query().Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			http.Error(w, `{"error":"invalid limit"}`, http.StatusBadRequest)
-			return
-		}
-		limit = n
 	}
 	sessions, err := h.store.List(r.Context(), status, limit)
 	if err != nil {
@@ -325,14 +315,6 @@ func (h *TrainingSessionHandler) ListJSON(w http.ResponseWriter, r *http.Request
 		sessions = []*types.TrainingSession{}
 	}
 	JSON(w, http.StatusOK, sessions)
-}
-
-func isValidTrainingSessionStatus(s string) bool {
-	switch s {
-	case "PENDING", "IN_PROGRESS", "DONE", "FAILED":
-		return true
-	}
-	return false
 }
 
 // epochView flattens one EpochRecord for the detail template.
