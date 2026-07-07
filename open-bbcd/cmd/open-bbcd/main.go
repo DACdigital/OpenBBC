@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -122,13 +123,20 @@ func runMigrate() error {
 	return nil
 }
 
+// runHealthcheck probes localhost:$SERVER_PORT/health. Reads SERVER_PORT
+// directly (default 8080) rather than going through config.Load() so the
+// probe stays dependency-minimal — a broken DATABASE_URL must not fail the
+// healthcheck. Intentionally silent: exit code is the healthcheck signal.
 func runHealthcheck() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+	port := 8080
+	if v := os.Getenv("SERVER_PORT"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid SERVER_PORT: %w", err)
+		}
+		port = n
 	}
-	// Probe on localhost — healthcheck runs in the same container as the server.
-	url := fmt.Sprintf("http://127.0.0.1:%d/health", cfg.Server.Port)
+	url := fmt.Sprintf("http://127.0.0.1:%d/health", port)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
