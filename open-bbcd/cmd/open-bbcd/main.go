@@ -46,6 +46,12 @@ func run() error {
 	defer db.Close()
 	logger.Info("database connected")
 
+	logger.Info("applying migrations")
+	if err := database.Migrate(db); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+	logger.Info("migrations applied")
+
 	store, err := storage.NewLocalDisk(cfg.Discovery.StorageDir)
 	if err != nil {
 		return fmt.Errorf("init storage: %w", err)
