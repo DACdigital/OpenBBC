@@ -49,6 +49,11 @@ func TestMigrate_IdempotentSecondRun(t *testing.T) {
 	}
 	defer db.Close()
 
+	// Fresh baseline: ensure this test doesn't depend on ordering.
+	if _, err := db.Exec(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`); err != nil {
+		t.Fatalf("reset schema: %v", err)
+	}
+
 	if err := Migrate(db); err != nil {
 		t.Fatalf("Migrate first: %v", err)
 	}
