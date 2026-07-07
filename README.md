@@ -4,7 +4,7 @@ Turn a backend + a frontend repo into a deployable AI agent.
 
 ## What is this?
 
-OpenBBC is a monorepo for a platform that generates, evaluates, trains, and (soon) runs custom AI agents grounded in your backend's business logic. The pipeline starts from a target frontend repo — a Claude Code discovery skill compiles it into a structured wiki — and ends with a versioned agent bundle registered in a backoffice service.
+OpenBBC is a monorepo for a platform that generates, evaluates, trains, and runs custom AI agents grounded in your backend's business logic. The pipeline starts from a target frontend repo — a Claude Code discovery skill compiles it into a structured wiki — and ends with a versioned agent bundle served over AG-UI to any client you point at it.
 
 The repo is split into three independent components, each with its own README:
 
@@ -30,7 +30,8 @@ The three parts talk over files and HTTP, not shared libraries — you can run `
   │  ─ backoffice UI (htmx)                                     │
   │  ─ REST: /agents /evals /training-sessions /datasets /mcp   │
   │  ─ PostgreSQL: versioned agents, evals, datasets, sessions  │
-  │  ─ deployed agent runtime  (future)                         │
+  │  ─ deployed agent runtime: /deployed/{agent}/sessions ...   │
+  │    (AG-UI streaming, MCP-mediated backend calls)            │
   └─────────────────────────────────────────────────────────────┘
         │                    │                     │
         │ generate-agent     │ evaluate            │ train-agent
@@ -44,10 +45,12 @@ The three parts talk over files and HTTP, not shared libraries — you can run `
   └─────────────────────────────────────────────────────────────┘
 ```
 
-Two glue scripts drive the round-trip through open-bbcd:
+Four glue scripts drive the round-trip through open-bbcd:
 
 - `scripts/run_eval.sh <eval_id>` — fetches `eval-input.yaml`, runs `aikdm evaluate`, uploads the result.
 - `scripts/train_from_session.sh <session_id>` — picks up a PENDING training session, runs `aikdm train-agent`, and drives it to DONE (or FAILED).
+- `scripts/process_pending_evals.sh` — batch drain of all PENDING evals. `flock`-protected, serial, continue-on-error. Suitable for cron.
+- `scripts/process_pending_trainings.sh` — same, for PENDING training sessions.
 
 ## Components
 
@@ -95,8 +98,13 @@ Then:
   ```bash
   OPENBBCD_URL=http://localhost:8080 scripts/train_from_session.sh <session_id>
   ```
+- Cron-friendly batch drains (see [PRODUCTION.md](docs/PRODUCTION.md) for suggested schedules):
+  ```bash
+  OPENBBCD_URL=http://localhost:8080 scripts/process_pending_evals.sh
+  OPENBBCD_URL=http://localhost:8080 scripts/process_pending_trainings.sh
+  ```
 
-Per-component quickstarts (running each service outside compose, running tests locally, etc.) live in the component READMEs.
+Per-component quickstarts (running each service outside compose, running tests locally, etc.) live in the component READMEs. Deploying openbbc into your own infra and wiring your frontend to it lives in [`docs/PRODUCTION.md`](./docs/PRODUCTION.md).
 
 ## Deployment
 
@@ -119,6 +127,7 @@ Per-component quickstarts (running each service outside compose, running tests l
 
 - [`docs/DESIGN.md`](./docs/DESIGN.md) — product design and the phase model (discovery → generate → feedback → evaluate → train → deploy).
 - [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — technical architecture, subsystem deep-dives, data model.
+- [`docs/PRODUCTION.md`](./docs/PRODUCTION.md) — deploying openbbc as your internal service, integrating your frontend over AG-UI, header pass-through, MCP layer, auth model.
 - [`CLAUDE.md`](./CLAUDE.md) — Claude Code project instructions (repo layout, conventions, cross-component contracts).
 
 ## Roadmap
