@@ -23,7 +23,7 @@ Right now, this marketplace ships one plugin:
 `bbc-discovery` is one leg of the OpenBBC triad:
 
 - **`aikdm/`** — Python CLI that generates and trains agents.
-- **`open-bbcd/`** — Go service that hosts the backoffice UI, REST API, and (future) agent runtime.
+- **`open-bbcd/`** — Go service that hosts the backoffice UI, REST API, and deployed agent runtime (AG-UI streaming over `/deployed/*`, MCP-mediated calls into your backend).
 - **`bbc-discovery/`** — this marketplace, currently shipping the `flow-map-compiler` plugin.
 
 The `flow-map-compiler` plugin runs against a target frontend repo and produces a `.flow-map/` wiki (flows, capabilities, backend endpoints). That wiki is the input `aikdm generate-agent` consumes to build the initial agent bundle — so the plugin is the front door of the agent-generation pipeline.

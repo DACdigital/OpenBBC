@@ -11,7 +11,7 @@ OpenBBC is a monorepo for a platform that turns a backend + a frontend repo into
 | `aikdm/` | Python CLI: generates structured prompt bundles from FlowMapConfig YAML. Out-of-process, open-bbcd-unaware. | Python |
 | `bbc-discovery/` | Claude Code plugin marketplace. Currently ships one plugin (`flow-map-compiler`) — a discovery skill that compiles a frontend repo into a `.flow-map/` agent wiki. Pure markdown + plugin manifests, no build step. | Markdown / SKILL.md |
 | `docs/` | `DESIGN.md` and `ARCHITECTURE.md` — read these for the big picture (discovery → generate → feedback → evaluate → deploy). |
-| `open-bbcd/` | Core service: backoffice UI + REST API + (future) agent runtime. The only buildable program in the repo today. | Go |
+| `open-bbcd/` | Core service: backoffice UI + REST API + deployed agent runtime (AG-UI over `/deployed/*`, MCP tool calls into your backend). The only buildable program in the repo. | Go |
 
 The root `.claude-plugin/marketplace.json` references the `bbc-discovery` plugin via a `git-subdir` source pointing back into this monorepo.
 
@@ -40,6 +40,19 @@ then run the script to drive it to DONE):
 
 ```bash
 OPENBBCD_URL=http://localhost:8080 scripts/train_from_session.sh <session_id>
+```
+
+Batch drains for cron (both are `flock`-protected, serial, continue-on-error):
+
+```bash
+OPENBBCD_URL=http://localhost:8080 scripts/process_pending_evals.sh
+OPENBBCD_URL=http://localhost:8080 scripts/process_pending_trainings.sh
+```
+
+Suggested cron cadence (see `docs/PRODUCTION.md`):
+```
+*/10 * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_evals.sh
+*/15 * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_trainings.sh
 ```
 
 ### Architecture (what spans multiple files)
