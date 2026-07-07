@@ -268,8 +268,7 @@ From GitHub (no clone needed):
 /plugin install flow-map-compiler@bbc-discovery
 ```
 
-The raw-URL form pins to `main`. Until this branch is merged, use
-the local-clone form instead. The short
+The raw-URL form pins to `main`. The short
 `/plugin marketplace add DACdigital/OpenBBC` form does **not** work
 — it requires `marketplace.json` at the repo root, and Claude Code
 does not yet support a subdirectory path for github marketplace
