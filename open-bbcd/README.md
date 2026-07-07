@@ -1,6 +1,6 @@
 # open-bbcd
 
-Core platform service for OpenBBC — backoffice UI, REST API, and (future) agent runtime.
+Core platform service for OpenBBC — backoffice UI, REST API, and the deployed agent runtime (AG-UI streaming over `/deployed/*`, MCP tool calls into your backend). See [`docs/PRODUCTION.md`](../docs/PRODUCTION.md) for the production integration path.
 
 ## Requirements
 
