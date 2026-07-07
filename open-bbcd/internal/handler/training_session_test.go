@@ -499,6 +499,70 @@ func TestUIDetail_ShowsFieldsForDone(t *testing.T) {
 	}
 }
 
+func TestTrainingSessionHandler_ListJSON_FiltersByStatus(t *testing.T) {
+	stub := &stubTrainingStore{listResult: []*types.TrainingSession{
+		{ID: "s1", Status: types.TrainingSessionStatusPending, SourceEvalID: "e1", ParentVersionID: "av1"},
+	}}
+	h := newTrainingHandler(t, stub)
+
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions.json?status=PENDING&limit=50", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	var out []types.TrainingSession
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if len(out) != 1 || out[0].ID != "s1" {
+		t.Errorf("unexpected result: %+v", out)
+	}
+	if stub.listStatus != "PENDING" || stub.listLimit != 50 {
+		t.Errorf("stub not called with expected args: status=%q limit=%d", stub.listStatus, stub.listLimit)
+	}
+}
+
+func TestTrainingSessionHandler_ListJSON_InvalidStatus_400(t *testing.T) {
+	stub := &stubTrainingStore{}
+	h := newTrainingHandler(t, stub)
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions.json?status=BOGUS", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400. body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTrainingSessionHandler_ListJSON_EmptyResult_ReturnsEmptyArray(t *testing.T) {
+	stub := &stubTrainingStore{listResult: nil}
+	h := newTrainingHandler(t, stub)
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions.json?status=PENDING", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != "[]" {
+		t.Errorf("body = %q, want []", body)
+	}
+}
+
+func TestTrainingSessionHandler_ListJSON_InvalidLimit_400(t *testing.T) {
+	stub := &stubTrainingStore{}
+	h := newTrainingHandler(t, stub)
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions.json?limit=abc", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400. body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestUIDetail_ShowsErrorForFailed(t *testing.T) {
 	stub := &listStub{
 		getSession: &types.TrainingSession{

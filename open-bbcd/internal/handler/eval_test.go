@@ -397,3 +397,78 @@ func TestEvalHandler_UIDetail_TrainButtonHiddenForPerfectScore(t *testing.T) {
 		t.Error("Train form should NOT be present for perfect-score evals")
 	}
 }
+
+// TestEvalHandler_ListJSON_FiltersByStatus — GET /evals.json?status=PENDING&limit=10
+// returns only PENDING rows in JSON. Uses a real DB (integration test).
+func TestEvalHandler_ListJSON_FiltersByStatus(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+	db := getEvalTestDB(t, h)
+
+	// Seed one DONE eval and one PENDING eval.
+	_ = insertDoneEval(t, db, versionID, dvID, 0.5)
+	var pendingID string
+	if err := db.QueryRow(`
+		INSERT INTO evals (agent_version_id, dataset_version_id, status)
+		VALUES ($1::uuid, $2::uuid, 'PENDING')
+		RETURNING id::text
+	`, versionID, dvID).Scan(&pendingID); err != nil {
+		t.Fatalf("seed pending eval: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/evals.json?status=PENDING&limit=10", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	var out []types.Eval
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d rows, want exactly 1 PENDING; body=%s", len(out), rec.Body.String())
+	}
+	if out[0].Status != types.EvalStatusPending {
+		t.Errorf("row 0 status = %q, want PENDING", out[0].Status)
+	}
+	if out[0].ID != pendingID {
+		t.Errorf("row 0 id = %q, want %q", out[0].ID, pendingID)
+	}
+}
+
+func TestEvalHandler_ListJSON_InvalidStatus_400(t *testing.T) {
+	h, _, _ := setupEvalAPI(t)
+	req := httptest.NewRequest(http.MethodGet, "/evals.json?status=BOGUS", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400. body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEvalHandler_ListJSON_InvalidLimit_400(t *testing.T) {
+	h, _, _ := setupEvalAPI(t)
+	req := httptest.NewRequest(http.MethodGet, "/evals.json?limit=abc", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400. body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEvalHandler_ListJSON_EmptyResult_ReturnsEmptyArray(t *testing.T) {
+	h, _, _ := setupEvalAPI(t)
+	req := httptest.NewRequest(http.MethodGet, "/evals.json?status=PENDING", nil)
+	rec := httptest.NewRecorder()
+	h.ListJSON(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != "[]" {
+		t.Errorf("body = %q, want []", body)
+	}
+}

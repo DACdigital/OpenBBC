@@ -301,12 +301,14 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 
 	// Evals — UI surface.
 	mux.HandleFunc("GET /evals", evalHandler.UIList)
+	mux.HandleFunc("GET /evals.json", evalHandler.ListJSON)
 	mux.HandleFunc("GET /evals/{eval_id}", evalHandler.UIDetail)
 	mux.HandleFunc("GET /agent_versions/{version_id}/evals", evalHandler.UIListByAgentVersion)
 	mux.HandleFunc("GET /agent_versions/{version_id}/evals/new", evalHandler.UINewModal)
 
 	// Training sessions
 	mux.HandleFunc("GET /training-sessions", trainingHandler.UIList)
+	mux.HandleFunc("GET /training-sessions.json", trainingHandler.ListJSON)
 	mux.HandleFunc("GET /training-sessions/{session_id}", trainingHandler.UIDetail)
 	mux.HandleFunc("GET /training-sessions/{session_id}/json", trainingHandler.JSONFetch)
 	mux.HandleFunc("GET /training-sessions/{session_id}/report.json", trainingHandler.ReportJSON)
