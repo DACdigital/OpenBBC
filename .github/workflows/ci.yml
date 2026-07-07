@@ -9,7 +9,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  placeholder:
+  test-go:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: openbbcd
+          POSTGRES_PASSWORD: openbbcd
+          POSTGRES_DB: openbbcd
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U openbbcd -d openbbcd"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://openbbcd:openbbcd@localhost:5432/openbbcd?sslmode=disable
     steps:
-      - run: 'true'
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: open-bbcd/go.sum
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+      - name: Apply migrations
+        working-directory: open-bbcd
+        run: make migrate-up
+      - name: Run tests
+        working-directory: open-bbcd
+        run: make test-integration
