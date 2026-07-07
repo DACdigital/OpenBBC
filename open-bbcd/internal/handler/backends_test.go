@@ -38,7 +38,7 @@ func openHandlerTestDB(t *testing.T) *sql.DB {
 	if _, err := db.Exec(`TRUNCATE
 		deployed_messages, deployed_sessions, chat_messages, chat_sessions,
 		resources, agent_versions, agents,
-		tool_backends, agent_version_endpoint_backend, agent_version_mcp_backend
+		tool_backends, agent_endpoint_backend, agent_version_mcp_backend
 		RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -514,24 +514,26 @@ func TestBackendsHandler_Delete_InUse_409(t *testing.T) {
 	all, _ := backendRepo.List(context.Background())
 	backendID := all[0].ID
 
-	// Seed an agent version and wire the backend to it.
-	var versionID string
+	// Seed an agent + version and wire the backend to the agent.
+	var agentID string
 	err := db.QueryRow(`
 		WITH a AS (
 			INSERT INTO agents (name) VALUES ('test-wired-' || gen_random_uuid())
 			RETURNING id
+		), v AS (
+			INSERT INTO agent_versions (agent_id, status, flow_map_config)
+			SELECT id, 'INITIALIZING', '{}'::jsonb FROM a
+			RETURNING agent_id
 		)
-		INSERT INTO agent_versions (agent_id, status, flow_map_config)
-		SELECT id, 'INITIALIZING', '{}'::jsonb FROM a
-		RETURNING id
-	`).Scan(&versionID)
+		SELECT agent_id::text FROM v
+	`).Scan(&agentID)
 	if err != nil {
 		t.Fatalf("seed agent_version: %v", err)
 	}
 	if _, err := db.Exec(`
-		INSERT INTO agent_version_endpoint_backend (agent_version_id, endpoint_id, backend_id)
-		VALUES ($1, 'ep-1', $2)
-	`, versionID, backendID); err != nil {
+		INSERT INTO agent_endpoint_backend (agent_id, endpoint_id, backend_id)
+		VALUES ($1::uuid, 'ep-1', $2)
+	`, agentID, backendID); err != nil {
 		t.Fatalf("wire backend: %v", err)
 	}
 

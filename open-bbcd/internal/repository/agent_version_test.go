@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// seedReadyAgentVersion creates an agent + a READY version with a dummy bundle.
+// seedReadyAgentVersion creates an agent + a READY version.
 // Returns (agentID, versionID) plus the repos and db handle from withRepo.
 // Callers MUST reuse these returns instead of calling withRepo again (which
 // would truncate the just-seeded rows).
@@ -26,7 +26,7 @@ func seedReadyAgentVersion(t *testing.T) (agentID, versionID string, agentRepo *
 		t.Fatalf("CreateFromWizard: %v", err)
 	}
 	if _, err := db.ExecContext(ctx,
-		`UPDATE agent_versions SET status='READY', bundle='{}'::jsonb WHERE id=$1`, version.ID,
+		`UPDATE agent_versions SET status='READY' WHERE id=$1`, version.ID,
 	); err != nil {
 		t.Fatalf("seed READY: %v", err)
 	}
@@ -42,8 +42,8 @@ func insertReadyChildVersion(t *testing.T, db *sql.DB, parentID string) string {
 	}
 	id := uuid.NewString()
 	if _, err := db.Exec(`
-		INSERT INTO agent_versions (id, agent_id, parent_version_id, status, bundle)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'READY', '{}'::jsonb)
+		INSERT INTO agent_versions (id, agent_id, parent_version_id, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'READY')
 	`, id, agentID, parentID); err != nil {
 		t.Fatalf("insert child: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestAgentVersionRepository_PartialUniqueIndex_RejectsDoubleDeploy(t *testin
 	}
 	id1 := uuid.NewString()
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO agent_versions (id, agent_id, status, bundle) VALUES ($1::uuid, $2::uuid, 'DEPLOYED', '{}'::jsonb)`,
+		`INSERT INTO agent_versions (id, agent_id, status) VALUES ($1::uuid, $2::uuid, 'DEPLOYED')`,
 		id1, agentID,
 	)
 	if err != nil {
@@ -195,7 +195,7 @@ func TestAgentVersionRepository_PartialUniqueIndex_RejectsDoubleDeploy(t *testin
 	}
 	id2 := uuid.NewString()
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO agent_versions (id, agent_id, parent_version_id, status, bundle) VALUES ($1::uuid, $2::uuid, $3::uuid, 'DEPLOYED', '{}'::jsonb)`,
+		`INSERT INTO agent_versions (id, agent_id, parent_version_id, status) VALUES ($1::uuid, $2::uuid, $3::uuid, 'DEPLOYED')`,
 		id2, agentID, id1,
 	)
 	if err == nil {
