@@ -105,6 +105,27 @@ func TestDeployHandler_HappyPath(t *testing.T) {
 	}
 }
 
+// The BO deploy modal posts via htmx's hx-vals which serialises to
+// application/x-www-form-urlencoded, not JSON. Verify the handler accepts
+// that content type too (regression: prior implementation only decoded JSON
+// and returned 400 "invalid character 'v'..." on urlencoded bodies).
+func TestDeployHandler_FormURLEncoded_HappyPath(t *testing.T) {
+	agent := &types.Agent{ID: "a1", Name: "test"}
+	version := &types.AgentVersion{ID: "v1", AgentID: "a1", Status: "READY"}
+	mux := newDeployMux(
+		&stubDeployAgentRepo{agent: agent},
+		&stubDeployVersionRepo{version: version},
+		nil,
+	)
+	req := httptest.NewRequest("POST", "/agents/a1/deploy", strings.NewReader("version_id=v1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d, body: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestDeployHandler_MissingVersionID_400(t *testing.T) {
 	mux := newDeployMux(&stubDeployAgentRepo{agent: &types.Agent{ID: "a1"}}, &stubDeployVersionRepo{}, nil)
 	req := httptest.NewRequest("POST", "/agents/a1/deploy", bytes.NewReader([]byte(`{}`)))

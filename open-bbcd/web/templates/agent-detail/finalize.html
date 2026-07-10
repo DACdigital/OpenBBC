@@ -1,10 +1,10 @@
-{{define "tab_content"}}
+{{define "agent-finalize-tab"}}
 <div class="config-finalize">
   <h2>Finalize this agent?</h2>
   <p>
     The agent is currently in <span class="badge badge-initializing">INITIALIZING</span> state.
-    Finalizing flips it to <span class="badge badge-draft">DRAFT</span> and locks the configurator —
-    re-running the wizard against this agent will create a new version.
+    Finalizing locks the architecture (flows, skills, endpoints) — you can still tune prompts and MCP attachments on subsequent versions, but the discovery snapshot itself becomes read-only.
+    Re-running the wizard produces a brand-new agent.
   </p>
 
   {{if .ParseError}}
@@ -31,9 +31,9 @@
     </div>
   </div>
 
-  <form method="POST" action="/agent_versions/{{.VersionID}}/finalize" class="config-finalize-form">
+  <form method="POST" action="/agents/{{.Agent.ID}}/finalize" class="config-finalize-form">
     <button type="submit" class="btn-primary">Yes, finalize →</button>
-    <a href="/agent_versions/{{.VersionID}}/configure/architecture/flows" class="btn-secondary">Cancel</a>
+    <a href="/agents/{{.Agent.ID}}/configure/architecture/flows" class="btn-secondary">Cancel</a>
   </form>
 </div>
 {{end}}

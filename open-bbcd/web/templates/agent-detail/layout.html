@@ -4,9 +4,14 @@
   <div class="config-header">
     <a href="/agents/ui" class="config-back">← Back to Agents</a>
     <h1>{{.Agent.Name}}</h1>
+    {{if .EditMode}}<span class="badge badge-initializing">INITIALIZING</span>{{end}}
     {{if .Agent.FinalizedAt}}<span class="badge badge-ready">FINALIZED</span>{{end}}
     <span class="config-spacer"></span>
     <div class="config-actions">
+      {{if .EditMode}}
+      <a href="/agents/{{.Agent.ID}}/configure/finalize"
+         class="btn-primary {{if eq .Tab "finalize"}}active{{end}}">Finalize →</a>
+      {{end}}
       <button type="button"
               class="btn-danger"
               hx-get="/agents/{{.Agent.ID}}/delete-confirm"
@@ -41,6 +46,7 @@
     {{if eq .Tab "versions"}}{{template "agent-versions-tab" .}}
     {{else if eq .Tab "inputs"}}{{template "agent-inputs-tab" .}}
     {{else if eq .Tab "architecture"}}{{template "agent-architecture-tab" .}}
+    {{else if eq .Tab "finalize"}}{{template "agent-finalize-tab" .}}
     {{end}}
   </div>
 </div>

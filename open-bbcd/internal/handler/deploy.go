@@ -50,16 +50,31 @@ type deployResponse struct {
 	PreviousDeployedVersionID *string             `json:"previous_deployed_version_id"`
 }
 
-// Deploy handles POST /agents/{agent_id}/deploy with body {"version_id":"..."}.
+// Deploy handles POST /agents/{agent_id}/deploy. Accepts either
+// application/json ({"version_id":"..."}) or application/x-www-form-urlencoded
+// (version_id=...). The BO deploy modal posts urlencoded via htmx's hx-vals;
+// external callers can post JSON.
 // Returns 200 with {agent, version, previous_deployed_version_id}.
 // 400 if version_id is missing. 404 if the version doesn't belong to the agent
 // or doesn't exist. 409 if the version is not READY or has unmapped endpoints.
 func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("agent_id")
+	// htmx's hx-vals serializes to urlencoded by default; external API
+	// callers post JSON. Dispatch on Content-Type, defaulting to JSON so
+	// existing curl-style callers that omit the header keep working.
 	var body deployBody
-	if err := DecodeJSON(r, &body); err != nil {
-		Error(w, err)
-		return
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "application/x-www-form-urlencoded") || strings.HasPrefix(ct, "multipart/form-data") {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid form", http.StatusBadRequest)
+			return
+		}
+		body.VersionID = r.FormValue("version_id")
+	} else {
+		if err := DecodeJSON(r, &body); err != nil {
+			Error(w, err)
+			return
+		}
 	}
 	if body.VersionID == "" {
 		http.Error(w, "version_id is required", http.StatusBadRequest)

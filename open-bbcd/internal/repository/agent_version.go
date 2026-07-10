@@ -456,3 +456,69 @@ func (r *AgentVersionRepository) UpdateFlowMapConfig(ctx context.Context, versio
 	}
 	return nil
 }
+
+// GetVersionNum returns the version's ordinal within its chain (1 = oldest,
+// i.e. the root created by the wizard). Walks the parent_version_id chain
+// with a RECURSIVE CTE. Returns ErrNotFound if the version does not exist.
+func (r *AgentVersionRepository) GetVersionNum(ctx context.Context, versionID string) (int, error) {
+	var num int
+	err := r.db.QueryRowContext(ctx, `
+		WITH RECURSIVE chain AS (
+		    SELECT id, parent_version_id, 1 AS num
+		    FROM agent_versions WHERE parent_version_id IS NULL
+		    UNION ALL
+		    SELECT av.id, av.parent_version_id, c.num + 1
+		    FROM agent_versions av JOIN chain c ON av.parent_version_id = c.id
+		)
+		SELECT num FROM chain WHERE id = $1::uuid
+	`, versionID).Scan(&num)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, types.ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	return num, nil
+}
+
+// GetRootVersion returns the id + status of the agent's root version
+// (parent_version_id IS NULL). Used by agent-scoped handlers that need
+// to check editability or drive a status flip without exposing the
+// version_id to the URL.
+func (r *AgentVersionRepository) GetRootVersion(ctx context.Context, agentID string) (id string, status string, err error) {
+	err = r.db.QueryRowContext(ctx, `
+		SELECT id::text, status
+		FROM agent_versions
+		WHERE agent_id = $1::uuid AND parent_version_id IS NULL
+	`, agentID).Scan(&id, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", types.ErrNotFound
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return id, status, nil
+}
+
+// UpdateFlowMapConfigForAgent writes flow_map_config to the agent's root
+// version (parent_version_id IS NULL). Companion of GetFlowMapConfigForAgent
+// so agent-scoped architecture edit handlers don't need to resolve the
+// version_id upfront.
+func (r *AgentVersionRepository) UpdateFlowMapConfigForAgent(ctx context.Context, agentID string, cfg []byte) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE agent_versions
+		SET flow_map_config = $2, flow_map_parse_error = NULL, updated_at = now()
+		WHERE agent_id = $1::uuid AND parent_version_id IS NULL
+	`, agentID, cfg)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return types.ErrNotFound
+	}
+	return nil
+}
