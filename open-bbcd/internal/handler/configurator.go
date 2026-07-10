@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"html/template"
 	"io/fs"
 	"log/slog"
@@ -29,6 +28,7 @@ import (
 // and lifecycle status all live on AgentVersion after migration 014.
 type ConfigStore interface {
 	GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error)
+	GetVersionNum(ctx context.Context, versionID string) (int, error)
 	GetFlowMapConfig(ctx context.Context, versionID string) (cfg []byte, parseErr string, err error)
 	UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error
 	UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error
@@ -44,12 +44,15 @@ type mcpBackendView struct {
 }
 
 type ConfiguratorHandler struct {
-	repo                                                                                 ConfigStore
-	backends                                                                             *repository.ToolBackendRepository
-	wiring                                                                               *repository.VersionWiringRepository
-	agentWiring                                                                          *repository.AgentWiringRepository
-	schema                                                                               *types.WizardSchema
-	flowsTmpl, skillsTmpl, endpointsTmpl, finalizeTmpl, inputsTmpl, promptsTmpl, mcpTmpl, deleteTmpl *template.Template
+	repo        ConfigStore
+	backends    *repository.ToolBackendRepository
+	wiring      *repository.VersionWiringRepository
+	agentWiring *repository.AgentWiringRepository
+	schema      *types.WizardSchema
+	inputsTmpl  *template.Template
+	promptsTmpl *template.Template
+	mcpTmpl     *template.Template
+	deleteTmpl  *template.Template
 }
 
 func NewConfiguratorHandler(
@@ -61,95 +64,16 @@ func NewConfiguratorHandler(
 	webFS fs.FS,
 ) (*ConfiguratorHandler, error) {
 	funcs := template.FuncMap{
-		"renderMarkdown": renderMarkdown,
-		"statusClass":    statusClass,
-		"dict":           tplDict,
-		// cssID makes a string safe for use inside a CSS selector (e.g.
-		// htmx's hx-target="#..."). Replaces any char outside [A-Za-z0-9_-]
-		// with '-'. Endpoint IDs from discovery often contain dots
-		// (orders.create), which are valid in HTML id attributes but in CSS
-		// selectors are interpreted as class separators — silently breaking
-		// htmx swaps.
-		"cssID": func(s string) string {
-			b := make([]byte, 0, len(s))
-			for i := 0; i < len(s); i++ {
-				c := s[i]
-				if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-					(c >= '0' && c <= '9') || c == '_' || c == '-' {
-					b = append(b, c)
-				} else {
-					b = append(b, '-')
-				}
-			}
-			return string(b)
-		},
-		"selectedFlowID": func(f *types.Flow) string {
-			if f == nil {
-				return ""
-			}
-			return f.ID
-		},
-		"selectedSkillID": func(s *types.Skill) string {
-			if s == nil {
-				return ""
-			}
-			return s.ID
-		},
-		"selectedEndpointID": func(e *types.Endpoint) string {
-			if e == nil {
-				return ""
-			}
-			return e.ID
-		},
-		"skillSuggestsEndpoint": func(s any, id string) bool {
-			var refs []types.SkillEndpointRef
-			switch v := s.(type) {
-			case *types.Skill:
-				if v == nil {
-					return false
-				}
-				refs = v.SuggestedEndpoints
-			case types.Skill:
-				refs = v.SuggestedEndpoints
-			default:
-				return false
-			}
-			for _, ref := range refs {
-				if ref.Endpoint == id {
-					return true
-				}
-			}
-			return false
-		},
-		"json":               tplJSON,
-		"skillIds":           tplSkillIDs,
-		"workflowState":      tplWorkflowState,
-		"workflowNodeCount":  tplWorkflowNodeCount,
+		"statusClass":        statusClass,
+		"dict":               tplDict,
 		"includedFlowsCount": tplIncludedFlowsCount,
 	}
 	parse := func(name string) (*template.Template, error) {
 		return template.New("").Funcs(funcs).ParseFS(webFS,
 			"templates/layout.html",
 			"templates/configurator/layout.html",
-			"templates/configurator/partials.html",
 			"templates/configurator/"+name+".html",
 		)
-	}
-	flowsTmpl, err := parse("flows")
-	if err != nil {
-		return nil, err
-	}
-	skillsTmpl, err := parse("skills")
-	if err != nil {
-		return nil, err
-	}
-	endpointsTmpl, err := parse("endpoints")
-	if err != nil {
-		return nil, err
-	}
-	finalizeTmpl, err := parse("finalize")
-	if err != nil {
-		return nil, err
 	}
 	inputsTmpl, err := parse("inputs")
 	if err != nil {
@@ -158,7 +82,6 @@ func NewConfiguratorHandler(
 	promptsTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
 		"templates/configurator/layout.html",
-		"templates/configurator/partials.html",
 		"templates/configurator/prompts.html",
 		"templates/configurator/prompts_confirm_modal.html",
 		"templates/configurator/delete_confirm_modal.html",
@@ -166,7 +89,15 @@ func NewConfiguratorHandler(
 	if err != nil {
 		return nil, err
 	}
-	mcpTmpl, err := parse("mcp")
+	// mcp.html references the mcp_card / mcp_row_detail partials, which
+	// still live in configurator/partials.html. The generic `parse` helper
+	// doesn't include partials, so we build mcpTmpl explicitly.
+	mcpTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/layout.html",
+		"templates/configurator/layout.html",
+		"templates/configurator/partials.html",
+		"templates/configurator/mcp.html",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -177,19 +108,15 @@ func NewConfiguratorHandler(
 		return nil, err
 	}
 	return &ConfiguratorHandler{
-		repo:          repo,
-		backends:      backends,
-		wiring:        wiring,
-		agentWiring:   agentWiring,
-		schema:        schema,
-		flowsTmpl:     flowsTmpl,
-		skillsTmpl:    skillsTmpl,
-		endpointsTmpl: endpointsTmpl,
-		finalizeTmpl:  finalizeTmpl,
-		inputsTmpl:    inputsTmpl,
-		promptsTmpl:   promptsTmpl,
-		mcpTmpl:       mcpTmpl,
-		deleteTmpl:    deleteTmpl,
+		repo:        repo,
+		backends:    backends,
+		wiring:      wiring,
+		agentWiring: agentWiring,
+		schema:      schema,
+		inputsTmpl:  inputsTmpl,
+		promptsTmpl: promptsTmpl,
+		mcpTmpl:     mcpTmpl,
+		deleteTmpl:  deleteTmpl,
 	}, nil
 }
 
@@ -200,16 +127,16 @@ var proseRelLink = regexp.MustCompile(`\.\./(skills|endpoints|flows)/([^)\s]+?)\
 
 // renderMarkdown converts a prose markdown blob (from the discovery
 // skill) to HTML. Relative links into the .flow-map directory layout
-// are rewritten to the configurator routes (scoped by version_id) so
-// they actually navigate. Flows / skills / endpoints live under the
-// Architecture primary tab. Trusted input — prose is generated, not
-// user-typed.
-func renderMarkdown(versionID, md string) template.HTML {
+// are rewritten to the agent-scoped architecture routes so they
+// actually navigate — flows / skills / endpoints live under the
+// Architecture primary tab on the agent detail page. Trusted input —
+// prose is generated, not user-typed.
+func renderMarkdown(agentID, md string) template.HTML {
 	if md == "" {
 		return ""
 	}
-	if versionID != "" {
-		base := "/agent_versions/" + versionID + "/configure/architecture/"
+	if agentID != "" {
+		base := "/agents/" + agentID + "/configure/architecture/"
 		md = proseRelLink.ReplaceAllString(md, base+"$1/$2")
 	}
 	var buf bytes.Buffer
@@ -222,6 +149,7 @@ func renderMarkdown(versionID, md string) template.HTML {
 type configPageData struct {
 	Active           string
 	VersionID        string // URL path param value (a version row's ID)
+	VersionNum       int    // ordinal within the agent's version chain (1 = root); 0 when unknown
 	AgentID          string // stable agent ID, used for back-link to the version list
 	AgentName        string
 	AgentStatus      string // version's status (lives on AgentVersion now)
@@ -265,9 +193,13 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 			return configPageData{}, err
 		}
 	}
+	// Version number is derived from the parent-chain position; a lookup
+	// failure isn't fatal (we render "v?" in the header).
+	versionNum, _ := h.repo.GetVersionNum(r.Context(), version.ID)
 	return configPageData{
 		Active:       "agents",
 		VersionID:    versionID,
+		VersionNum:   versionNum,
 		AgentID:      agent.ID,
 		AgentName:    agent.Name,
 		AgentStatus:  version.Status,
@@ -628,215 +560,6 @@ func (h *ConfiguratorHandler) Index(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/agent_versions/"+versionID+"/configure/prompts", http.StatusFound)
 }
 
-func (h *ConfiguratorHandler) Flows(w http.ResponseWriter, r *http.Request) {
-	data, err := h.load(r)
-	if err != nil {
-		if errors.Is(err, types.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	data.Tab = "architecture"
-	data.SubTab = "flows"
-	if flowID := r.PathValue("flowId"); flowID != "" {
-		for i := range data.Config.Flows {
-			if data.Config.Flows[i].ID == flowID {
-				data.SelectedFlow = &data.Config.Flows[i]
-				break
-			}
-		}
-		if data.SelectedFlow == nil {
-			http.NotFound(w, r)
-			return
-		}
-	}
-	renderTemplate(w, h.flowsTmpl, "layout", data)
-}
-
-func (h *ConfiguratorHandler) Skills(w http.ResponseWriter, r *http.Request) {
-	data, err := h.load(r)
-	if err != nil {
-		if errors.Is(err, types.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	data.Tab = "architecture"
-	data.SubTab = "skills"
-	if skillID := r.PathValue("skillId"); skillID != "" {
-		for i := range data.Config.Skills {
-			if data.Config.Skills[i].ID == skillID {
-				data.SelectedSkill = &data.Config.Skills[i]
-				break
-			}
-		}
-		if data.SelectedSkill == nil {
-			http.NotFound(w, r)
-			return
-		}
-	}
-	renderTemplate(w, h.skillsTmpl, "layout", data)
-}
-
-func (h *ConfiguratorHandler) Endpoints(w http.ResponseWriter, r *http.Request) {
-	data, err := h.load(r)
-	if err != nil {
-		if errors.Is(err, types.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	data.Tab = "architecture"
-	data.SubTab = "endpoints"
-	if epID := r.PathValue("endpointID"); epID != "" {
-		for i := range data.Config.Endpoints {
-			if data.Config.Endpoints[i].ID == epID {
-				data.SelectedEndpoint = &data.Config.Endpoints[i]
-				break
-			}
-		}
-		if data.SelectedEndpoint == nil {
-			http.NotFound(w, r)
-			return
-		}
-	}
-
-	// Load available HTTP backends and current endpoint→backend wiring.
-	var httpBackends []*types.ToolBackend
-	var endpointBackends map[string]string
-	if h.backends != nil {
-		allBackends, err := h.backends.List(r.Context())
-		if err != nil {
-			Error(w, err)
-			return
-		}
-		httpBackends = []*types.ToolBackend{}
-		for _, b := range allBackends {
-			if b.Kind == types.ToolBackendKindHTTPEndpoint {
-				httpBackends = append(httpBackends, b)
-			}
-		}
-	}
-	if h.agentWiring != nil {
-		endpointBackends, err = h.agentWiring.ListEndpointBackends(r.Context(), data.AgentID)
-		if err != nil {
-			Error(w, err)
-			return
-		}
-	}
-	if endpointBackends == nil {
-		endpointBackends = map[string]string{}
-	}
-
-	unmappedCount := 0
-	for _, ep := range data.Config.Endpoints {
-		if endpointBackends[ep.ID] == "" {
-			unmappedCount++
-		}
-	}
-
-	type endpointsPageData struct {
-		configPageData
-		AvailableBackends []*types.ToolBackend
-		EndpointBackends  map[string]string
-		UnmappedCount     int
-	}
-	renderTemplate(w, h.endpointsTmpl, "layout", endpointsPageData{
-		configPageData:    data,
-		AvailableBackends: httpBackends,
-		EndpointBackends:  endpointBackends,
-		UnmappedCount:     unmappedCount,
-	})
-}
-
-// SetEndpointBackend maps an endpoint to a backend (POST with backend_id="" unmaps).
-// htmx fragment response: re-renders the endpoint_detail partial for the affected endpoint.
-//
-// Endpoint→backend wiring is agent-keyed (post-017), so we resolve the
-// version_id path param to the underlying agent_id once and use that for
-// every wiring call below.
-func (h *ConfiguratorHandler) SetEndpointBackend(w http.ResponseWriter, r *http.Request) {
-	vid := r.PathValue("version_id")
-	eid := r.PathValue("endpointID")
-	if err := r.ParseForm(); err != nil {
-		Error(w, err)
-		return
-	}
-	bid := r.FormValue("backend_id")
-
-	_, agent, err := h.repo.GetWithAgent(r.Context(), vid)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-
-	if bid == "" {
-		if err := h.agentWiring.UnsetEndpointBackend(r.Context(), agent.ID, eid); err != nil {
-			Error(w, err)
-			return
-		}
-	} else {
-		if err := h.agentWiring.SetEndpointBackend(r.Context(), agent.ID, eid, bid); err != nil {
-			Error(w, err)
-			return
-		}
-	}
-
-	// Re-render the endpoint_detail partial for this endpoint.
-	cfgBytes, _, err := h.repo.GetFlowMapConfig(r.Context(), vid)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	var cfg types.FlowMapConfig
-	if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
-		Error(w, err)
-		return
-	}
-	var selected *types.Endpoint
-	for i := range cfg.Endpoints {
-		if cfg.Endpoints[i].ID == eid {
-			selected = &cfg.Endpoints[i]
-			break
-		}
-	}
-	if selected == nil {
-		http.Error(w, "endpoint not found", http.StatusNotFound)
-		return
-	}
-
-	var httpBackends []*types.ToolBackend
-	if h.backends != nil {
-		allBackends, _ := h.backends.List(r.Context())
-		httpBackends = []*types.ToolBackend{}
-		for _, b := range allBackends {
-			if b.Kind == types.ToolBackendKindHTTPEndpoint {
-				httpBackends = append(httpBackends, b)
-			}
-		}
-	}
-	var endpointBackends map[string]string
-	if h.agentWiring != nil {
-		endpointBackends, _ = h.agentWiring.ListEndpointBackends(r.Context(), agent.ID)
-	}
-	if endpointBackends == nil {
-		endpointBackends = map[string]string{}
-	}
-
-	renderTemplate(w, h.endpointsTmpl, "endpoint_detail", map[string]any{
-		"VersionID":         vid,
-		"Endpoint":          selected,
-		"AvailableBackends": httpBackends,
-		"EndpointBackends":  endpointBackends,
-	})
-}
-
 // MCPSubtab renders the architecture/mcp subtab — list of all MCP backends
 // globally with attach checkboxes + notes.
 func (h *ConfiguratorHandler) MCPSubtab(w http.ResponseWriter, r *http.Request) {
@@ -884,8 +607,10 @@ func (h *ConfiguratorHandler) mcpSubtabData(ctx context.Context, version *types.
 			attMap[a.BackendID] = &a
 		}
 	}
+	versionNum, _ := h.repo.GetVersionNum(ctx, version.ID)
 	return map[string]any{
 		"VersionID":      version.ID,
+		"VersionNum":     versionNum,
 		"AgentName":      agent.Name,
 		"AgentID":        agent.ID,
 		"AgentStatus":    version.Status,
@@ -1059,20 +784,9 @@ func tplDict(kv ...any) (map[string]any, error) {
 // subsequent config CRUD against the per-version flow_map_config. Used as a
 // guard at the top of every mutating handler so a stale tab or hand-crafted
 // request can't change a finalized version.
-func (h *ConfiguratorHandler) requireEditable(ctx context.Context, versionID string) (string, error) {
-	version, _, err := h.repo.GetWithAgent(ctx, versionID)
-	if err != nil {
-		return "", err
-	}
-	if version.Status != "INITIALIZING" {
-		return "", types.ErrInvalidAgentStatus
-	}
-	return version.ID, nil
-}
-
 // loadConfig fetches the version's flow_map_config and unmarshals into a
-// FlowMapConfig. Returns ErrNotFound if the version does not exist or has no
-// config persisted (the configurator pages assume the wizard already ran).
+// FlowMapConfig. Kept for DownloadYAML which still operates per-version;
+// architecture edit paths live on AgentDetailHandler.
 func (h *ConfiguratorHandler) loadConfig(ctx context.Context, versionID string) (types.FlowMapConfig, error) {
 	cfgBytes, _, err := h.repo.GetFlowMapConfig(ctx, versionID)
 	if err != nil {
@@ -1086,309 +800,6 @@ func (h *ConfiguratorHandler) loadConfig(ctx context.Context, versionID string) 
 		return types.FlowMapConfig{}, err
 	}
 	return cfg, nil
-}
-
-// saveConfig marshals cfg to JSON and writes it via the repository.
-func (h *ConfiguratorHandler) saveConfig(ctx context.Context, versionID string, cfg types.FlowMapConfig) error {
-	b, err := json.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	return h.repo.UpdateFlowMapConfig(ctx, versionID, b)
-}
-
-// FlowIncluded toggles a flow's `included` boolean. Body: "included=true"
-// or "included=false". Responds with the updated flow_row HTML fragment so
-// htmx can swap the list row in place.
-func (h *ConfiguratorHandler) FlowIncluded(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
-		return
-	}
-	included := r.FormValue("included") == "true"
-
-	versionID := r.PathValue("version_id")
-	flowID := r.PathValue("flowId")
-	vID, err := h.requireEditable(r.Context(), versionID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	cfg, err := h.loadConfig(r.Context(), vID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-
-	idx := -1
-	for i := range cfg.Flows {
-		if cfg.Flows[i].ID == flowID {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		http.NotFound(w, r)
-		return
-	}
-	cfg.Flows[idx].Included = included
-
-	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
-		Error(w, err)
-		return
-	}
-
-	// Re-render the flow row so htmx can swap it in place. Template's
-	// VersionID drives the htmx URL for the toggle/back actions.
-	renderTemplate(w, h.flowsTmpl, "flow_row", map[string]any{
-		"VersionID":  versionID,
-		"Flow":       cfg.Flows[idx],
-		"SelectedID": "",
-	})
-}
-
-// parseSkillForm reads form values shared by SkillUpdate and SkillCreate.
-// Splits user_phrases on newlines or commas. For non-external skills, reads
-// suggested_endpoints multi-select values and validates each against the
-// agent's endpoint inventory.
-func parseSkillForm(r *http.Request, endpoints []types.Endpoint) (types.Skill, error) {
-	external := r.FormValue("external") == "true"
-	note := strings.TrimSpace(r.FormValue("external_note"))
-
-	var suggested []types.SkillEndpointRef
-	if !external {
-		note = ""
-		known := make(map[string]struct{}, len(endpoints))
-		for _, e := range endpoints {
-			known[e.ID] = struct{}{}
-		}
-		for _, epID := range r.Form["suggested_endpoints"] {
-			epID = strings.TrimSpace(epID)
-			if epID == "" {
-				continue
-			}
-			if _, ok := known[epID]; !ok {
-				return types.Skill{}, fmt.Errorf("%w: endpoint %q not present in this agent's discovery snapshot",
-					types.ErrFlowMapInvalid, epID)
-			}
-			suggested = append(suggested, types.SkillEndpointRef{
-				Endpoint: epID,
-				Role:     "",
-				When:     "",
-			})
-		}
-	}
-
-	rawPhrases := r.FormValue("user_phrases")
-	var phrases []string
-	for _, line := range strings.FieldsFunc(rawPhrases, func(r rune) bool { return r == '\n' || r == ',' }) {
-		if s := strings.TrimSpace(line); s != "" {
-			phrases = append(phrases, s)
-		}
-	}
-
-	return types.Skill{
-		Name:               strings.TrimSpace(r.FormValue("name")),
-		Description:        strings.TrimSpace(r.FormValue("description")),
-		Domain:             strings.TrimSpace(r.FormValue("domain")),
-		External:           external,
-		ExternalNote:       note,
-		SuggestedEndpoints: suggested,
-		UserPhrases:        phrases,
-	}, nil
-}
-
-// SkillCreate adds a new custom skill from form values. The id is server-
-// assigned via SlugifySkillName + UniqueSkillID. Returns the rendered
-// skill_row partial so htmx can append it to the list.
-func (h *ConfiguratorHandler) SkillCreate(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
-		return
-	}
-	versionID := r.PathValue("version_id")
-	vID, err := h.requireEditable(r.Context(), versionID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	cfg, err := h.loadConfig(r.Context(), vID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-
-	parsed, err := parseSkillForm(r, cfg.Endpoints)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	if parsed.Name == "" {
-		Error(w, types.ErrCustomSkillNameRequired)
-		return
-	}
-
-	slug := flowmap.SlugifySkillName(parsed.Name)
-	if slug == "" {
-		Error(w, types.ErrCustomSkillNameRequired)
-		return
-	}
-	taken := make(map[string]struct{}, len(cfg.Skills))
-	for _, s := range cfg.Skills {
-		taken[s.ID] = struct{}{}
-	}
-	parsed.ID = flowmap.UniqueSkillID(slug, taken)
-	parsed.Origin = "custom"
-
-	cfg.Skills = append(cfg.Skills, parsed)
-	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
-		Error(w, err)
-		return
-	}
-
-	renderTemplate(w, h.skillsTmpl, "skill_row", map[string]any{
-		"VersionID":  versionID,
-		"Skill":      parsed,
-		"SelectedID": "",
-	})
-}
-
-// SkillDelete removes a custom skill. Discovered skills cannot be deleted
-// (409). Custom skills cannot be deleted while referenced by any flow's
-// workflow (409). On success returns 200 with an empty body so htmx can
-// remove the row in place.
-func (h *ConfiguratorHandler) SkillDelete(w http.ResponseWriter, r *http.Request) {
-	versionID := r.PathValue("version_id")
-	skillID := r.PathValue("skillId")
-	vID, err := h.requireEditable(r.Context(), versionID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	cfg, err := h.loadConfig(r.Context(), vID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-
-	idx := -1
-	for i := range cfg.Skills {
-		if cfg.Skills[i].ID == skillID {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		http.NotFound(w, r)
-		return
-	}
-	if cfg.Skills[idx].Origin != "custom" {
-		Error(w, types.ErrSkillReferenced)
-		return
-	}
-	for _, f := range cfg.Flows {
-		if flowmap.WorkflowReferencesSkill(f.Workflow.Mermaid, skillID) {
-			Error(w, types.ErrSkillReferenced)
-			return
-		}
-	}
-
-	cfg.Skills = append(cfg.Skills[:idx], cfg.Skills[idx+1:]...)
-	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
-		Error(w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-// SkillNew renders an empty skill_new_form for creating a custom skill.
-// The form's submit URL is /skills (no skillId), creating a new row
-// instead of updating an existing one.
-func (h *ConfiguratorHandler) SkillNew(w http.ResponseWriter, r *http.Request) {
-	versionID := r.PathValue("version_id")
-	version, _, err := h.repo.GetWithAgent(r.Context(), versionID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	cfg, err := h.loadConfig(r.Context(), version.ID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	blank := types.Skill{Origin: "custom"}
-	renderTemplate(w, h.skillsTmpl, "skill_new_form", map[string]any{
-		"VersionID": versionID,
-		"Skill":     blank,
-		"Endpoints": cfg.Endpoints,
-	})
-}
-
-// WorkflowUpdate accepts a JSON body { "mermaid": "...", "layout": { nodeId: {x, y} } }
-// and persists it to the named flow's Workflow struct. Validates the mermaid:
-//   - structural parse via flowmap.ParseWorkflow
-//   - every id[<skill-id>] rectangle resolves to a known skill in this agent's config
-//
-// Returns 200 with empty body on success.
-func (h *ConfiguratorHandler) WorkflowUpdate(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Mermaid string                    `json:"mermaid"`
-		Layout  map[string]types.Position `json:"layout"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
-		return
-	}
-
-	versionID := r.PathValue("version_id")
-	flowID := r.PathValue("flowId")
-	vID, err := h.requireEditable(r.Context(), versionID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	cfg, err := h.loadConfig(r.Context(), vID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-
-	idx := -1
-	for i := range cfg.Flows {
-		if cfg.Flows[i].ID == flowID {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		http.NotFound(w, r)
-		return
-	}
-
-	if _, err := flowmap.ParseWorkflow(body.Mermaid); err != nil {
-		Error(w, fmt.Errorf("%w: %v", types.ErrFlowMapInvalid, err))
-		return
-	}
-	skillIDs := make(map[string]struct{}, len(cfg.Skills))
-	for _, s := range cfg.Skills {
-		skillIDs[s.ID] = struct{}{}
-	}
-	if err := flowmap.ValidateWorkflowSkillRefs(body.Mermaid, skillIDs); err != nil {
-		Error(w, fmt.Errorf("%w: %v", types.ErrFlowMapInvalid, err))
-		return
-	}
-
-	cfg.Flows[idx].Workflow = types.Workflow{
-		Mermaid: body.Mermaid,
-		Layout:  body.Layout,
-	}
-
-	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
-		Error(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
 }
 
 // tplJSON marshals v to JSON suitable for embedding as a single-quoted HTML
@@ -1600,133 +1011,3 @@ func sanitiseFilename(name string) string {
 	return out
 }
 
-// FinalizeConfirm renders the small confirmation page shown when the user
-// clicks "Finalize →" in the configurator. Submitting the page's form
-// POSTs to /agent_versions/{version_id}/finalize.
-func (h *ConfiguratorHandler) FinalizeConfirm(w http.ResponseWriter, r *http.Request) {
-	versionID := r.PathValue("version_id")
-	version, agent, err := h.repo.GetWithAgent(r.Context(), versionID)
-	if err != nil {
-		if errors.Is(err, types.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	cfgBytes, parseErr, err := h.repo.GetFlowMapConfig(r.Context(), version.ID)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	data := configPageData{
-		Active:     "agents",
-		VersionID:  versionID,
-		AgentID:    agent.ID,
-		AgentName:  agent.Name,
-		Tab:        "finalize",
-		ParseError: parseErr,
-	}
-	if len(cfgBytes) > 0 {
-		_ = json.Unmarshal(cfgBytes, &data.Config)
-	}
-	renderTemplate(w, h.finalizeTmpl, "layout", data)
-}
-
-// Finalize flips the version's status INITIALIZING → DRAFT and redirects to
-// /agents/ui. 409 (ErrInvalidAgentStatus) if the version isn't in INITIALIZING.
-func (h *ConfiguratorHandler) Finalize(w http.ResponseWriter, r *http.Request) {
-	versionID := r.PathValue("version_id")
-	if err := h.repo.UpdateStatus(r.Context(), versionID, "INITIALIZING", "DRAFT"); err != nil {
-		if errors.Is(err, types.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		Error(w, err)
-		return
-	}
-	http.Redirect(w, r, "/agents/ui", http.StatusSeeOther)
-}
-
-// SkillUpdate applies form values to an existing skill in place.
-func (h *ConfiguratorHandler) SkillUpdate(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
-		return
-	}
-	versionID := r.PathValue("version_id")
-	skillID := r.PathValue("skillId")
-	vID, err := h.requireEditable(r.Context(), versionID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	cfg, err := h.loadConfig(r.Context(), vID)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-
-	idx := -1
-	for i := range cfg.Skills {
-		if cfg.Skills[i].ID == skillID {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		http.NotFound(w, r)
-		return
-	}
-
-	parsed, err := parseSkillForm(r, cfg.Endpoints)
-	if err != nil {
-		Error(w, err)
-		return
-	}
-	if parsed.Name == "" {
-		Error(w, types.ErrCustomSkillNameRequired)
-		return
-	}
-
-	// Preserve immutable fields: id, origin, prose_md.
-	cur := &cfg.Skills[idx]
-	cur.Name = parsed.Name
-	cur.Description = parsed.Description
-	cur.Domain = parsed.Domain
-	cur.External = parsed.External
-	cur.ExternalNote = parsed.ExternalNote
-	cur.SuggestedEndpoints = parsed.SuggestedEndpoints
-	cur.UserPhrases = parsed.UserPhrases
-
-	if err := h.saveConfig(r.Context(), vID, cfg); err != nil {
-		Error(w, err)
-		return
-	}
-
-	// Re-render skill_detail so the htmx swap shows the saved state.
-	renderTemplate(w, h.skillsTmpl, "skill_detail", map[string]any{
-		"VersionID": versionID,
-		"Skill":     cur,
-		"Endpoints": cfg.Endpoints,
-	})
-}
-
-// RegisterConfiguratorRedirects mounts 301s for the pre-redesign tab URLs.
-// Bookmarks against /configure/{flows,skills,endpoints} survive; the bare
-// /configure/architecture path lands on the default Flows sub-tab.
-func RegisterConfiguratorRedirects(mux *http.ServeMux) {
-	for _, sub := range []string{"flows", "skills", "endpoints"} {
-		sub := sub
-		mux.HandleFunc("GET /agent_versions/{version_id}/configure/"+sub, func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r,
-				"/agent_versions/"+r.PathValue("version_id")+"/configure/architecture/"+sub,
-				http.StatusMovedPermanently)
-		})
-	}
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r,
-			"/agent_versions/"+r.PathValue("version_id")+"/configure/architecture/flows",
-			http.StatusMovedPermanently)
-	})
-}

@@ -1,0 +1,266 @@
+{{define "flow_row"}}
+<div id="flow-row-{{.Flow.ID}}" class="config-list-row {{if and .SelectedID (eq .SelectedID .Flow.ID)}}selected{{end}}">
+  <input type="checkbox" class="config-list-row-toggle"
+         {{if .Flow.Included}}checked{{end}}
+         {{if .ReadOnly}}disabled{{else}}
+         hx-post="/agents/{{.AgentID}}/configure/architecture/flows/{{.Flow.ID}}/included"
+         hx-trigger="change"
+         hx-vals='js:{included: event.target.checked}'
+         hx-target="#flow-row-{{.Flow.ID}}"
+         hx-swap="outerHTML"
+         {{end}}>
+  <a href="/agents/{{.AgentID}}/configure/architecture/flows/{{.Flow.ID}}" class="config-list-row-link">
+    <span class="config-list-row-name">{{.Flow.ID}}</span>
+    <span class="config-list-row-meta">{{workflowNodeCount .Flow.Workflow}} nodes</span>
+  </a>
+</div>
+{{end}}
+
+{{define "flow_detail"}}
+<div class="config-detail">
+  <h2>{{.Flow.Name}}</h2>
+  <p class="config-detail-id"><code>{{.Flow.ID}}</code></p>
+
+  <div class="config-section">
+    <h3>Workflow</h3>
+    <div class="obf-editor"
+         data-obf-editor
+         {{if .ReadOnly}}data-obf-readonly="1"{{end}}
+         data-agent-id="{{.AgentID}}"
+         data-flow-id="{{.Flow.ID}}"
+         data-skills='{{json (skillIds .Skills)}}'>
+      {{if not .ReadOnly}}
+      <div class="obf-toolbar">
+        <button type="button" data-obf-add="skill">+ skill</button>
+        <button type="button" data-obf-add="decision">+ decision</button>
+        <button type="button" data-obf-add="end">+ end</button>
+        <button type="button" data-obf-action="auto-layout">Auto-layout</button>
+        <button type="button" data-obf-action="reset">Reset to source</button>
+        <span class="obf-saved-indicator"></span>
+      </div>
+      {{else}}
+      <div class="obf-toolbar">
+        <button type="button" data-obf-action="auto-layout">Auto-layout</button>
+        <span class="obf-saved-indicator obf-readonly-tag">read-only</span>
+      </div>
+      {{end}}
+      <div class="obf-canvas"></div>
+      <script type="application/json" data-obf-state>{{workflowState .Flow.Workflow}}</script>
+    </div>
+  </div>
+
+  <div class="config-section">
+    <h3>Metadata</h3>
+    <dl class="config-meta">
+      <dt>Description</dt>     <dd>{{.Flow.Description}}</dd>
+      <dt>Intent</dt>          <dd>{{.Flow.Intent}}</dd>
+      <dt>User phrases</dt>    <dd>{{range .Flow.UserPhrases}}<span class="chip">{{.}}</span>{{end}}</dd>
+      <dt>Preconditions</dt>   <dd><ul>{{range .Flow.Preconditions}}<li>{{.}}</li>{{end}}</ul></dd>
+      <dt>Postconditions</dt>  <dd><ul>{{range .Flow.Postconditions}}<li>{{.}}</li>{{end}}</ul></dd>
+      <dt>Side effects</dt>    <dd>{{range .Flow.SideEffects}}<span class="chip">{{.}}</span>{{end}}</dd>
+      <dt>Confidence</dt>      <dd>{{.Flow.Confidence}}</dd>
+    </dl>
+  </div>
+
+  {{if .Flow.ProseMD}}
+  <div class="config-section">
+    <h3>Description (from discovery)</h3>
+    <div class="prose">{{renderMarkdown .AgentID .Flow.ProseMD}}</div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{define "skill_row"}}
+<div id="skill-row-{{.Skill.ID}}">
+  <a href="/agents/{{.AgentID}}/configure/architecture/skills/{{.Skill.ID}}"
+     class="config-list-row {{if and .SelectedID (eq .SelectedID .Skill.ID)}}selected{{end}}">
+    <span class="config-list-row-name">{{.Skill.ID}}</span>
+    <span class="config-list-row-meta">
+      <span class="badge badge-{{.Skill.Origin}}">{{.Skill.Origin}}</span>
+      {{if .Skill.External}}<span class="badge">external</span>{{end}}
+      <span class="muted">{{len .Skill.SuggestedEndpoints}} endpoints</span>
+    </span>
+  </a>
+</div>
+{{end}}
+
+{{define "skill_form_fields"}}
+<input type="hidden" name="agent_id" value="{{.AgentID}}">
+
+<label>Name
+  <input type="text" name="name" value="{{.Skill.Name}}" required>
+</label>
+
+<label>Description
+  <textarea name="description" rows="2">{{.Skill.Description}}</textarea>
+</label>
+
+<label>Domain
+  <input type="text" name="domain" value="{{.Skill.Domain}}" placeholder="e.g. order processing, user profile">
+</label>
+
+<label>User phrases
+  <div class="chip-input"
+       data-chip-input
+       data-name="user_phrases"
+       data-value="{{range $i, $p := .Skill.UserPhrases}}{{if $i}},{{end}}{{$p}}{{end}}"></div>
+</label>
+
+<label class="checkbox-row">
+  <input type="checkbox" name="external" value="true" {{if .Skill.External}}checked{{end}}
+         hx-on:change="
+           const isExt = this.checked;
+           this.form.querySelector('.external-note-row').style.display = isExt ? '' : 'none';
+           this.form.querySelector('.suggested-endpoints-row').style.display = isExt ? 'none' : '';
+         ">
+  <span>External skill (no backend endpoint)</span>
+</label>
+
+<div class="suggested-endpoints-row" style="{{if .Skill.External}}display:none{{end}}">
+  <label>Suggested endpoints
+    <select name="suggested_endpoints" class="endpoint-select" multiple size="6">
+      {{range .Endpoints}}
+      <option value="{{.ID}}" {{if skillSuggestsEndpoint $.Skill .ID}}selected{{end}}>{{.ID}} — {{.Method}} {{.Path}}</option>
+      {{end}}
+    </select>
+  </label>
+  <p class="form-hint">Hold ⌘/Ctrl to toggle multiple endpoints. Per-entry <code>role</code> and <code>when</code> annotations aren't edited in this UI yet — leave to direct YAML edit if needed.</p>
+</div>
+
+<div class="external-note-row" style="{{if not .Skill.External}}display:none{{end}}">
+  <label>External note
+    <textarea name="external_note" rows="2" placeholder="why this skill has no discovered endpoint">{{.Skill.ExternalNote}}</textarea>
+  </label>
+</div>
+{{end}}
+
+{{define "skill_detail"}}
+<div class="config-detail">
+  <h2>{{.Skill.Name}}</h2>
+  <p class="config-detail-id"><code>{{.Skill.ID}}</code> · <span class="badge badge-{{.Skill.Origin}}">{{.Skill.Origin}}</span></p>
+
+  <form class="config-form {{if .ReadOnly}}config-form-readonly{{end}}"
+        {{if not .ReadOnly}}
+        hx-post="/agents/{{.AgentID}}/configure/architecture/skills/{{.Skill.ID}}"
+        hx-target="closest .config-detail"
+        hx-swap="outerHTML"
+        hx-indicator=".config-form-saved"
+        {{end}}>
+    <fieldset {{if .ReadOnly}}disabled{{end}} style="border:none;padding:0;margin:0;display:contents">
+    {{template "skill_form_fields" (dict
+      "AgentID"   .AgentID
+      "Skill"     .Skill
+      "Endpoints" .Endpoints)}}
+    </fieldset>
+
+    {{if not .ReadOnly}}
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">Save</button>
+      {{if eq .Skill.Origin "custom"}}
+      <button type="button"
+              class="btn-secondary danger-button"
+              hx-delete="/agents/{{.AgentID}}/configure/architecture/skills/{{.Skill.ID}}"
+              hx-target="#skill-row-{{.Skill.ID}}"
+              hx-swap="delete"
+              hx-confirm="Delete this custom skill?">Delete</button>
+      {{end}}
+      <span class="config-form-saved">Saved</span>
+    </div>
+    {{end}}
+  </form>
+
+  {{if .Skill.ProseMD}}
+  <div class="config-section">
+    <h3>Source (from discovery)</h3>
+    <div class="prose">{{renderMarkdown .AgentID .Skill.ProseMD}}</div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{define "skill_new_form"}}
+<div class="config-detail">
+  <h2>New custom skill</h2>
+  <p class="config-detail-id">A new id will be generated from the name.</p>
+
+  <form class="config-form"
+        hx-post="/agents/{{.AgentID}}/configure/architecture/skills"
+        hx-target="#skill-list-rows"
+        hx-swap="beforeend"
+        hx-indicator=".config-form-saved">
+    {{template "skill_form_fields" (dict
+      "AgentID"   .AgentID
+      "Skill"     .Skill
+      "Endpoints" .Endpoints)}}
+
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">Create</button>
+      <span class="config-form-saved">Created</span>
+    </div>
+  </form>
+</div>
+{{end}}
+
+{{define "endpoint_row"}}
+<a href="/agents/{{.AgentID}}/configure/architecture/endpoints/{{.Endpoint.ID}}"
+   class="config-list-row {{if and .SelectedID (eq .SelectedID .Endpoint.ID)}}selected{{end}}">
+  <span class="config-list-row-name">{{.Endpoint.ID}}</span>
+  <span class="config-list-row-meta"><span class="muted">{{.Endpoint.Method}} {{.Endpoint.Path}}</span></span>
+</a>
+{{end}}
+
+{{define "endpoint_detail"}}
+{{$domID := printf "endpoint-detail-%s" (cssID .Endpoint.ID)}}
+<div class="config-detail" id="{{$domID}}">
+  <h2>{{.Endpoint.ID}}</h2>
+  <p><code>{{.Endpoint.Method}} {{.Endpoint.Path}}</code></p>
+
+  <div class="config-section">
+    <h3>Request</h3>
+    <dl class="config-meta">
+      <dt>Method</dt> <dd>{{.Endpoint.Method}}</dd>
+      <dt>Path</dt>   <dd><code>{{.Endpoint.Path}}</code></dd>
+      <dt>Auth</dt>   <dd>{{.Endpoint.Auth}}</dd>
+      {{if .Endpoint.Source}}<dt>Source</dt> <dd><code>{{.Endpoint.Source}}</code></dd>{{end}}
+      {{if .Endpoint.Confidence}}<dt>Confidence</dt> <dd>{{.Endpoint.Confidence}}</dd>{{end}}
+    </dl>
+  </div>
+
+  <div class="config-section">
+    <h3>Used by skills</h3>
+    {{if .Endpoint.UsedBySkills}}
+      <ul>
+        {{range .Endpoint.UsedBySkills}}<li><a href="../skills/{{.}}">{{.}}</a></li>{{end}}
+      </ul>
+    {{else}}
+      <p class="muted">— (general-purpose tool; not bound to a specific skill)</p>
+    {{end}}
+  </div>
+
+  <div class="config-section">
+    <h3>Backend</h3>
+    {{$currentBackend := index .EndpointBackends .Endpoint.ID}}
+    <select name="backend_id"
+            hx-post="/agents/{{.AgentID}}/configure/architecture/endpoints/{{.Endpoint.ID}}/backend"
+            hx-trigger="change"
+            hx-target="#{{$domID}}"
+            hx-swap="outerHTML">
+      <option value="">— not connected —</option>
+      {{range .AvailableBackends}}
+        <option value="{{.ID}}" {{if eq .ID $currentBackend}}selected{{end}}>{{.Name}}</option>
+      {{end}}
+    </select>
+    {{if not $currentBackend}}
+      <p class="form-hint">Not connected — agent will not be able to call this endpoint.</p>
+    {{end}}
+  </div>
+
+  {{if .Endpoint.ProseMD}}
+  <div class="config-section">
+    <h3>Documentation (from discovery)</h3>
+    <div class="prose">{{renderMarkdown .AgentID .Endpoint.ProseMD}}</div>
+  </div>
+  {{end}}
+</div>
+{{end}}

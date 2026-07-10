@@ -43,6 +43,10 @@ func (s *configStore) GetWithAgent(ctx context.Context, versionID string) (*type
 	return s.versions.GetWithAgent(ctx, versionID)
 }
 
+func (s *configStore) GetVersionNum(ctx context.Context, versionID string) (int, error) {
+	return s.versions.GetVersionNum(ctx, versionID)
+}
+
 func (s *configStore) GetFlowMapConfig(ctx context.Context, versionID string) ([]byte, string, error) {
 	return s.versions.GetFlowMapConfig(ctx, versionID)
 }
@@ -207,18 +211,9 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agents/new/step/{n}", uiHandler.WizardStep)
 	mux.HandleFunc("POST /agents/wizard", wizardHandler.Submit)
 
-	// Per-version configurator. Flows / Skills / Endpoints are nested under
-	// the Architecture primary tab; Inputs, Finalize, and the YAML download are
-	// siblings. RegisterConfiguratorRedirects below 301s the pre-redesign tab
-	// URLs to their /architecture/ equivalents.
+	// Per-version configurator. Only Prompts, MCP, and Finalize/Delete live
+	// per-version now; Inputs and Architecture are agent-scoped (below).
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure", configuratorHandler.Index)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/flows", configuratorHandler.Flows)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/flows/{flowId}", configuratorHandler.Flows)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills", configuratorHandler.Skills)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/{skillId}", configuratorHandler.Skills)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/endpoints", configuratorHandler.Endpoints)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/endpoints/{endpointID}", configuratorHandler.Endpoints)
-	mux.HandleFunc("POST /agent_versions/{version_id}/endpoints/{endpointID}/backend", configuratorHandler.SetEndpointBackend)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/inputs", configuratorHandler.Inputs)
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/prompts", configuratorHandler.Prompts)
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts/confirm", configuratorHandler.ConfirmSavePrompts)
@@ -226,25 +221,18 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	// No confirm modal — the caller (scripts/train_from_eval.sh) already
 	// gates the request behind an operator y/N confirmation.
 	mux.HandleFunc("POST /agent_versions/{version_id}/configure/prompts/land", configuratorHandler.LandPrompts)
-	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/included", configuratorHandler.FlowIncluded)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/skills/new", configuratorHandler.SkillNew)
-	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/skills", configuratorHandler.SkillCreate)
-	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/skills/{skillId}", configuratorHandler.SkillUpdate)
-	mux.HandleFunc("DELETE /agent_versions/{version_id}/configure/architecture/skills/{skillId}", configuratorHandler.SkillDelete)
-	mux.HandleFunc("POST /agent_versions/{version_id}/configure/architecture/flows/{flowId}/workflow", configuratorHandler.WorkflowUpdate)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/finalize", configuratorHandler.FinalizeConfirm)
-	mux.HandleFunc("POST /agent_versions/{version_id}/finalize", configuratorHandler.Finalize)
 	mux.HandleFunc("GET /agent_versions/{version_id}/config.yaml", configuratorHandler.DownloadYAML)
-	mux.HandleFunc("GET /agent_versions/{version_id}/configure/architecture/mcp", configuratorHandler.MCPSubtab)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/{backendID}/toggle", configuratorHandler.ToggleMCPBackend)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/notes", configuratorHandler.UpdateAllMCPNotes)
 	mux.HandleFunc("GET /agent_versions/{version_id}/delete-confirm", configuratorHandler.DeleteConfirm)
 	mux.HandleFunc("POST /agent_versions/{version_id}/delete", configuratorHandler.Delete)
 	// Convenience alias under the new top-level "MCP" version tab.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/mcp", configuratorHandler.MCPSubtab)
-	RegisterConfiguratorRedirects(mux)
 
 	// Agent-level detail page: tabbed Versions / Inputs / Architecture.
+	// Architecture is editable pre-finalize (reads/writes the root version's
+	// flow_map_config) and read-only after — same URL space, mode determined
+	// by agent.FinalizedAt.
 	mux.HandleFunc("GET /agents/{agent_id}/configure", agentDetailHandler.Index)
 	mux.HandleFunc("GET /agents/{agent_id}/configure/versions", agentDetailHandler.Versions)
 	mux.HandleFunc("GET /agents/{agent_id}/configure/inputs", agentDetailHandler.Inputs)
@@ -253,6 +241,14 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("GET /agents/{agent_id}/configure/architecture/endpoints/bulk", agentDetailHandler.BulkBackendModal)
 	mux.HandleFunc("POST /agents/{agent_id}/configure/architecture/endpoints/bulk", agentDetailHandler.SetEndpointBackendBulk)
 	mux.HandleFunc("POST /agents/{agent_id}/configure/architecture/endpoints/{endpointID}/backend", agentDetailHandler.SetEndpointBackend)
+	mux.HandleFunc("POST /agents/{agent_id}/configure/architecture/flows/{flowId}/included", agentDetailHandler.FlowIncluded)
+	mux.HandleFunc("POST /agents/{agent_id}/configure/architecture/flows/{flowId}/workflow", agentDetailHandler.WorkflowUpdate)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/architecture/skills/new", agentDetailHandler.SkillNew)
+	mux.HandleFunc("POST /agents/{agent_id}/configure/architecture/skills", agentDetailHandler.SkillCreate)
+	mux.HandleFunc("POST /agents/{agent_id}/configure/architecture/skills/{skillId}", agentDetailHandler.SkillUpdate)
+	mux.HandleFunc("DELETE /agents/{agent_id}/configure/architecture/skills/{skillId}", agentDetailHandler.SkillDelete)
+	mux.HandleFunc("GET /agents/{agent_id}/configure/finalize", agentDetailHandler.FinalizeConfirm)
+	mux.HandleFunc("POST /agents/{agent_id}/finalize", agentDetailHandler.Finalize)
 	mux.HandleFunc("GET /agents/{agent_id}/delete-confirm", agentDetailHandler.DeleteConfirm)
 	mux.HandleFunc("POST /agents/{agent_id}/delete", agentDetailHandler.Delete)
 
@@ -416,6 +412,15 @@ func (a *agentDetailStoreAdapter) ListGrouped(ctx context.Context) ([]types.Agen
 }
 func (a *agentDetailStoreAdapter) GetFlowMapConfigForAgent(ctx context.Context, agentID string) ([]byte, string, error) {
 	return a.versions.GetFlowMapConfigForAgent(ctx, agentID)
+}
+func (a *agentDetailStoreAdapter) UpdateFlowMapConfigForAgent(ctx context.Context, agentID string, cfg []byte) error {
+	return a.versions.UpdateFlowMapConfigForAgent(ctx, agentID, cfg)
+}
+func (a *agentDetailStoreAdapter) GetRootVersion(ctx context.Context, agentID string) (string, string, error) {
+	return a.versions.GetRootVersion(ctx, agentID)
+}
+func (a *agentDetailStoreAdapter) UpdateVersionStatus(ctx context.Context, versionID, expectedFrom, to string) error {
+	return a.versions.UpdateStatus(ctx, versionID, expectedFrom, to)
 }
 func (a *agentDetailStoreAdapter) Delete(ctx context.Context, agentID string) error {
 	return a.agents.Delete(ctx, agentID)

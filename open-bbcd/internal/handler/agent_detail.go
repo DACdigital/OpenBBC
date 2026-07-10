@@ -4,29 +4,37 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
-	"sort"
+	"strings"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/flowmap"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
 // AgentDetailStore is the minimal set of repo methods AgentDetailHandler
-// needs. Architecture + finalized_at come from the agent row; the wizard
-// inputs (flow_map_config) come from the agent's root version.
+// needs. Reads and writes to flow_map_config are keyed by agent — the
+// agent-scoped architecture UI is editable pre-finalize and read-only
+// post-finalize, but always speaks to the agent's root version's config.
 type AgentDetailStore interface {
 	GetByID(ctx context.Context, agentID string) (*types.Agent, error)
 	ListGrouped(ctx context.Context) ([]types.AgentGroup, error)
 	GetFlowMapConfigForAgent(ctx context.Context, agentID string) ([]byte, string, error)
+	UpdateFlowMapConfigForAgent(ctx context.Context, agentID string, cfg []byte) error
+	GetRootVersion(ctx context.Context, agentID string) (versionID, status string, err error)
+	UpdateVersionStatus(ctx context.Context, versionID, expectedFrom, to string) error
 	Delete(ctx context.Context, agentID string) error
 }
 
 // AgentDetailHandler serves the tabbed agent detail page at
-// /agents/{agent_id}/configure/* — Versions / Inputs / Architecture. All
-// content here is read-only: architecture is frozen post-finalize and the
-// editable parts (prompts, MCP) live on the version detail page.
+// /agents/{agent_id}/configure/* — Versions / Inputs / Architecture.
+// Architecture is editable when the agent is pre-finalize (reads/writes
+// the root version's flow_map_config) and read-only once agent.FinalizedAt
+// is set (renders the frozen agent.architecture blob). Prompts and MCP
+// remain version-scoped on the ConfiguratorHandler.
 type AgentDetailHandler struct {
 	store           AgentDetailStore
 	backendRepo     *repository.ToolBackendRepository
@@ -45,8 +53,19 @@ func NewAgentDetailHandler(
 	webFS fs.FS,
 ) (*AgentDetailHandler, error) {
 	funcs := template.FuncMap{
-		"statusClass": statusClass,
-		"dict":        tplDict,
+		"statusClass":           statusClass,
+		"dict":                  tplDict,
+		"renderMarkdown":        renderMarkdown,
+		"cssID":                 cssID,
+		"selectedFlowID":        tplSelectedFlowID,
+		"selectedSkillID":       tplSelectedSkillID,
+		"selectedEndpointID":    tplSelectedEndpointID,
+		"skillSuggestsEndpoint": tplSkillSuggestsEndpoint,
+		"json":                  tplJSON,
+		"skillIds":              tplSkillIDs,
+		"workflowState":         tplWorkflowState,
+		"workflowNodeCount":     tplWorkflowNodeCount,
+		"includedFlowsCount":    tplIncludedFlowsCount,
 	}
 	tmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
@@ -54,6 +73,8 @@ func NewAgentDetailHandler(
 		"templates/agent-detail/versions.html",
 		"templates/agent-detail/inputs.html",
 		"templates/agent-detail/architecture.html",
+		"templates/agent-detail/architecture_partials.html",
+		"templates/agent-detail/finalize.html",
 		"templates/agent-detail/bulk_backend_modal.html",
 		"templates/agent-detail/delete_confirm_modal.html",
 	)
@@ -98,13 +119,29 @@ type agentDetailPageData struct {
 	// Inputs tab payload.
 	WizardFields []wizardFieldView
 
-	// Architecture tab payload (decoded from agent.architecture).
+	// Architecture tab payload.
+	//
+	// EditMode=true → pre-finalize view; Config carries the flow_map_config
+	// (from the agent's root version) and the SelectedFlow/Skill/Endpoint
+	// pointers dereference into it. Templates render the editable partials
+	// (workflow editor, skill CRUD, backend dropdowns).
+	//
+	// EditMode=false → post-finalize view; Architecture carries the frozen
+	// bundle blob. Templates render the read-only projection.
+	EditMode         bool
+	ParseError       string
+	Config           types.FlowMapConfig
+	SelectedFlow     *types.Flow
+	SelectedSkill    *types.Skill
+	SelectedEndpoint *types.Endpoint
+
 	Architecture     archView
-	SelectedFlowIdx  int      // -1 when none selected
-	SelectedSkillIdx int      // -1 when none selected
-	SelectedEPIdx    int      // -1 when none selected
+	SelectedFlowIdx  int // -1 when none selected (readonly view only)
+	SelectedSkillIdx int // -1 when none selected (readonly view only)
+	SelectedEPIdx    int // -1 when none selected (readonly view only)
 	HTTPBackends     []*types.ToolBackend
 	EndpointBackends map[string]string // endpoint_id → backend_id
+	UnmappedCount    int               // count of endpoints without a backend (edit mode only)
 }
 
 // archView is the decoded shape of agents.architecture for templates.
@@ -271,7 +308,9 @@ func (h *AgentDetailHandler) buildWizardFieldViews(cfg types.FlowMapConfig) []wi
 }
 
 // Architecture renders the architecture tab — sub-tab determined by the
-// URL: /architecture/{flows|skills|endpoints}[/{id}].
+// URL: /architecture/{flows|skills|endpoints}[/{id}]. Always renders from
+// the root version's flow_map_config; EditMode is derived from the root
+// version's status (INITIALIZING → editable; anything else → read-only).
 func (h *AgentDetailHandler) Architecture(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("agent_id")
 	subTab := r.PathValue("subtab")
@@ -290,9 +329,17 @@ func (h *AgentDetailHandler) Architecture(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var arch archView
-	if len(agent.Architecture) > 0 {
-		_ = json.Unmarshal(agent.Architecture, &arch)
+	switch subTab {
+	case "flows", "skills", "endpoints":
+	default:
+		http.NotFound(w, r)
+		return
+	}
+
+	_, status, err := h.store.GetRootVersion(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
 	}
 
 	data := agentDetailPageData{
@@ -300,75 +347,543 @@ func (h *AgentDetailHandler) Architecture(w http.ResponseWriter, r *http.Request
 		Agent:            agent,
 		Tab:              "architecture",
 		SubTab:           subTab,
-		Architecture:     arch,
+		EditMode:         status == "INITIALIZING",
 		SelectedFlowIdx:  -1,
 		SelectedSkillIdx: -1,
 		SelectedEPIdx:    -1,
 	}
 
+	cfg, parseErr, err := h.loadConfigForAgent(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	data.Config = cfg
+	data.ParseError = parseErr
+
 	switch subTab {
 	case "flows":
 		if selectedID != "" {
-			for i, f := range arch.Flows {
-				if f.ID == selectedID {
-					data.SelectedFlowIdx = i
+			for i := range cfg.Flows {
+				if cfg.Flows[i].ID == selectedID {
+					data.SelectedFlow = &cfg.Flows[i]
 					break
 				}
+			}
+			if data.SelectedFlow == nil {
+				http.NotFound(w, r)
+				return
 			}
 		}
 	case "skills":
 		if selectedID != "" {
-			for i, s := range arch.Skills {
-				if s.Name == selectedID {
-					data.SelectedSkillIdx = i
+			for i := range cfg.Skills {
+				if cfg.Skills[i].ID == selectedID {
+					data.SelectedSkill = &cfg.Skills[i]
 					break
 				}
+			}
+			if data.SelectedSkill == nil {
+				http.NotFound(w, r)
+				return
 			}
 		}
 	case "endpoints":
 		if selectedID != "" {
-			for i, ep := range arch.Tools {
-				if ep.ID == selectedID {
-					data.SelectedEPIdx = i
+			for i := range cfg.Endpoints {
+				if cfg.Endpoints[i].ID == selectedID {
+					data.SelectedEndpoint = &cfg.Endpoints[i]
 					break
 				}
 			}
-		}
-		// Load HTTP backends (only http_endpoint kind) for the dropdown,
-		// plus the current endpoint→backend wiring.
-		if h.backendRepo != nil {
-			all, err := h.backendRepo.List(r.Context())
-			if err != nil {
-				Error(w, err)
+			if data.SelectedEndpoint == nil {
+				http.NotFound(w, r)
 				return
 			}
-			http := []*types.ToolBackend{}
-			for _, b := range all {
-				if b.Kind == types.ToolBackendKindHTTPEndpoint {
-					http = append(http, b)
-				}
-			}
-			data.HTTPBackends = http
 		}
-		if h.agentWiringRepo != nil {
-			m, err := h.agentWiringRepo.ListEndpointBackends(r.Context(), agentID)
-			if err == nil {
-				data.EndpointBackends = m
+		if err := h.attachEndpointBackends(r.Context(), agentID, &data); err != nil {
+			Error(w, err)
+			return
+		}
+		data.UnmappedCount = 0
+		for _, ep := range cfg.Endpoints {
+			if data.EndpointBackends[ep.ID] == "" {
+				data.UnmappedCount++
 			}
 		}
-		if data.EndpointBackends == nil {
-			data.EndpointBackends = map[string]string{}
+	}
+
+	renderTemplate(w, h.tmpl, "layout", data)
+}
+
+// attachEndpointBackends populates data.HTTPBackends + data.EndpointBackends.
+// Shared between edit-mode and read-only endpoint views since the wiring
+// tables are agent-scoped in both cases.
+func (h *AgentDetailHandler) attachEndpointBackends(ctx context.Context, agentID string, data *agentDetailPageData) error {
+	if h.backendRepo != nil {
+		all, err := h.backendRepo.List(ctx)
+		if err != nil {
+			return err
 		}
-		// Stable order of skills (architecture is from a map iteration in
-		// some bundle producers).
-		sort.SliceStable(arch.Skills, func(i, j int) bool { return arch.Skills[i].Name < arch.Skills[j].Name })
-		data.Architecture = arch
-	default:
+		http := []*types.ToolBackend{}
+		for _, b := range all {
+			if b.Kind == types.ToolBackendKindHTTPEndpoint {
+				http = append(http, b)
+			}
+		}
+		data.HTTPBackends = http
+	}
+	if h.agentWiringRepo != nil {
+		m, err := h.agentWiringRepo.ListEndpointBackends(ctx, agentID)
+		if err != nil {
+			return err
+		}
+		data.EndpointBackends = m
+	}
+	if data.EndpointBackends == nil {
+		data.EndpointBackends = map[string]string{}
+	}
+	return nil
+}
+
+// requireEditable returns ErrInvalidAgentStatus if the agent's root
+// version is no longer INITIALIZING. All architecture write handlers call
+// this first so a stale tab or hand-crafted request cannot mutate a
+// post-finalize agent.
+func (h *AgentDetailHandler) requireEditable(ctx context.Context, agentID string) error {
+	_, status, err := h.store.GetRootVersion(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	if status != "INITIALIZING" {
+		return types.ErrInvalidAgentStatus
+	}
+	return nil
+}
+
+// loadConfigForAgent fetches the agent's flow_map_config + parse_error from
+// its root version. Returns ErrNotFound if the agent has no config
+// persisted (should not happen for wizard-created agents).
+func (h *AgentDetailHandler) loadConfigForAgent(ctx context.Context, agentID string) (types.FlowMapConfig, string, error) {
+	cfgBytes, parseErr, err := h.store.GetFlowMapConfigForAgent(ctx, agentID)
+	if err != nil {
+		return types.FlowMapConfig{}, "", err
+	}
+	if len(cfgBytes) == 0 {
+		return types.FlowMapConfig{}, parseErr, types.ErrNotFound
+	}
+	var cfg types.FlowMapConfig
+	if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+		return types.FlowMapConfig{}, parseErr, err
+	}
+	return cfg, parseErr, nil
+}
+
+// saveConfigForAgent marshals cfg to JSON and writes it via the store.
+func (h *AgentDetailHandler) saveConfigForAgent(ctx context.Context, agentID string, cfg types.FlowMapConfig) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return h.store.UpdateFlowMapConfigForAgent(ctx, agentID, b)
+}
+
+// FinalizeConfirm renders the confirmation page shown when the user clicks
+// "Finalize →" in the agent-detail header. Submitting the page's form POSTs
+// to /agents/{agent_id}/finalize.
+func (h *AgentDetailHandler) FinalizeConfirm(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	agent, err := h.store.GetByID(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	_, status, err := h.store.GetRootVersion(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if status != "INITIALIZING" {
+		Error(w, types.ErrInvalidAgentStatus)
+		return
+	}
+	cfg, parseErr, err := h.loadConfigForAgent(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, h.tmpl, "layout", agentDetailPageData{
+		Active:     "agents",
+		Agent:      agent,
+		Tab:        "finalize",
+		EditMode:   true,
+		Config:     cfg,
+		ParseError: parseErr,
+	})
+}
+
+// Finalize flips the root version's status INITIALIZING → DRAFT.
+// Redirects back to the architecture flows tab so the user sees the new
+// read-only mode take effect.
+func (h *AgentDetailHandler) Finalize(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	versionID, _, err := h.store.GetRootVersion(r.Context(), agentID)
+	if err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+		return
+	}
+	if err := h.store.UpdateVersionStatus(r.Context(), versionID, "INITIALIZING", "DRAFT"); err != nil {
+		Error(w, err)
+		return
+	}
+	http.Redirect(w, r, "/agents/"+agentID+"/configure/architecture/flows", http.StatusSeeOther)
+}
+
+// FlowIncluded toggles a flow's `included` boolean. Body: "included=true"
+// or "included=false". Responds with the updated flow_row HTML fragment so
+// htmx can swap the list row in place.
+func (h *AgentDetailHandler) FlowIncluded(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	included := r.FormValue("included") == "true"
+
+	agentID := r.PathValue("agent_id")
+	flowID := r.PathValue("flowId")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
+	cfg, _, err := h.loadConfigForAgent(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	idx := -1
+	for i := range cfg.Flows {
+		if cfg.Flows[i].ID == flowID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		http.NotFound(w, r)
+		return
+	}
+	cfg.Flows[idx].Included = included
+
+	if err := h.saveConfigForAgent(r.Context(), agentID, cfg); err != nil {
+		Error(w, err)
+		return
+	}
+
+	renderTemplate(w, h.tmpl, "flow_row", map[string]any{
+		"AgentID":    agentID,
+		"Flow":       cfg.Flows[idx],
+		"SelectedID": "",
+	})
+}
+
+// WorkflowUpdate accepts a JSON body { "mermaid": "...", "layout": {...} }
+// and persists it to the named flow's Workflow struct.
+func (h *AgentDetailHandler) WorkflowUpdate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mermaid string                    `json:"mermaid"`
+		Layout  map[string]types.Position `json:"layout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	agentID := r.PathValue("agent_id")
+	flowID := r.PathValue("flowId")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
+	cfg, _, err := h.loadConfigForAgent(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	idx := -1
+	for i := range cfg.Flows {
+		if cfg.Flows[i].ID == flowID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
 		http.NotFound(w, r)
 		return
 	}
 
-	renderTemplate(w, h.tmpl, "layout", data)
+	if _, err := flowmap.ParseWorkflow(body.Mermaid); err != nil {
+		Error(w, fmt.Errorf("%w: %v", types.ErrFlowMapInvalid, err))
+		return
+	}
+	skillIDs := make(map[string]struct{}, len(cfg.Skills))
+	for _, s := range cfg.Skills {
+		skillIDs[s.ID] = struct{}{}
+	}
+	if err := flowmap.ValidateWorkflowSkillRefs(body.Mermaid, skillIDs); err != nil {
+		Error(w, fmt.Errorf("%w: %v", types.ErrFlowMapInvalid, err))
+		return
+	}
+
+	cfg.Flows[idx].Workflow = types.Workflow{
+		Mermaid: body.Mermaid,
+		Layout:  body.Layout,
+	}
+
+	if err := h.saveConfigForAgent(r.Context(), agentID, cfg); err != nil {
+		Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// SkillNew renders an empty skill_new_form for creating a custom skill.
+func (h *AgentDetailHandler) SkillNew(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
+	cfg, _, err := h.loadConfigForAgent(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	blank := types.Skill{Origin: "custom"}
+	renderTemplate(w, h.tmpl, "skill_new_form", map[string]any{
+		"AgentID":   agentID,
+		"Skill":     blank,
+		"Endpoints": cfg.Endpoints,
+	})
+}
+
+// SkillCreate adds a new custom skill from form values.
+func (h *AgentDetailHandler) SkillCreate(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	agentID := r.PathValue("agent_id")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
+	cfg, _, err := h.loadConfigForAgent(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	parsed, err := parseSkillForm(r, cfg.Endpoints)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if parsed.Name == "" {
+		Error(w, types.ErrCustomSkillNameRequired)
+		return
+	}
+
+	slug := flowmap.SlugifySkillName(parsed.Name)
+	if slug == "" {
+		Error(w, types.ErrCustomSkillNameRequired)
+		return
+	}
+	taken := make(map[string]struct{}, len(cfg.Skills))
+	for _, s := range cfg.Skills {
+		taken[s.ID] = struct{}{}
+	}
+	parsed.ID = flowmap.UniqueSkillID(slug, taken)
+	parsed.Origin = "custom"
+
+	cfg.Skills = append(cfg.Skills, parsed)
+	if err := h.saveConfigForAgent(r.Context(), agentID, cfg); err != nil {
+		Error(w, err)
+		return
+	}
+
+	renderTemplate(w, h.tmpl, "skill_row", map[string]any{
+		"AgentID":    agentID,
+		"Skill":      parsed,
+		"SelectedID": "",
+	})
+}
+
+// SkillUpdate applies form values to an existing skill in place.
+func (h *AgentDetailHandler) SkillUpdate(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	agentID := r.PathValue("agent_id")
+	skillID := r.PathValue("skillId")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
+	cfg, _, err := h.loadConfigForAgent(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	idx := -1
+	for i := range cfg.Skills {
+		if cfg.Skills[i].ID == skillID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		http.NotFound(w, r)
+		return
+	}
+
+	parsed, err := parseSkillForm(r, cfg.Endpoints)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if parsed.Name == "" {
+		Error(w, types.ErrCustomSkillNameRequired)
+		return
+	}
+
+	// Preserve immutable fields: id, origin, prose_md.
+	cur := &cfg.Skills[idx]
+	cur.Name = parsed.Name
+	cur.Description = parsed.Description
+	cur.Domain = parsed.Domain
+	cur.External = parsed.External
+	cur.ExternalNote = parsed.ExternalNote
+	cur.SuggestedEndpoints = parsed.SuggestedEndpoints
+	cur.UserPhrases = parsed.UserPhrases
+
+	if err := h.saveConfigForAgent(r.Context(), agentID, cfg); err != nil {
+		Error(w, err)
+		return
+	}
+
+	renderTemplate(w, h.tmpl, "skill_detail", map[string]any{
+		"AgentID":   agentID,
+		"Skill":     cur,
+		"Endpoints": cfg.Endpoints,
+	})
+}
+
+// SkillDelete removes a custom skill. Discovered skills can't be deleted;
+// referenced custom skills can't either.
+func (h *AgentDetailHandler) SkillDelete(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	skillID := r.PathValue("skillId")
+	if err := h.requireEditable(r.Context(), agentID); err != nil {
+		Error(w, err)
+		return
+	}
+	cfg, _, err := h.loadConfigForAgent(r.Context(), agentID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	idx := -1
+	for i := range cfg.Skills {
+		if cfg.Skills[i].ID == skillID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		http.NotFound(w, r)
+		return
+	}
+	if cfg.Skills[idx].Origin != "custom" {
+		Error(w, types.ErrSkillReferenced)
+		return
+	}
+	for _, f := range cfg.Flows {
+		if flowmap.WorkflowReferencesSkill(f.Workflow.Mermaid, skillID) {
+			Error(w, types.ErrSkillReferenced)
+			return
+		}
+	}
+
+	cfg.Skills = append(cfg.Skills[:idx], cfg.Skills[idx+1:]...)
+	if err := h.saveConfigForAgent(r.Context(), agentID, cfg); err != nil {
+		Error(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// parseSkillForm reads form values shared by SkillUpdate and SkillCreate.
+// Splits user_phrases on newlines or commas. For non-external skills, reads
+// suggested_endpoints multi-select values and validates each against the
+// agent's endpoint inventory.
+func parseSkillForm(r *http.Request, endpoints []types.Endpoint) (types.Skill, error) {
+	external := r.FormValue("external") == "true"
+	note := strings.TrimSpace(r.FormValue("external_note"))
+
+	var suggested []types.SkillEndpointRef
+	if !external {
+		note = ""
+		known := make(map[string]struct{}, len(endpoints))
+		for _, e := range endpoints {
+			known[e.ID] = struct{}{}
+		}
+		for _, epID := range r.Form["suggested_endpoints"] {
+			epID = strings.TrimSpace(epID)
+			if epID == "" {
+				continue
+			}
+			if _, ok := known[epID]; !ok {
+				return types.Skill{}, fmt.Errorf("%w: endpoint %q not present in this agent's discovery snapshot",
+					types.ErrFlowMapInvalid, epID)
+			}
+			suggested = append(suggested, types.SkillEndpointRef{
+				Endpoint: epID,
+				Role:     "",
+				When:     "",
+			})
+		}
+	}
+
+	rawPhrases := r.FormValue("user_phrases")
+	var phrases []string
+	for _, line := range strings.FieldsFunc(rawPhrases, func(r rune) bool { return r == '\n' || r == ',' }) {
+		if s := strings.TrimSpace(line); s != "" {
+			phrases = append(phrases, s)
+		}
+	}
+
+	return types.Skill{
+		Name:               strings.TrimSpace(r.FormValue("name")),
+		Description:        strings.TrimSpace(r.FormValue("description")),
+		Domain:             strings.TrimSpace(r.FormValue("domain")),
+		External:           external,
+		ExternalNote:       note,
+		SuggestedEndpoints: suggested,
+		UserPhrases:        phrases,
+	}, nil
 }
 
 // DeleteConfirm renders the agent-delete confirmation modal. The modal

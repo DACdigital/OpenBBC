@@ -211,13 +211,13 @@ func (h *ChatHandler) SessionList(w http.ResponseWriter, r *http.Request) {
 // list page and returns (href, label) for the page's back link.
 //
 // Supported `from` values:
-//   - "version"          → back to the version's configurator (Architecture tab).
+//   - "version"          → back to the agent-detail Architecture tab.
 //   - "chat:<sessionID>" → back to that chat session.
 //   - anything else (or empty) → back to the agent's version listing (default).
 func resolveSessionListBack(from, versionID, agentID, agentName string) (string, string) {
 	switch {
 	case from == "version":
-		return "/agent_versions/" + versionID + "/configure/architecture/flows", "← Configurator"
+		return "/agents/" + agentID + "/configure/architecture/flows", "← Configurator"
 	case strings.HasPrefix(from, "chat:"):
 		sessionID := strings.TrimPrefix(from, "chat:")
 		if sessionID != "" {

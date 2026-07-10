@@ -124,17 +124,19 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, version, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
+	if _, _, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
 		ID:                agentID,
 		Name:              wizardInput["name"],
 		FlowMapConfig:     cfgJSON,
 		DiscoveryFilePath: discoveryKey,
-	})
-	if err != nil {
+	}); err != nil {
 		h.logger.Error("wizard: orphan discovery file after insert failure", slog.String("key", discoveryKey), slog.Any("error", err))
 		Error(w, err)
 		return
 	}
 
-	http.Redirect(w, r, "/agent_versions/"+version.ID+"/configure", http.StatusSeeOther)
+	// Land on the agent-scoped architecture editor. Pre-finalize the same
+	// URL shows the editable flow_map_config view; post-finalize it becomes
+	// read-only from agents.architecture.
+	http.Redirect(w, r, "/agents/"+agentID+"/configure/architecture/flows", http.StatusSeeOther)
 }
