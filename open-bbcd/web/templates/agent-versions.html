@@ -4,7 +4,7 @@
 <div class="page-header">
   <h1>{{.Name}}</h1>
   <div class="page-header-actions">
-    {{if .DiscoveryFilePath}}
+    {{if .HasDiscoveryZip}}
       <a href="/agents/{{.AgentID}}/discovery" class="btn-secondary">Download discovery</a>
     {{end}}
     {{if .CurrentDeployedVersionID}}
@@ -24,10 +24,10 @@
     <dt>Created</dt>
     <dd>{{.CreatedAt.Format "2006-01-02 15:04"}}</dd>
   </div>
-  {{if .DiscoveryFilePath}}
+  {{if .HasDiscoveryZip}}
   <div class="agent-meta-item">
     <dt>Discovery file</dt>
-    <dd><code>{{.DiscoveryFilePath}}</code></dd>
+    <dd><a href="/agents/{{.AgentID}}/discovery">Download</a></dd>
   </div>
   {{end}}
   <div class="agent-meta-item">

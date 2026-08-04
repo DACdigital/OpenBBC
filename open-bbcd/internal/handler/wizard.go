@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/flowmap"
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/google/uuid"
 )
@@ -23,16 +22,14 @@ type WizardAgentRepository interface {
 type WizardHandler struct {
 	agentRepo      WizardAgentRepository
 	schema         *types.WizardSchema
-	store          storage.Storage
 	maxUploadBytes int64
 	logger         *slog.Logger
 }
 
-func NewWizardHandler(agentRepo WizardAgentRepository, schema *types.WizardSchema, store storage.Storage, maxUploadBytes int64, logger *slog.Logger) *WizardHandler {
+func NewWizardHandler(agentRepo WizardAgentRepository, schema *types.WizardSchema, maxUploadBytes int64, logger *slog.Logger) *WizardHandler {
 	return &WizardHandler{
 		agentRepo:      agentRepo,
 		schema:         schema,
-		store:          store,
 		maxUploadBytes: maxUploadBytes,
 		logger:         logger,
 	}
@@ -51,10 +48,7 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	fields := h.schema.OrderedFields()
 	wizardInput := make(map[string]string, len(fields))
 	agentID := uuid.NewString()
-	var (
-		discoveryKey string
-		zipBytes     []byte
-	)
+	var zipBytes []byte
 
 	for _, of := range fields {
 		if of.Field.Type == "file" {
@@ -73,7 +67,7 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Buffer the zip so we can both store it and parse it.
+			// Buffer the zip so we can both persist it and parse it.
 			b, err := io.ReadAll(file)
 			file.Close()
 			if err != nil {
@@ -115,22 +109,13 @@ func (h *WizardHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse succeeded — store the original zip blob now so it's available
-	// for later re-rendering or debugging.
-	discoveryKey = agentID + ".zip"
-	if err := h.store.Put(r.Context(), discoveryKey, bytes.NewReader(zipBytes)); err != nil {
-		h.logger.Error("wizard: storage.Put", slog.String("key", discoveryKey), slog.Any("error", err))
-		http.Error(w, "failed to save discovery file", http.StatusInternalServerError)
-		return
-	}
-
+	// Zip + config land in Postgres in one transaction — no local-disk state.
 	if _, _, err := h.agentRepo.CreateFromWizard(r.Context(), types.CreateAgentFromWizardOpts{
-		ID:                agentID,
-		Name:              wizardInput["name"],
-		FlowMapConfig:     cfgJSON,
-		DiscoveryFilePath: discoveryKey,
+		ID:            agentID,
+		Name:          wizardInput["name"],
+		FlowMapConfig: cfgJSON,
+		DiscoveryZip:  zipBytes,
 	}); err != nil {
-		h.logger.Error("wizard: orphan discovery file after insert failure", slog.String("key", discoveryKey), slog.Any("error", err))
 		Error(w, err)
 		return
 	}

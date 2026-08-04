@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1.7
+#
+# aikdm-runner: the image cron pods use to drain PENDING evals + PENDING
+# training sessions from an open-bbcd instance.
+#
+# Unlike the aikdm/Dockerfile (which is a slim aikdm-entrypoint-only image),
+# this one packages the runtime needed by scripts/process_pending_*.sh:
+#   - bash, curl, tini
+#   - python3.12 + uv
+#   - the aikdm/ source tree (so `cd aikdm && uv run aikdm ...` works)
+#   - the scripts/ directory
+#
+# Entry point is /repo/scripts/*.sh — set command on the CronJob.
+
+FROM python:3.12-slim AS builder
+ENV PIP_ROOT_USER_ACTION=ignore
+RUN pip install --no-cache-dir uv
+WORKDIR /repo/aikdm
+COPY aikdm/pyproject.toml aikdm/uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+COPY aikdm/README.md ./
+COPY aikdm/aikdm ./aikdm
+COPY aikdm/schemas ./schemas
+RUN uv sync --frozen --no-dev
+
+FROM python:3.12-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash curl ca-certificates tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv \
+    && adduser --system --uid 65532 --group runner
+WORKDIR /repo
+COPY --from=builder --chown=runner:runner /repo/aikdm /repo/aikdm
+COPY --chown=runner:runner scripts /repo/scripts
+ENV PATH="/repo/aikdm/.venv/bin:$PATH"
+USER runner
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["bash"]

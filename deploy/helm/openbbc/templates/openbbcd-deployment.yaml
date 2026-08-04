@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openbbc.openbbcd.fullname" . }}
+  labels:
+    {{- include "openbbc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openbbcd
+spec:
+  replicas: {{ .Values.openbbcd.replicaCount }}
+  # Recreate — startup auto-applies migrations, so two replicas would race on
+  # migrate. Stateless otherwise (discovery zip lives in Postgres per
+  # migration 026); scale >1 once you add a leader-elected migration step.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "openbbc.selectorLabels" (dict "root" . "component" "openbbcd") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openbbc.selectorLabels" (dict "root" . "component" "openbbcd") | nindent 8 }}
+      {{- with .Values.openbbcd.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.openbbcd.securityContext | nindent 8 }}
+      containers:
+        - name: openbbcd
+          image: "{{ include "openbbc.openbbcd.image" . }}"
+          imagePullPolicy: {{ .Values.openbbcd.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.openbbcd.env.SERVER_PORT }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "openbbc.openbbcd.fullname" . }}
+            {{- if .Values.openbbcd.envFromSecret }}
+            - secretRef:
+                name: {{ .Values.openbbcd.envFromSecret }}
+            {{- end }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "openbbc.databaseSecretName" . }}
+                  key: {{ include "openbbc.databaseSecretKey" . }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.openbbcd.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.openbbcd.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.openbbcd.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.openbbcd.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.openbbcd.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.openbbcd.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.openbbcd.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.openbbcd.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.openbbcd.resources | nindent 12 }}
+      {{- with .Values.openbbcd.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.openbbcd.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.openbbcd.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

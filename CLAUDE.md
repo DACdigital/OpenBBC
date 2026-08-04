@@ -42,15 +42,22 @@ then run the script to drive it to DONE):
 OPENBBCD_URL=http://localhost:8080 scripts/train_from_session.sh <session_id>
 ```
 
-Batch drains for cron (both are `flock`-protected, serial, continue-on-error):
+Batch drains for cron (all are `flock`-protected, serial, continue-on-error):
 
 ```bash
+OPENBBCD_URL=http://localhost:8080 scripts/process_pending_alphas.sh
 OPENBBCD_URL=http://localhost:8080 scripts/process_pending_evals.sh
 OPENBBCD_URL=http://localhost:8080 scripts/process_pending_trainings.sh
 ```
 
+The alphas drainer picks up PENDING root versions (finalized via the wizard,
+awaiting bundle generation), delegates to `generate_alpha.sh`, and lands the
+bundle — transitioning the version PENDING → READY. It needs DATABASE_URL in
+addition to the LLM keys because `seed_bundle.py` writes directly to Postgres.
+
 Suggested cron cadence (see `docs/PRODUCTION.md`):
 ```
+*/5  * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_alphas.sh
 */10 * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_evals.sh
 */15 * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_trainings.sh
 ```
@@ -98,9 +105,9 @@ Note: `docker compose up -d` is the exception to "run from `open-bbcd/`" — it 
 - **Routing is one mux in `internal/handler/api.go`.** It mixes: static assets at `/static/`, server-rendered UI at `/agents/ui`, `/agents/new[/step/{n}]`, `/agents/{agent_id}/configure/*`, and `/agent_versions/{version_id}/configure/*`, an htmx-driven wizard submit at `POST /agents/wizard`, and a JSON REST API for evals, training sessions, datasets, MCP backends, and deployed runtime (routes under `/evals`, `/training-sessions`, `/datasets`, `/mcp`, `/deployed`), plus `GET /health`. `GET /` redirects to `/agents/ui`. Fixed paths take precedence over `/agents/{id}` — keep that in mind when adding routes.
 - **Layers:** `handler` (HTTP) → `repository` (SQL, `database/sql` + `lib/pq`) → `types` (domain + errors + wizard schema). `types/errors.go` defines sentinel errors; `handler/handler.go::Error` maps them to HTTP statuses (`ErrNotFound`→404, `ErrNameRequired`/`ErrPromptRequired`/`ErrAgentRequired`→400, else 500). Reuse this — don't return ad-hoc `http.Error` for domain errors.
 - **Agent versioning is a linked list, not a column.** `agents.parent_version_id` (migration 003) points at the previous version of the *same* agent. `AgentRepository.ListGrouped` walks each row up to its chain root and groups versions into `AgentChain`s with computed `VersionNum` (oldest = 1). The chain's display name is always the **root** agent's name — names are treated as immutable per chain. The `/agents/ui` page lists chains; `?agent=<name>` on the same route renders that chain's version history (`agentVersionsPageData`).
-- **Wizard is schema-driven.** `web/schemas/wizard-v1.yaml` declares fields with `label`, `type` (`text` / `textarea` / `file`), `required`, and `order`. The schema is parsed once at startup in `NewAPI` and passed to both `UIHandler` (renders one step per field via htmx fragment at `/agents/new/step/{n}`) and `WizardHandler` (validates + persists on submit). To add or change a step, edit the YAML — no Go code change needed unless you introduce a new field `type`. On submit (`internal/handler/wizard.go`), `WizardHandler.Submit` reads the uploaded zip, parses it via `flowmap.Parse` (a 400 on parse failure keeps the wizard form intact and doesn't touch storage), stitches the text fields into the resulting `FlowMapConfig`, writes the raw zip through `storage.Put` (rooted at `DISCOVERY_STORAGE_DIR`) under `<agent_id>.zip`, then calls `agentRepo.CreateFromWizard(FlowMapConfig, DiscoveryFilePath)` which inserts both the `agent` row and the initial `agent_version` row (the version carries the `flow_map_config` JSONB and the discovery file path). The handler then 303-redirects to `/agent_versions/{version_id}/configure`.
+- **Wizard is schema-driven.** `web/schemas/wizard-v1.yaml` declares fields with `label`, `type` (`text` / `textarea` / `file`), `required`, and `order`. The schema is parsed once at startup in `NewAPI` and passed to both `UIHandler` (renders one step per field via htmx fragment at `/agents/new/step/{n}`) and `WizardHandler` (validates + persists on submit). To add or change a step, edit the YAML — no Go code change needed unless you introduce a new field `type`. On submit (`internal/handler/wizard.go`), `WizardHandler.Submit` reads the uploaded zip, parses it via `flowmap.Parse` (a 400 on parse failure keeps the wizard form intact and doesn't touch storage), stitches the text fields into the resulting `FlowMapConfig`, then calls `agentRepo.CreateFromWizard(FlowMapConfig, DiscoveryZip)` which inserts both the `agent` row (zip lands in `agents.discovery_zip` as BYTEA per migration 026) and the initial `agent_version` row (the version carries the `flow_map_config` JSONB). The handler then 303-redirects to `/agent_versions/{version_id}/configure`. open-bbcd is stateless — Postgres is the only stateful component.
 - **htmx, no SPA.** `web/static/htmx.min.js` is the only frontend library; the wizard UX is htmx swaps over Go `html/template` partials (`web/templates/wizard/`). `renderTemplate` buffers execution to avoid partial responses on template error.
-- **Config is env-driven** (`internal/config/config.go`, `caarlos0/env` + `joho/godotenv`). `DATABASE_URL` is required; everything else has defaults. `DISCOVERY_STORAGE_DIR` (default `./data/discovery`, set to `/data/discovery` in compose) roots the local-disk blob store for uploaded zips. `.env` is auto-loaded if present.
+- **Config is env-driven** (`internal/config/config.go`, `caarlos0/env` + `joho/godotenv`). `DATABASE_URL` is required; everything else has defaults. `.env` is auto-loaded if present.
 
 ### Migration conventions
 

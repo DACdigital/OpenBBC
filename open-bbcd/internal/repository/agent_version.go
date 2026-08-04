@@ -96,7 +96,9 @@ func (r *AgentVersionRepository) Delete(ctx context.Context, versionID string) e
 func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.prompts, av.flow_map_config, av.flow_map_parse_error, av.created_at, av.updated_at,
-		       a.id::text, a.name, a.description, a.discovery_file_path, a.architecture, a.finalized_at, a.created_at
+		       a.id::text, a.name, a.description,
+		       (a.discovery_zip IS NOT NULL AND octet_length(a.discovery_zip) > 0),
+		       a.architecture, a.finalized_at, a.created_at
 		FROM agent_versions av
 		JOIN agents a ON a.id = av.agent_id
 		WHERE av.id = $1
@@ -108,11 +110,10 @@ func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID str
 	var vCfg []byte
 	var vParseErr sql.NullString
 	var aDesc sql.NullString
-	var aDisc sql.NullString
 	var arch []byte
 	var aFinal sql.NullTime
 	err := row.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &vCfg, &vParseErr, &v.CreatedAt, &v.UpdatedAt,
-		&a.ID, &a.Name, &aDesc, &aDisc, &arch, &aFinal, &a.CreatedAt)
+		&a.ID, &a.Name, &aDesc, &a.HasDiscoveryZip, &arch, &aFinal, &a.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, types.ErrNotFound
 	}
@@ -126,7 +127,6 @@ func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID str
 	v.FlowMapConfig = vCfg
 	v.FlowMapParseError = vParseErr.String
 	a.Description = aDesc.String
-	a.DiscoveryFilePath = aDisc.String
 	a.Architecture = arch
 	if aFinal.Valid {
 		t := aFinal.Time
@@ -374,6 +374,46 @@ func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, p
 		return "", err
 	}
 	return newID, nil
+}
+
+// List returns agent_versions newest-first, optionally filtered by status.
+// status="" means no filter. limit is clamped to [1, 500]; 0 or negative
+// defaults to 100. Mirrors EvalRepository.List — used by the JSON list
+// surface (GET /agent_versions.json) that the alpha-generation drainer
+// polls for PENDING rows.
+func (r *AgentVersionRepository) List(ctx context.Context, status string, limit int) ([]*types.AgentVersion, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	var rows *sql.Rows
+	var err error
+	if status == "" {
+		rows, err = r.db.QueryContext(ctx,
+			`SELECT `+agentVersionColumns+` FROM agent_versions ORDER BY created_at DESC LIMIT $1`,
+			limit,
+		)
+	} else {
+		rows, err = r.db.QueryContext(ctx,
+			`SELECT `+agentVersionColumns+` FROM agent_versions WHERE status = $1 ORDER BY created_at DESC LIMIT $2`,
+			status, limit,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*types.AgentVersion
+	for rows.Next() {
+		v, err := scanAgentVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // UpdateStatus performs a guarded status transition on a version row.

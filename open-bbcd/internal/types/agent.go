@@ -11,6 +11,7 @@ type AgentStatus string
 // Lifecycle is the same as before — it lives on AgentVersion now.
 const (
 	AgentStatusInitializing AgentStatus = "INITIALIZING"
+	AgentStatusPending      AgentStatus = "PENDING"
 	AgentStatusDraft        AgentStatus = "DRAFT"
 	AgentStatusTraining     AgentStatus = "TRAINING"
 	AgentStatusReady        AgentStatus = "READY"
@@ -24,13 +25,16 @@ const (
 // when the first version's prompts land; once set, architecture is
 // read-only forever (one-way per agent — re-discovery requires a new agent).
 type Agent struct {
-	ID                string          `json:"id"`
-	Name              string          `json:"name"`
-	Description       string          `json:"description,omitempty"`
-	DiscoveryFilePath string          `json:"discovery_file_path,omitempty"`
-	Architecture      json.RawMessage `json:"architecture,omitempty"`
-	FinalizedAt       *time.Time      `json:"finalized_at,omitempty"`
-	CreatedAt         time.Time       `json:"created_at"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	// HasDiscoveryZip is true when the agent has a non-empty discovery_zip
+	// blob stored. Computed at scan time so templates can gate the
+	// download link without hydrating the whole blob on every read.
+	HasDiscoveryZip bool            `json:"has_discovery_zip"`
+	Architecture    json.RawMessage `json:"architecture,omitempty"`
+	FinalizedAt     *time.Time      `json:"finalized_at,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
 }
 
 // AgentVersion is one version row. It carries lifecycle (status), the
@@ -75,14 +79,14 @@ type CreateAgentOpts struct {
 // (wizard path). The repository creates the agents row + the initial INITIALIZING
 // AgentVersion row in a single transaction. The fields split across the two
 // rows as follows:
-//   - ID, Name, DiscoveryFilePath  → agents row
+//   - ID, Name, DiscoveryZip  → agents row
 //   - FlowMapConfig, FlowMapParseError → first agent_versions row
 type CreateAgentFromWizardOpts struct {
 	ID                string          // optional pre-generated agent id (agents row)
 	Name              string          // agents row
 	FlowMapConfig     json.RawMessage // first agent_versions row; pre-marshaled JSONB, nil if parse failed
 	FlowMapParseError string          // first agent_versions row
-	DiscoveryFilePath string          // agents row
+	DiscoveryZip      []byte          // agents row; raw uploaded zip persisted as BYTEA. Empty = no zip.
 }
 
 func NewAgent(opts CreateAgentOpts) (*Agent, error) {

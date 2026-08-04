@@ -1,0 +1,63 @@
+{{- if .Values.aikdmRunner.cronjobs.trainings.enabled -}}
+{{- $cj := .Values.aikdmRunner.cronjobs.trainings -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "openbbc.aikdmRunner.fullname" . }}-trainings
+  labels:
+    {{- include "openbbc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: aikdm-runner
+    openbbc.io/drainer: trainings
+spec:
+  schedule: {{ $cj.schedule | quote }}
+  concurrencyPolicy: {{ $cj.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ $cj.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $cj.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ $cj.activeDeadlineSeconds }}
+      backoffLimit: {{ $cj.backoffLimit }}
+      template:
+        metadata:
+          labels:
+            {{- include "openbbc.selectorLabels" (dict "root" . "component" "aikdm-runner") | nindent 12 }}
+            openbbc.io/drainer: trainings
+          {{- with .Values.aikdmRunner.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.aikdmRunner.securityContext | nindent 12 }}
+          containers:
+            - name: drainer
+              image: "{{ include "openbbc.aikdmRunner.image" . }}"
+              imagePullPolicy: {{ .Values.aikdmRunner.image.pullPolicy }}
+              workingDir: /repo
+              command: ["/repo/scripts/process_pending_trainings.sh"]
+              env:
+                - name: OPENBBCD_URL
+                  value: {{ include "openbbc.openbbcdUrl" . | quote }}
+              envFrom:
+                - secretRef:
+                    name: {{ include "openbbc.aikdmSecretName" . }}
+              resources:
+                {{- toYaml .Values.aikdmRunner.resources | nindent 16 }}
+          {{- with .Values.aikdmRunner.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.aikdmRunner.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.aikdmRunner.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

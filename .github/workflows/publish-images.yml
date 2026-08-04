@@ -1,0 +1,87 @@
+name: Publish images
+
+# Builds & pushes the three container images to GHCR.
+#
+# Tag rules (via docker/metadata-action):
+#   pull_request → pr-<num>          (same-repo PRs only; fork PRs skip this job)
+#   push to main → main, sha-<short>
+#   git tag v*   → <semver>, <major>.<minor>, latest
+#
+# Consumed by deploy/helm/openbbc: --set openbbcd.image.repository=ghcr.io/<owner>/openbbc/open-bbcd
+# (and analogously for aikdm-runner + aikdm).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Fork PRs can't push to GHCR (GITHUB_TOKEN is read-only on fork_pull_request).
+    # Skip the job entirely rather than fail the push step with a confusing 403.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: open-bbcd
+            context: open-bbcd
+            dockerfile: open-bbcd/Dockerfile
+          - name: aikdm
+            context: aikdm
+            dockerfile: aikdm/Dockerfile
+          - name: aikdm-runner
+            context: .
+            dockerfile: Dockerfile.aikdm-runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase repository owner
+        id: repo
+        # GHCR paths must be lowercase; github.repository_owner preserves case.
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.repo.outputs.owner }}/openbbc/${{ matrix.name }}
+          tags: |
+            type=ref,event=pr,prefix=pr-
+            type=ref,event=branch,enable={{is_default_branch}}
+            type=sha,format=short,prefix=sha-,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

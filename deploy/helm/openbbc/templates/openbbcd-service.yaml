@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "openbbc.openbbcd.fullname" . }}
+  labels:
+    {{- include "openbbc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openbbcd
+spec:
+  type: {{ .Values.openbbcd.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.openbbcd.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "openbbc.selectorLabels" (dict "root" . "component" "openbbcd") | nindent 4 }}

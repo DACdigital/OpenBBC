@@ -649,8 +649,8 @@ func TestAgentDetail_Finalize_HappyPath_RedirectsToArchitecture(t *testing.T) {
 	if loc := w.Header().Get("Location"); loc != "/agents/abc/configure/architecture/flows" {
 		t.Errorf("Location = %q, want /agents/abc/configure/architecture/flows", loc)
 	}
-	if store.versionStatus != "DRAFT" {
-		t.Errorf("status = %q, want DRAFT", store.versionStatus)
+	if store.versionStatus != "PENDING" {
+		t.Errorf("status = %q, want PENDING", store.versionStatus)
 	}
 }
 
