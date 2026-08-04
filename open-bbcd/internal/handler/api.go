@@ -16,7 +16,6 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/anthropic"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/agui"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/jsonl"
@@ -67,7 +66,7 @@ func (s *configStore) Delete(ctx context.Context, versionID string) error {
 	return s.versions.Delete(ctx, versionID)
 }
 
-func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.Logger) http.Handler {
+func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	fatal := func(msg string, err error) {
 		logger.Error(msg, slog.Any("error", err))
 		os.Exit(1)
@@ -88,12 +87,12 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 		fatal("parse wizard schema", err)
 	}
 
-	uiHandler, err := NewUIHandler(agentRepo, versionRepo, store, &schema, web.Assets, logger)
+	uiHandler, err := NewUIHandler(agentRepo, versionRepo, &schema, web.Assets, logger)
 	if err != nil {
 		fatal("init UI handler", err)
 	}
 	maxUploadBytes := int64(cfg.Discovery.MaxUploadMB) << 20
-	wizardHandler := NewWizardHandler(agentRepo, &schema, store, maxUploadBytes, logger)
+	wizardHandler := NewWizardHandler(agentRepo, &schema, maxUploadBytes, logger)
 
 	agentHandler := NewAgentHandler(agentRepo)
 	resourceHandler := NewResourceHandler(resourceRepo)

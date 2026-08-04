@@ -14,7 +14,7 @@
     <dd>{{.Agent.FinalizedAt.Format "2006-01-02 15:04"}}</dd>
   </div>
   {{end}}
-  {{if .Agent.DiscoveryFilePath}}
+  {{if .Agent.HasDiscoveryZip}}
   <div class="agent-meta-item">
     <dt>Discovery file</dt>
     <dd><a href="/agents/{{.Agent.ID}}/discovery">Download</a></dd>

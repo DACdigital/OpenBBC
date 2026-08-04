@@ -24,7 +24,7 @@ docker compose up -d
 
 - Migrations apply automatically on startup (embedded `goose` — no CLI needed).
 - The container `HEALTHCHECK` uses `open-bbcd healthcheck` (no `curl` in distroless).
-- Named volumes `postgres-data` and `discovery-data` persist across `docker compose down`.
+- Named volume `postgres-data` persists across `docker compose down`. `open-bbcd` itself is stateless (discovery zip lives in Postgres per migration 026).
 - `aikdm` sits behind a compose profile: `docker compose --profile aikdm run --rm aikdm ...` — invoke it one-shot from cron or a job runner.
 
 ### 1b. Standalone containers or k8s (bring your own Postgres)
@@ -35,11 +35,10 @@ Both images are built multi-arch (`linux/amd64`, `linux/arm64`). Point `DATABASE
 DATABASE_URL=postgres://user:pass@your-pg:5432/openbbcd?sslmode=require
 SERVER_HOST=0.0.0.0
 SERVER_PORT=8080
-DISCOVERY_STORAGE_DIR=/data/discovery
 ANTHROPIC_API_KEY=…
 ```
 
-Ship the discovery-storage directory on a persistent volume — it holds uploaded discovery zips referenced by every agent version.
+No local disk is required — the discovery zip is stored as `BYTEA` on `agents.discovery_zip` (migration 026), so Postgres is the only stateful component.
 
 **Subcommands** (all in the same binary):
 - `open-bbcd` / `open-bbcd serve` — start the HTTP server (runs migrations on boot).

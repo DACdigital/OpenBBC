@@ -19,18 +19,18 @@ openbbcd:
     tag: ""        # defaults to Chart.appVersion
     pullPolicy: IfNotPresent
 
-  replicaCount: 1  # single-replica: PVC is RWO and startup auto-applies migrations
+  replicaCount: 1  # single-replica: startup auto-applies migrations; multi-replica needs a leader-elected step.
 
   service:
     type: ClusterIP
     port: 8080
 
   # SERVER_HOST + SERVER_PORT default to 0.0.0.0:8080 (see docker-compose.yml).
-  # DISCOVERY_STORAGE_DIR must match the volumeMount path below.
+  # openbbcd is stateless — the discovery zip lives in Postgres (migration
+  # 026), so there's no persistent volume required.
   env:
     SERVER_HOST: "0.0.0.0"
     SERVER_PORT: "8080"
-    DISCOVERY_STORAGE_DIR: "/data/discovery"
 
   # Extra env vars (key/value) merged into the container. For secrets prefer
   # openbbcd.envFromSecret below.
@@ -41,13 +41,6 @@ openbbcd:
   # provider keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY) if you
   # want them present in open-bbcd too.
   envFromSecret: ""
-
-  persistence:
-    enabled: true
-    size: 10Gi
-    storageClassName: ""   # "" = cluster default
-    accessMode: ReadWriteOnce
-    # existingClaim: ""    # use a pre-created PVC instead
 
   resources:
     requests:

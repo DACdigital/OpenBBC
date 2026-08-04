@@ -8,7 +8,6 @@ metadata:
 data:
   SERVER_HOST: {{ .Values.openbbcd.env.SERVER_HOST | quote }}
   SERVER_PORT: {{ .Values.openbbcd.env.SERVER_PORT | quote }}
-  DISCOVERY_STORAGE_DIR: {{ .Values.openbbcd.env.DISCOVERY_STORAGE_DIR | quote }}
   {{- range $k, $v := .Values.openbbcd.extraEnv }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}

@@ -6,9 +6,6 @@ Components:
 {{- if .Values.openbbcd.ingress.enabled }}
   - open-bbcd Ingress          via {{ range .Values.openbbcd.ingress.hosts }}{{ .host }} {{ end }}
 {{- end }}
-{{- if .Values.openbbcd.persistence.enabled }}
-  - Discovery PVC              {{ include "openbbc.openbbcd.fullname" . }}-discovery ({{ .Values.openbbcd.persistence.size }})
-{{- end }}
 {{- if .Values.postgres.enabled }}
   - Postgres StatefulSet       {{ include "openbbc.postgres.fullname" . }} ({{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }})
 {{- else if .Values.externalDatabase.url }}
@@ -17,6 +14,9 @@ Components:
   - External database          from Secret "{{ .Values.externalDatabase.existingSecret }}" key "{{ .Values.externalDatabase.existingSecretKey }}"
 {{- else }}
   - ⚠  NO DATABASE — set postgres.enabled=true OR externalDatabase.url OR externalDatabase.existingSecret
+{{- end }}
+{{- if .Values.aikdmRunner.cronjobs.alphas.enabled }}
+  - CronJob: alphas drainer    {{ include "openbbc.aikdmRunner.fullname" . }}-alphas ({{ .Values.aikdmRunner.cronjobs.alphas.schedule }})
 {{- end }}
 {{- if .Values.aikdmRunner.cronjobs.evals.enabled }}
   - CronJob: evals drainer     {{ include "openbbc.aikdmRunner.fullname" . }}-evals ({{ .Values.aikdmRunner.cronjobs.evals.schedule }})
@@ -34,6 +34,7 @@ Quick checks:
 
 Trigger a cron manually (skip the schedule):
 
+  kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ include "openbbc.aikdmRunner.fullname" . }}-alphas alphas-manual-$(date +%s)
   kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ include "openbbc.aikdmRunner.fullname" . }}-evals evals-manual-$(date +%s)
   kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ include "openbbc.aikdmRunner.fullname" . }}-trainings trainings-manual-$(date +%s)
 

@@ -7,8 +7,9 @@ metadata:
     app.kubernetes.io/component: openbbcd
 spec:
   replicas: {{ .Values.openbbcd.replicaCount }}
-  # Recreate — the PVC is RWO and startup auto-applies migrations; rolling
-  # would attach the PV twice.
+  # Recreate — startup auto-applies migrations, so two replicas would race on
+  # migrate. Stateless otherwise (discovery zip lives in Postgres per
+  # migration 026); scale >1 once you add a leader-elected migration step.
   strategy:
     type: Recreate
   selector:
@@ -68,17 +69,6 @@ spec:
             failureThreshold: {{ .Values.openbbcd.probes.readiness.failureThreshold }}
           resources:
             {{- toYaml .Values.openbbcd.resources | nindent 12 }}
-          {{- if .Values.openbbcd.persistence.enabled }}
-          volumeMounts:
-            - name: discovery
-              mountPath: {{ .Values.openbbcd.env.DISCOVERY_STORAGE_DIR }}
-          {{- end }}
-      {{- if .Values.openbbcd.persistence.enabled }}
-      volumes:
-        - name: discovery
-          persistentVolumeClaim:
-            claimName: {{ .Values.openbbcd.persistence.existingClaim | default (printf "%s-discovery" (include "openbbc.openbbcd.fullname" .)) }}
-      {{- end }}
       {{- with .Values.openbbcd.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

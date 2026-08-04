@@ -110,8 +110,7 @@ password. Pin it explicitly for reproducible dry-runs.
 |---|---|---|
 | `openbbcd.image.repository` | `ghcr.io/dacdigital/openbbc/open-bbcd` | Built by `.github/workflows/publish-images.yml`. Override for forks / local builds. |
 | `openbbcd.image.tag` | `""` | Empty → `.Chart.appVersion`. Override to `main`, `pr-<num>`, `sha-<short>`, or `X.Y.Z`. |
-| `openbbcd.replicaCount` | `1` | PVC is RWO; migrations auto-apply. Do not scale >1. |
-| `openbbcd.persistence.size` | `10Gi` | Holds uploaded discovery zips (`FlowMapConfig` sources). |
+| `openbbcd.replicaCount` | `1` | Migrations auto-apply at startup; do not scale >1 until you add a leader-elected step. openbbcd itself is stateless. |
 | `openbbcd.ingress.enabled` | `false` | Otherwise use `kubectl port-forward` to reach `/agents/ui`. |
 | `aikdmRunner.image.repository` | `ghcr.io/dacdigital/openbbc/aikdm-runner` | Built from `Dockerfile.aikdm-runner` by CI. |
 | `aikdmRunner.secrets.existingSecret` | `""` | Recommended for prod. Secret keys are envFrom-loaded verbatim by cron pods — set at least one of `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`GEMINI_API_KEY`. |
@@ -129,7 +128,7 @@ password. Pin it explicitly for reproducible dry-runs.
 
 ```bash
 helm uninstall openbbc -n openbbc
-# PVCs are NOT deleted automatically:
+# The postgres PVC (only remaining PVC in the chart) is NOT deleted automatically:
 kubectl -n openbbc delete pvc -l app.kubernetes.io/instance=openbbc
 # The postgres Secret has the `keep` policy — delete manually if you really want:
 kubectl -n openbbc delete secret openbbc-postgres
@@ -139,6 +138,6 @@ kubectl -n openbbc delete secret openbbc-postgres
 
 ## Known limitations / follow-ups
 
-- No horizontal scaling. `open-bbcd` writes to a RWO PVC and auto-applies migrations on start; running >1 replica needs a stateless refactor + external blob storage for `/data/discovery`.
+- No horizontal scaling. `open-bbcd` auto-applies migrations on start; running >1 replica needs a leader-elected migration step. The pod itself is stateless (discovery zip lives in Postgres per migration 026), so scaling is a scheduling concern, not a storage one.
 - No HPA, no PDB, no NetworkPolicy — this is a smoke-test chart, not production-hardened. Layer those on when the deployment story stabilizes.
 - Cron pods currently talk to `open-bbcd` **unauthenticated** over cluster-internal HTTP, matching the current same-trust-boundary story documented in `docs/PRODUCTION.md`. If that changes upstream, add auth to the CronJob env.
