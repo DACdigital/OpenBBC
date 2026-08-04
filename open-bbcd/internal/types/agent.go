@@ -11,6 +11,7 @@ type AgentStatus string
 // Lifecycle is the same as before — it lives on AgentVersion now.
 const (
 	AgentStatusInitializing AgentStatus = "INITIALIZING"
+	AgentStatusPending      AgentStatus = "PENDING"
 	AgentStatusDraft        AgentStatus = "DRAFT"
 	AgentStatusTraining     AgentStatus = "TRAINING"
 	AgentStatusReady        AgentStatus = "READY"

@@ -1,0 +1,54 @@
+OpenBBC installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components:
+  - open-bbcd Deployment       {{ include "openbbc.openbbcd.fullname" . }}
+  - open-bbcd Service          {{ include "openbbc.openbbcd.fullname" . }} (port {{ .Values.openbbcd.service.port }})
+{{- if .Values.openbbcd.ingress.enabled }}
+  - open-bbcd Ingress          via {{ range .Values.openbbcd.ingress.hosts }}{{ .host }} {{ end }}
+{{- end }}
+{{- if .Values.openbbcd.persistence.enabled }}
+  - Discovery PVC              {{ include "openbbc.openbbcd.fullname" . }}-discovery ({{ .Values.openbbcd.persistence.size }})
+{{- end }}
+{{- if .Values.postgres.enabled }}
+  - Postgres StatefulSet       {{ include "openbbc.postgres.fullname" . }} ({{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }})
+{{- else if .Values.externalDatabase.url }}
+  - External database          {{ .Values.externalDatabase.url }}
+{{- else if .Values.externalDatabase.existingSecret }}
+  - External database          from Secret "{{ .Values.externalDatabase.existingSecret }}" key "{{ .Values.externalDatabase.existingSecretKey }}"
+{{- else }}
+  - ⚠  NO DATABASE — set postgres.enabled=true OR externalDatabase.url OR externalDatabase.existingSecret
+{{- end }}
+{{- if .Values.aikdmRunner.cronjobs.evals.enabled }}
+  - CronJob: evals drainer     {{ include "openbbc.aikdmRunner.fullname" . }}-evals ({{ .Values.aikdmRunner.cronjobs.evals.schedule }})
+{{- end }}
+{{- if .Values.aikdmRunner.cronjobs.trainings.enabled }}
+  - CronJob: trainings drainer {{ include "openbbc.aikdmRunner.fullname" . }}-trainings ({{ .Values.aikdmRunner.cronjobs.trainings.schedule }})
+{{- end }}
+
+Quick checks:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "openbbc.openbbcd.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "openbbc.openbbcd.fullname" . }} --tail=50
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "openbbc.openbbcd.fullname" . }} 8080:{{ .Values.openbbcd.service.port }}
+  # then open http://localhost:8080/agents/ui
+
+Trigger a cron manually (skip the schedule):
+
+  kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ include "openbbc.aikdmRunner.fullname" . }}-evals evals-manual-$(date +%s)
+  kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ include "openbbc.aikdmRunner.fullname" . }}-trainings trainings-manual-$(date +%s)
+
+{{- if and .Values.postgres.enabled (not .Values.postgres.auth.password) }}
+
+⚠  postgres.auth.password was empty — the generated password is stored in
+   Secret {{ include "openbbc.postgresSecretName" . }}. To retrieve:
+
+    kubectl -n {{ .Release.Namespace }} get secret {{ include "openbbc.postgresSecretName" . }} \
+      -o jsonpath='{.data.password}' | base64 -d; echo
+{{- end }}
+{{- if and (not .Values.aikdmRunner.secrets.existingSecret) (not (or .Values.aikdmRunner.secrets.ANTHROPIC_API_KEY (or .Values.aikdmRunner.secrets.OPENAI_API_KEY .Values.aikdmRunner.secrets.GEMINI_API_KEY))) }}
+
+⚠  No LLM API keys are set for aikdm cron pods. The drainers will fail until
+   at least one of ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY is set.
+   Either set aikdmRunner.secrets.* on install, or pre-create a Secret and pass
+   its name via aikdmRunner.secrets.existingSecret.
+{{- end }}

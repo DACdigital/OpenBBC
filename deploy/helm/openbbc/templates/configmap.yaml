@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openbbc.openbbcd.fullname" . }}
+  labels:
+    {{- include "openbbc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openbbcd
+data:
+  SERVER_HOST: {{ .Values.openbbcd.env.SERVER_HOST | quote }}
+  SERVER_PORT: {{ .Values.openbbcd.env.SERVER_PORT | quote }}
+  DISCOVERY_STORAGE_DIR: {{ .Values.openbbcd.env.DISCOVERY_STORAGE_DIR | quote }}
+  {{- range $k, $v := .Values.openbbcd.extraEnv }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

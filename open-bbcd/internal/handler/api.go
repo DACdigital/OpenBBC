@@ -287,6 +287,11 @@ func NewAPI(db *sql.DB, store storage.Storage, cfg *config.Config, logger *slog.
 	mux.HandleFunc("POST /datasets/{dataset_id}/close-draft", datasetsHandler.CloseDraft)
 	mux.HandleFunc("GET /datasets/{dataset_id}/sessions/{session_id}/remove-confirm", datasetsHandler.RemoveSessionConfirm)
 
+	// Agent versions — JSON list surface (used by the alpha-generation drainer
+	// to find PENDING versions awaiting bundle generation).
+	agentVersionHandler := NewAgentVersionHandler(versionRepo)
+	mux.HandleFunc("GET /agent_versions.json", agentVersionHandler.ListJSON)
+
 	// Evals — JSON script surface.
 	mux.HandleFunc("POST /agent_versions/{version_id}/evals", evalHandler.Create)
 	mux.HandleFunc("GET /evals/{eval_id}/export.yaml", evalHandler.Export)

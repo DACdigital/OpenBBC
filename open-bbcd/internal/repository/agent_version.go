@@ -376,6 +376,46 @@ func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, p
 	return newID, nil
 }
 
+// List returns agent_versions newest-first, optionally filtered by status.
+// status="" means no filter. limit is clamped to [1, 500]; 0 or negative
+// defaults to 100. Mirrors EvalRepository.List — used by the JSON list
+// surface (GET /agent_versions.json) that the alpha-generation drainer
+// polls for PENDING rows.
+func (r *AgentVersionRepository) List(ctx context.Context, status string, limit int) ([]*types.AgentVersion, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	var rows *sql.Rows
+	var err error
+	if status == "" {
+		rows, err = r.db.QueryContext(ctx,
+			`SELECT `+agentVersionColumns+` FROM agent_versions ORDER BY created_at DESC LIMIT $1`,
+			limit,
+		)
+	} else {
+		rows, err = r.db.QueryContext(ctx,
+			`SELECT `+agentVersionColumns+` FROM agent_versions WHERE status = $1 ORDER BY created_at DESC LIMIT $2`,
+			status, limit,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*types.AgentVersion
+	for rows.Next() {
+		v, err := scanAgentVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // UpdateStatus performs a guarded status transition on a version row.
 func (r *AgentVersionRepository) UpdateStatus(ctx context.Context, versionID, expectedFrom, to string) error {
 	res, err := r.db.ExecContext(ctx,

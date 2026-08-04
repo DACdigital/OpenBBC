@@ -207,20 +207,21 @@ For the backoffice surface, prefer restricting network reachability (private VPC
 
 ## 6. Batch operations (cron)
 
-Two batch scripts drain the PENDING queues that operators / automation build up. Both are `flock`-protected, serial, continue-on-error, and safe to schedule at any frequency (a slower predecessor will make the follower exit 0 immediately).
+Three batch scripts drain the PENDING queues that operators / automation build up. All are `flock`-protected, serial, continue-on-error, and safe to schedule at any frequency (a slower predecessor will make the follower exit 0 immediately).
 
 ```
+*/5  * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_alphas.sh
 */10 * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_evals.sh
 */15 * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_trainings.sh
 ```
 
-Both scripts:
-- Enumerate PENDING work via the JSON endpoints (`GET /evals.json?status=PENDING`, `GET /training-sessions.json?status=PENDING`).
-- Delegate each item to the existing one-shot script (`run_eval.sh` / `train_from_session.sh --yes`).
+All three scripts:
+- Enumerate PENDING work via the JSON endpoints (`GET /agent_versions.json?status=PENDING`, `GET /evals.json?status=PENDING`, `GET /training-sessions.json?status=PENDING`).
+- Delegate each item to the existing one-shot script (`generate_alpha.sh` / `run_eval.sh` / `train_from_session.sh --yes`).
 - Log to stdout with ISO-8601 timestamps; cron / journald owns retention.
 - Exit `0` on all-success or empty queue, `1` if any per-item failed, `2` on infra/config error.
 
-Trainings are minutes-per-epoch, so the 15-minute cadence above is a starting recommendation; more aggressive scheduling just makes follower invocations no-op faster.
+Alpha generation is one aikdm LLM call (~30–60s) per version, so `*/5` is fine; the alpha drainer needs `DATABASE_URL` in addition to LLM keys because `seed_bundle.py` writes directly to Postgres. Trainings are minutes-per-epoch, so the 15-minute cadence above is a starting recommendation; more aggressive scheduling just makes follower invocations no-op faster.
 
 ---
 

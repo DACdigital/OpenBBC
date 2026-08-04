@@ -202,3 +202,57 @@ func TestAgentVersionRepository_PartialUniqueIndex_RejectsDoubleDeploy(t *testin
 		t.Fatalf("expected partial unique index violation")
 	}
 }
+
+func TestAgentVersionRepository_List_FiltersByStatus(t *testing.T) {
+	agentRepo, versionRepo, db := withRepo(t)
+	ctx := context.Background()
+
+	// Seed 2 PENDING + 1 INITIALIZING + 1 READY across 4 separate agents.
+	// Each CreateFromWizard produces an INITIALIZING root; UPDATE promotes
+	// those that should be PENDING or READY.
+	seed := func(name, status string) string {
+		_, v, err := agentRepo.CreateFromWizard(ctx, types.CreateAgentFromWizardOpts{Name: name})
+		if err != nil {
+			t.Fatalf("CreateFromWizard(%s): %v", name, err)
+		}
+		if status != "INITIALIZING" {
+			if _, err := db.ExecContext(ctx,
+				`UPDATE agent_versions SET status=$2 WHERE id=$1`, v.ID, status,
+			); err != nil {
+				t.Fatalf("promote(%s → %s): %v", name, status, err)
+			}
+		}
+		return v.ID
+	}
+	p1 := seed("list-p1-"+uuid.NewString()[:8], "PENDING")
+	p2 := seed("list-p2-"+uuid.NewString()[:8], "PENDING")
+	_ = seed("list-i-"+uuid.NewString()[:8], "INITIALIZING")
+	_ = seed("list-r-"+uuid.NewString()[:8], "READY")
+
+	got, err := versionRepo.List(ctx, "PENDING", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len=%d want 2 (%v)", len(got), got)
+	}
+	ids := map[string]bool{got[0].ID: true, got[1].ID: true}
+	if !ids[p1] || !ids[p2] {
+		t.Errorf("returned ids=%v, want %s + %s", ids, p1, p2)
+	}
+	for _, v := range got {
+		if v.Status != "PENDING" {
+			t.Errorf("row status=%q, want PENDING", v.Status)
+		}
+	}
+
+	// No filter: at least the 4 rows seeded above are returned. Order is
+	// created_at DESC.
+	all, err := versionRepo.List(ctx, "", 0)
+	if err != nil {
+		t.Fatalf("List no-filter: %v", err)
+	}
+	if len(all) < 4 {
+		t.Fatalf("no-filter len=%d, want >= 4", len(all))
+	}
+}

@@ -42,15 +42,22 @@ then run the script to drive it to DONE):
 OPENBBCD_URL=http://localhost:8080 scripts/train_from_session.sh <session_id>
 ```
 
-Batch drains for cron (both are `flock`-protected, serial, continue-on-error):
+Batch drains for cron (all are `flock`-protected, serial, continue-on-error):
 
 ```bash
+OPENBBCD_URL=http://localhost:8080 scripts/process_pending_alphas.sh
 OPENBBCD_URL=http://localhost:8080 scripts/process_pending_evals.sh
 OPENBBCD_URL=http://localhost:8080 scripts/process_pending_trainings.sh
 ```
 
+The alphas drainer picks up PENDING root versions (finalized via the wizard,
+awaiting bundle generation), delegates to `generate_alpha.sh`, and lands the
+bundle — transitioning the version PENDING → READY. It needs DATABASE_URL in
+addition to the LLM keys because `seed_bundle.py` writes directly to Postgres.
+
 Suggested cron cadence (see `docs/PRODUCTION.md`):
 ```
+*/5  * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_alphas.sh
 */10 * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_evals.sh
 */15 * * * *  OPENBBCD_URL=http://localhost:8080 /path/to/repo/scripts/process_pending_trainings.sh
 ```

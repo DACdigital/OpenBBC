@@ -1,0 +1,17 @@
+{{- if and .Values.openbbcd.persistence.enabled (not .Values.openbbcd.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openbbc.openbbcd.fullname" . }}-discovery
+  labels:
+    {{- include "openbbc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openbbcd
+spec:
+  accessModes: [ {{ .Values.openbbcd.persistence.accessMode | quote }} ]
+  {{- if .Values.openbbcd.persistence.storageClassName }}
+  storageClassName: {{ .Values.openbbcd.persistence.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.openbbcd.persistence.size | quote }}
+{{- end }}

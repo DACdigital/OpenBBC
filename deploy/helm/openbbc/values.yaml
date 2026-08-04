@@ -1,0 +1,208 @@
+# Default values for the openbbc chart.
+# See deploy/helm/openbbc/README.md for a walkthrough.
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+#  - name: my-registry
+
+# ---------------------------------------------------------------------------
+# open-bbcd: the Go service (backoffice UI + REST API + deployed agent runtime)
+# ---------------------------------------------------------------------------
+openbbcd:
+  image:
+    # Built + pushed by .github/workflows/publish-images.yml on every PR and
+    # merge to main. Override the tag to pin: `sha-<short>`, `pr-<num>`,
+    # `main`, or a `vX.Y.Z` release tag.
+    repository: ghcr.io/dacdigital/openbbc/open-bbcd
+    tag: ""        # defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+
+  replicaCount: 1  # single-replica: PVC is RWO and startup auto-applies migrations
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  # SERVER_HOST + SERVER_PORT default to 0.0.0.0:8080 (see docker-compose.yml).
+  # DISCOVERY_STORAGE_DIR must match the volumeMount path below.
+  env:
+    SERVER_HOST: "0.0.0.0"
+    SERVER_PORT: "8080"
+    DISCOVERY_STORAGE_DIR: "/data/discovery"
+
+  # Extra env vars (key/value) merged into the container. For secrets prefer
+  # openbbcd.envFromSecret below.
+  extraEnv: {}
+  #  LOG_LEVEL: debug
+
+  # If set, the entire named Secret is mounted via envFrom. Use this for LLM
+  # provider keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY) if you
+  # want them present in open-bbcd too.
+  envFromSecret: ""
+
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: ""   # "" = cluster default
+    accessMode: ReadWriteOnce
+    # existingClaim: ""    # use a pre-created PVC instead
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+  probes:
+    liveness:
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    #  cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - host: openbbc.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+    #  - hosts:
+    #      - openbbc.example.com
+    #    secretName: openbbc-tls
+
+# ---------------------------------------------------------------------------
+# aikdm-runner: the image used by CronJobs to drain PENDING work.
+# ---------------------------------------------------------------------------
+aikdmRunner:
+  image:
+    repository: ghcr.io/dacdigital/openbbc/aikdm-runner
+    tag: ""        # defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+
+  # These are the LLM provider API keys aikdm needs. Prefer existingSecret in
+  # production; the inline map is for quick smoke tests.
+  secrets:
+    existingSecret: ""   # if set, uses this Secret's keys as envFrom on cron pods
+    ANTHROPIC_API_KEY: ""
+    OPENAI_API_KEY: ""
+    GEMINI_API_KEY: ""
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+  # If your open-bbcd Service is not the one this chart deploys (e.g. running
+  # elsewhere in the cluster), point cron pods at that URL instead.
+  openbbcdUrlOverride: ""
+
+  cronjobs:
+    alphas:
+      enabled: true
+      schedule: "*/5 * * * *"
+      # Alpha generation is one aikdm LLM call (~30–60s) + a small DB write
+      # per version. Cap the whole batch at 15 min so a stuck run dies.
+      activeDeadlineSeconds: 900
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      backoffLimit: 0
+    evals:
+      enabled: true
+      schedule: "*/10 * * * *"
+      # Evals are seconds to a minute each; cap the whole batch at 10 min.
+      activeDeadlineSeconds: 600
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      backoffLimit: 0
+    trainings:
+      enabled: true
+      schedule: "*/15 * * * *"
+      # Trainings are minutes-per-epoch; cap at 1h so a stuck job dies eventually.
+      activeDeadlineSeconds: 3600
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      backoffLimit: 0
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+
+# ---------------------------------------------------------------------------
+# Database: either the in-cluster StatefulSet below, OR provide an external URL.
+# Exactly one of postgres.enabled=true or externalDatabase.url is required.
+# ---------------------------------------------------------------------------
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "15"
+    pullPolicy: IfNotPresent
+  auth:
+    database: openbbcd
+    username: openbbcd
+    # If empty, a random password is generated on first install and stored in
+    # the "<release>-postgres" Secret. Set explicitly for reproducibility.
+    password: ""
+    existingSecret: ""            # opt-in: use pre-existing Secret with key "password"
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClassName: ""
+    accessMode: ReadWriteOnce
+  service:
+    port: 5432
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  # Rendered into the container as-is; sslmode=disable by default because we
+  # stay inside the cluster network.
+  sslmode: disable
+
+externalDatabase:
+  # If postgres.enabled is false, provide this. Format:
+  #   postgres://user:pass@host:5432/dbname?sslmode=require
+  url: ""
+  # OR: reference an existing Secret containing DATABASE_URL under a key.
+  existingSecret: ""
+  existingSecretKey: "DATABASE_URL"
