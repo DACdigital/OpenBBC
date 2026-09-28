@@ -10,10 +10,16 @@ OpenBBC is a monorepo for a platform that turns a backend + a frontend repo into
 |---|---|---|
 | `aikdm/` | Python CLI: generates structured prompt bundles from FlowMapConfig YAML. Out-of-process, open-bbcd-unaware. | Python |
 | `bbc-discovery/` | Claude Code plugin marketplace. Currently ships one plugin (`flow-map-compiler`) — a discovery skill that compiles a frontend repo into a `.flow-map/` agent wiki. Pure markdown + plugin manifests, no build step. | Markdown / SKILL.md |
-| `docs/` | `DESIGN.md` and `ARCHITECTURE.md` — read these for the big picture (discovery → generate → feedback → evaluate → deploy). |
+| `docs/` | Operator recipes only (`PRODUCTION.md`). Architecture / design / conventions live in the docs repo (link below). |
+| `deploy/helm/openbbc/` | Helm chart shipping `open-bbcd` + Postgres StatefulSet + three drainer CronJobs. |
 | `open-bbcd/` | Core service: backoffice UI + REST API + deployed agent runtime (AG-UI over `/deployed/*`, MCP tool calls into your backend). The only buildable program in the repo. | Go |
 
 The root `.claude-plugin/marketplace.json` references the `bbc-discovery` plugin via a `git-subdir` source pointing back into this monorepo.
+
+**Docs repo.** Architecture, design, NFRs, conventions, and the domain model live at
+**[DACdigital/openbbc-docs](https://github.com/DACdigital/openbbc-docs)**. Consult that
+repo before you assume anything about system shape — this monorepo owns code and operator
+recipes only. Coding-agent rules that cross both repos live in [`AGENTS.md`](./AGENTS.md).
 
 ## aikdm (Python CLI)
 
