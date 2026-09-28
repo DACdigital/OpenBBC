@@ -129,6 +129,11 @@ type agentDetailPageData struct {
 	// EditMode=false → post-finalize view; Architecture carries the frozen
 	// bundle blob. Templates render the read-only projection.
 	EditMode         bool
+	// RootStatus is the root version's lifecycle state. Surfaced to the
+	// layout so the header can render a status badge for transitional
+	// states (notably PENDING, where the alpha-generation drainer is
+	// working). Empty string is treated as "unknown" by the template.
+	RootStatus       string
 	ParseError       string
 	Config           types.FlowMapConfig
 	SelectedFlow     *types.Flow
@@ -209,11 +214,17 @@ func (h *AgentDetailHandler) Versions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	_, rootStatus, err := h.store.GetRootVersion(r.Context(), agentID)
+	if err != nil && !errors.Is(err, types.ErrNotFound) {
+		Error(w, err)
+		return
+	}
 	data := agentDetailPageData{
-		Active:   "agents",
-		Agent:    agent,
-		Tab:      "versions",
-		Versions: versions,
+		Active:     "agents",
+		Agent:      agent,
+		Tab:        "versions",
+		Versions:   versions,
+		RootStatus: rootStatus,
 	}
 	for _, v := range versions {
 		if v.Version != nil && v.Version.Status == "DEPLOYED" {
@@ -270,11 +281,17 @@ func (h *AgentDetailHandler) Inputs(w http.ResponseWriter, r *http.Request) {
 	if len(cfgBytes) > 0 {
 		_ = json.Unmarshal(cfgBytes, &cfg)
 	}
+	_, rootStatus, err := h.store.GetRootVersion(r.Context(), agentID)
+	if err != nil && !errors.Is(err, types.ErrNotFound) {
+		Error(w, err)
+		return
+	}
 	data := agentDetailPageData{
 		Active:       "agents",
 		Agent:        agent,
 		Tab:          "inputs",
 		WizardFields: h.buildWizardFieldViews(cfg),
+		RootStatus:   rootStatus,
 	}
 	renderTemplate(w, h.tmpl, "layout", data)
 }
@@ -348,6 +365,7 @@ func (h *AgentDetailHandler) Architecture(w http.ResponseWriter, r *http.Request
 		Tab:              "architecture",
 		SubTab:           subTab,
 		EditMode:         status == "INITIALIZING",
+		RootStatus:       status,
 		SelectedFlowIdx:  -1,
 		SelectedSkillIdx: -1,
 		SelectedEPIdx:    -1,
@@ -521,12 +539,16 @@ func (h *AgentDetailHandler) FinalizeConfirm(w http.ResponseWriter, r *http.Requ
 		Agent:      agent,
 		Tab:        "finalize",
 		EditMode:   true,
+		RootStatus: status,
 		Config:     cfg,
 		ParseError: parseErr,
 	})
 }
 
-// Finalize flips the root version's status INITIALIZING → DRAFT.
+// Finalize flips the root version's status INITIALIZING → PENDING. The
+// PENDING row is picked up by the aikdm alpha-generation drainer
+// (scripts/process_pending_alphas.sh), which runs `aikdm generate-agent`
+// and lands the bundle via seed_bundle.py, flipping the version to READY.
 // Redirects back to the architecture flows tab so the user sees the new
 // read-only mode take effect.
 func (h *AgentDetailHandler) Finalize(w http.ResponseWriter, r *http.Request) {
@@ -540,7 +562,7 @@ func (h *AgentDetailHandler) Finalize(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	if err := h.store.UpdateVersionStatus(r.Context(), versionID, "INITIALIZING", "DRAFT"); err != nil {
+	if err := h.store.UpdateVersionStatus(r.Context(), versionID, "INITIALIZING", "PENDING"); err != nil {
 		Error(w, err)
 		return
 	}

@@ -16,7 +16,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"gopkg.in/yaml.v3"
 )
@@ -49,37 +48,15 @@ func (m *mockWizardRepo) CreateFromWizard(ctx context.Context, opts types.Create
 	return m.createFromWizardFn(ctx, opts)
 }
 
-type mockStorage struct {
-	putFn func(ctx context.Context, key string, r io.Reader) error
-	calls int
-}
-
-func (m *mockStorage) Put(ctx context.Context, key string, r io.Reader) error {
-	m.calls++
-	if m.putFn != nil {
-		return m.putFn(ctx, key, r)
-	}
-	_, _ = io.Copy(io.Discard, r)
-	return nil
-}
-
-// Open is unused in wizard tests; included so mockStorage satisfies the
-// storage.Storage interface.
-func (m *mockStorage) Open(ctx context.Context, key string) (io.ReadCloser, error) {
-	return nil, errors.New("mockStorage.Open: not implemented")
-}
-
-var _ storage.Storage = (*mockStorage)(nil)
-
 const testMaxUploadBytes = 50 << 20 // 50 MB
 
-func newTestWizardHandler(t *testing.T, repo WizardAgentRepository, store storage.Storage) *WizardHandler {
+func newTestWizardHandler(t *testing.T, repo WizardAgentRepository) *WizardHandler {
 	t.Helper()
 	var schema types.WizardSchema
 	if err := yaml.Unmarshal([]byte(wizardTestSchema), &schema); err != nil {
 		t.Fatalf("parse schema: %v", err)
 	}
-	return NewWizardHandler(repo, &schema, store, testMaxUploadBytes, testLogger())
+	return NewWizardHandler(repo, &schema, testMaxUploadBytes, testLogger())
 }
 
 // buildWizardForm returns a multipart body with the given text fields and an
@@ -115,14 +92,8 @@ func TestWizardHandler_Submit_InvalidZipReturns400(t *testing.T) {
 			return nil, nil, nil
 		},
 	}
-	store := &mockStorage{
-		putFn: func(ctx context.Context, key string, r io.Reader) error {
-			t.Fatal("store.Put should not be called when the discovery archive fails to parse")
-			return nil
-		},
-	}
 
-	h := newTestWizardHandler(t, repo, store)
+	h := newTestWizardHandler(t, repo)
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "My Agent", "scope": "Handle support queries"},
 		"flow-map.zip", []byte("zip body"),
@@ -148,9 +119,8 @@ func TestWizardHandler_Submit_MissingFile(t *testing.T) {
 			return nil, nil, nil
 		},
 	}
-	store := &mockStorage{}
 
-	h := newTestWizardHandler(t, repo, store)
+	h := newTestWizardHandler(t, repo)
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "X", "scope": "Y"},
 		"", nil,
@@ -164,9 +134,6 @@ func TestWizardHandler_Submit_MissingFile(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
-	if store.calls != 0 {
-		t.Errorf("store.Put called %d times, want 0", store.calls)
-	}
 }
 
 func TestWizardHandler_Submit_BadExtension(t *testing.T) {
@@ -176,9 +143,8 @@ func TestWizardHandler_Submit_BadExtension(t *testing.T) {
 			return nil, nil, nil
 		},
 	}
-	store := &mockStorage{}
 
-	h := newTestWizardHandler(t, repo, store)
+	h := newTestWizardHandler(t, repo)
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "X", "scope": "Y"},
 		"flow-map.tar", []byte("not a zip"),
@@ -192,9 +158,6 @@ func TestWizardHandler_Submit_BadExtension(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
-	if store.calls != 0 {
-		t.Errorf("store.Put called %d times, want 0", store.calls)
-	}
 }
 
 func TestWizardHandler_Submit_TooLarge(t *testing.T) {
@@ -204,14 +167,13 @@ func TestWizardHandler_Submit_TooLarge(t *testing.T) {
 			return nil, nil, nil
 		},
 	}
-	store := &mockStorage{}
 
 	var schema types.WizardSchema
 	if err := yaml.Unmarshal([]byte(wizardTestSchema), &schema); err != nil {
 		t.Fatalf("parse schema: %v", err)
 	}
 	// Tiny cap so a small body trips the pre-check.
-	h := NewWizardHandler(repo, &schema, store, 16, testLogger())
+	h := NewWizardHandler(repo, &schema, 16, testLogger())
 
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "X", "scope": "Y"},
@@ -226,42 +188,9 @@ func TestWizardHandler_Submit_TooLarge(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
-	if store.calls != 0 {
-		t.Errorf("store.Put called %d times, want 0", store.calls)
-	}
 }
 
-func TestWizardHandler_Submit_StorageFails(t *testing.T) {
-	repo := &mockWizardRepo{
-		createFromWizardFn: func(ctx context.Context, opts types.CreateAgentFromWizardOpts) (*types.Agent, *types.AgentVersion, error) {
-			t.Fatal("repo should not be called when storage fails")
-			return nil, nil, nil
-		},
-	}
-	store := &mockStorage{
-		putFn: func(ctx context.Context, key string, r io.Reader) error {
-			_, _ = io.Copy(io.Discard, r)
-			return errors.New("disk full")
-		},
-	}
-
-	h := newTestWizardHandler(t, repo, store)
-	body, ct := buildWizardForm(t,
-		map[string]string{"name": "X", "scope": "Y"},
-		"flow-map.zip", buildSampleFlowMapZip(t),
-	)
-	req := httptest.NewRequest(http.MethodPost, "/agents/wizard", body)
-	req.Header.Set("Content-Type", ct)
-	req.ContentLength = int64(body.Len())
-	w := httptest.NewRecorder()
-	h.Submit(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500", w.Code)
-	}
-}
-
-func TestWizardHandler_Submit_RepoFailLogsOrphan(t *testing.T) {
+func TestWizardHandler_Submit_RepoFailReturns500(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
@@ -270,20 +199,12 @@ func TestWizardHandler_Submit_RepoFailLogsOrphan(t *testing.T) {
 			return nil, nil, errors.New("db down")
 		},
 	}
-	var savedKey string
-	store := &mockStorage{
-		putFn: func(ctx context.Context, key string, r io.Reader) error {
-			savedKey = key
-			_, _ = io.Copy(io.Discard, r)
-			return nil
-		},
-	}
 
 	var schema types.WizardSchema
 	if err := yaml.Unmarshal([]byte(wizardTestSchema), &schema); err != nil {
 		t.Fatalf("parse schema: %v", err)
 	}
-	h := NewWizardHandler(repo, &schema, store, testMaxUploadBytes, logger)
+	h := NewWizardHandler(repo, &schema, testMaxUploadBytes, logger)
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "X", "scope": "Y"},
 		"flow-map.zip", buildSampleFlowMapZip(t),
@@ -296,10 +217,6 @@ func TestWizardHandler_Submit_RepoFailLogsOrphan(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", w.Code)
-	}
-	logged := logBuf.String()
-	if !strings.Contains(logged, "orphan") || !strings.Contains(logged, savedKey) {
-		t.Errorf("expected orphan log mentioning %q, got:\n%s", savedKey, logged)
 	}
 }
 
@@ -310,9 +227,8 @@ func TestWizardHandler_Submit_MissingName(t *testing.T) {
 			return nil, nil, nil
 		},
 	}
-	store := &mockStorage{}
 
-	h := newTestWizardHandler(t, repo, store)
+	h := newTestWizardHandler(t, repo)
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "", "scope": "Y"},
 		"flow-map.zip", []byte("zip body"),
@@ -325,9 +241,6 @@ func TestWizardHandler_Submit_MissingName(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
-	}
-	if store.calls != 0 {
-		t.Errorf("store.Put called %d times, want 0", store.calls)
 	}
 }
 
@@ -344,8 +257,7 @@ func TestWizardHandler_Submit_RealZip_HappyPath(t *testing.T) {
 				nil
 		},
 	}
-	store := &mockStorage{}
-	h := newTestWizardHandler(t, repo, store)
+	h := newTestWizardHandler(t, repo)
 
 	body, ct := buildWizardForm(t,
 		map[string]string{"name": "agent", "scope": "support"},
@@ -365,6 +277,9 @@ func TestWizardHandler_Submit_RealZip_HappyPath(t *testing.T) {
 	}
 	if len(capturedOpts.FlowMapConfig) == 0 {
 		t.Fatal("FlowMapConfig should be populated")
+	}
+	if !bytes.Equal(capturedOpts.DiscoveryZip, zipBytes) {
+		t.Errorf("DiscoveryZip mismatch (got %d bytes, want %d)", len(capturedOpts.DiscoveryZip), len(zipBytes))
 	}
 	// Sanity: decode it.
 	var cfg types.FlowMapConfig

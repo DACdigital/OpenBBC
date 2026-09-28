@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"html/template"
-	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -13,19 +12,21 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
 type GroupedAgentRepository interface {
 	ListGrouped(ctx context.Context) ([]types.AgentGroup, error)
 	GetByID(ctx context.Context, id string) (*types.Agent, error)
+	// GetDiscoveryZip returns the raw discovery zip bytes stored on the
+	// agent. Returns ErrNotFound if the agent does not exist OR has no zip
+	// stored — the handler folds both into the same 404 by design.
+	GetDiscoveryZip(ctx context.Context, id string) ([]byte, error)
 }
 
 type UIHandler struct {
 	agentRepo         GroupedAgentRepository
 	versions          DeployVersionRepository
-	storage           storage.Storage
 	schema            *types.WizardSchema
 	logger            *slog.Logger
 	agentsTmpl        *template.Template
@@ -53,7 +54,7 @@ func statusClass(status string) string {
 	}
 }
 
-func NewUIHandler(agentRepo GroupedAgentRepository, versions DeployVersionRepository, store storage.Storage, schema *types.WizardSchema, webFS fs.FS, logger *slog.Logger) (*UIHandler, error) {
+func NewUIHandler(agentRepo GroupedAgentRepository, versions DeployVersionRepository, schema *types.WizardSchema, webFS fs.FS, logger *slog.Logger) (*UIHandler, error) {
 	funcs := template.FuncMap{
 		"statusClass": statusClass,
 		"add":         func(a, b int) int { return a + b },
@@ -108,7 +109,6 @@ func NewUIHandler(agentRepo GroupedAgentRepository, versions DeployVersionReposi
 	return &UIHandler{
 		agentRepo:         agentRepo,
 		versions:          versions,
-		storage:           store,
 		schema:            schema,
 		logger:            logger,
 		agentsTmpl:        agentsTmpl,
@@ -202,7 +202,7 @@ type agentVersionsPageData struct {
 	AgentID                   string
 	Name                      string
 	Description               string
-	DiscoveryFilePath         string
+	HasDiscoveryZip           bool
 	CreatedAt                 time.Time
 	CurrentDeployedVersionNum int    // 0 if no version is deployed
 	CurrentDeployedVersionID  string // empty if none
@@ -329,45 +329,25 @@ func (u *UIHandler) UndeployConfirm(w http.ResponseWriter, r *http.Request) {
 	}{agentID, cur})
 }
 
-// DiscoveryDownload streams the discovery zip referenced by the agent's
-// discovery_file_path. Returns 404 when the agent does not exist, has no
-// discovery_file_path, or the underlying blob is missing.
+// DiscoveryDownload streams the discovery zip stored on the agents row.
+// Returns 404 when the agent does not exist or has no zip stored. The zip
+// lives in Postgres as of migration 026 — no local-disk state.
 func (h *UIHandler) DiscoveryDownload(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("agent_id")
-	agent, err := h.agentRepo.GetByID(r.Context(), agentID)
+	zipBytes, err := h.agentRepo.GetDiscoveryZip(r.Context(), agentID)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			http.NotFound(w, r)
 			return
 		}
-		Error(w, err)
-		return
-	}
-	if agent.DiscoveryFilePath == "" {
-		http.NotFound(w, r)
-		return
-	}
-	rc, err := h.storage.Open(r.Context(), agent.DiscoveryFilePath)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			h.logger.Info("discovery file missing on disk",
-				slog.String("agent_id", agentID),
-				slog.String("key", agent.DiscoveryFilePath),
-			)
-			http.NotFound(w, r)
-			return
-		}
-		h.logger.Error("storage.Open", slog.Any("error", err))
+		h.logger.Error("GetDiscoveryZip", slog.Any("error", err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	defer rc.Close()
 	w.Header().Set("Content-Type", "application/zip")
-	// Filename derives from agent.ID (always a UUID) rather than the
-	// discovery_file_path column — keeps header-injection-safe even if the
-	// path column ever holds untrusted strings.
-	w.Header().Set("Content-Disposition", `attachment; filename="`+agent.ID+`.zip"`)
-	if _, err := io.Copy(w, rc); err != nil {
-		h.logger.Warn("discovery download copy failed", slog.Any("error", err))
+	// Filename derives from agent id (always a UUID) — header-injection-safe.
+	w.Header().Set("Content-Disposition", `attachment; filename="`+agentID+`.zip"`)
+	if _, err := w.Write(zipBytes); err != nil {
+		h.logger.Warn("discovery download write failed", slog.Any("error", err))
 	}
 }

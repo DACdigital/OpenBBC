@@ -19,19 +19,17 @@ func NewAgentRepository(db *sql.DB) *AgentRepository {
 	return &AgentRepository{db: db}
 }
 
-const agentColumns = `id, name, description, discovery_file_path, architecture, finalized_at, created_at`
+const agentColumns = `id, name, description, (discovery_zip IS NOT NULL AND octet_length(discovery_zip) > 0) AS has_discovery_zip, architecture, finalized_at, created_at`
 
 func scanAgent(s scanner) (*types.Agent, error) {
 	a := &types.Agent{}
 	var description sql.NullString
-	var disc sql.NullString
 	var arch []byte
 	var finalized sql.NullTime
-	if err := s.Scan(&a.ID, &a.Name, &description, &disc, &arch, &finalized, &a.CreatedAt); err != nil {
+	if err := s.Scan(&a.ID, &a.Name, &description, &a.HasDiscoveryZip, &arch, &finalized, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	a.Description = description.String
-	a.DiscoveryFilePath = disc.String
 	a.Architecture = arch
 	if finalized.Valid {
 		t := finalized.Time
@@ -78,11 +76,15 @@ func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.Creat
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var discoveryZip interface{}
+	if len(opts.DiscoveryZip) > 0 {
+		discoveryZip = opts.DiscoveryZip
+	}
 	agentRow := tx.QueryRowContext(ctx, `
-		INSERT INTO agents (id, name, discovery_file_path)
-		VALUES ($1::uuid, $2, NULLIF($3, ''))
+		INSERT INTO agents (id, name, discovery_zip)
+		VALUES ($1::uuid, $2, $3)
 		RETURNING `+agentColumns,
-		agentID, opts.Name, opts.DiscoveryFilePath,
+		agentID, opts.Name, discoveryZip,
 	)
 	agent, err := scanAgent(agentRow)
 	if err != nil {
@@ -103,6 +105,27 @@ func (r *AgentRepository) CreateFromWizard(ctx context.Context, opts types.Creat
 		return nil, nil, err
 	}
 	return agent, version, nil
+}
+
+// GetDiscoveryZip returns the raw discovery zip bytes for the agent. Returns
+// ErrNotFound if the agent does not exist OR has no zip stored. Kept out of
+// scanAgent / agentColumns so list/get reads don't hydrate the whole blob.
+func (r *AgentRepository) GetDiscoveryZip(ctx context.Context, agentID string) ([]byte, error) {
+	var zip []byte
+	err := r.db.QueryRowContext(ctx,
+		`SELECT discovery_zip FROM agents WHERE id = $1::uuid`,
+		agentID,
+	).Scan(&zip)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, types.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(zip) == 0 {
+		return nil, types.ErrNotFound
+	}
+	return zip, nil
 }
 
 // Delete removes an agent and (via FK CASCADE) every version, chat session,

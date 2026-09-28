@@ -1,0 +1,13 @@
+# Version control
+.git/
+.gitignore
+
+# Editor / OS
+.DS_Store
+*.swp
+*.tmp
+*.bak
+*.orig
+
+# Chart-local
+*.tgz

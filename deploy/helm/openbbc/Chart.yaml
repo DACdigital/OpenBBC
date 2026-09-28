@@ -1,0 +1,17 @@
+apiVersion: v2
+name: openbbc
+description: OpenBBC — backoffice UI + REST API + deployed agent runtime, with aikdm cron drainers
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+keywords:
+  - openbbc
+  - open-bbcd
+  - aikdm
+  - agent
+home: https://github.com/DACdigital/OpenBBC
+sources:
+  - https://github.com/DACdigital/OpenBBC
+maintainers:
+  - name: DAC Digital

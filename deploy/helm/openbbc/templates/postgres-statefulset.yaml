@@ -1,0 +1,115 @@
+{{- if .Values.postgres.enabled -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "openbbc.postgresSecretName" . }}
+  labels:
+    {{- include "openbbc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  {{- if not .Values.postgres.auth.existingSecret }}
+  annotations:
+    # Preserve the generated password across upgrades — the helper's `lookup`
+    # re-reads this Secret. If you delete it, next install rotates the password
+    # and open-bbcd will fail to connect until you also refresh the DB.
+    "helm.sh/resource-policy": keep
+  {{- end }}
+type: Opaque
+{{- if not .Values.postgres.auth.existingSecret }}
+stringData:
+  password: {{ include "openbbc.postgresPassword" . | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "openbbc.postgres.fullname" . }}
+  labels:
+    {{- include "openbbc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: {{ .Values.postgres.service.port }}
+      targetPort: postgres
+  selector:
+    {{- include "openbbc.selectorLabels" (dict "root" . "component" "postgres") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "openbbc.postgres.fullname" . }}
+  labels:
+    {{- include "openbbc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: {{ include "openbbc.postgres.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "openbbc.selectorLabels" (dict "root" . "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openbbc.selectorLabels" (dict "root" . "component" "postgres") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.auth.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "openbbc.postgresSecretName" . }}
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgres.auth.username | quote }}, "-d", {{ .Values.postgres.auth.database | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgres.auth.username | quote }}, "-d", {{ .Values.postgres.auth.database | quote }}]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  {{- if .Values.postgres.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ {{ .Values.postgres.persistence.accessMode | quote }} ]
+        {{- if .Values.postgres.persistence.storageClassName }}
+        storageClassName: {{ .Values.postgres.persistence.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.persistence.size | quote }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+{{- end }}

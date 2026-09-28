@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"context"
 	"html/template"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/storage"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"gopkg.in/yaml.v3"
 )
@@ -82,8 +80,9 @@ func TestUIHandler_WizardStep_AccumulatesValues(t *testing.T) {
 }
 
 type mockGroupedAgentRepo struct {
-	listGrouped func(ctx context.Context) ([]types.AgentGroup, error)
-	getByID     func(ctx context.Context, id string) (*types.Agent, error)
+	listGrouped     func(ctx context.Context) ([]types.AgentGroup, error)
+	getByID         func(ctx context.Context, id string) (*types.Agent, error)
+	getDiscoveryZip func(ctx context.Context, id string) ([]byte, error)
 }
 
 func (m *mockGroupedAgentRepo) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
@@ -92,6 +91,12 @@ func (m *mockGroupedAgentRepo) ListGrouped(ctx context.Context) ([]types.AgentGr
 func (m *mockGroupedAgentRepo) GetByID(ctx context.Context, id string) (*types.Agent, error) {
 	return m.getByID(ctx, id)
 }
+func (m *mockGroupedAgentRepo) GetDiscoveryZip(ctx context.Context, id string) ([]byte, error) {
+	if m.getDiscoveryZip == nil {
+		return nil, types.ErrNotFound
+	}
+	return m.getDiscoveryZip(ctx, id)
+}
 
 func mustParseAgentVersionsTmpl(t *testing.T) *template.Template {
 	t.Helper()
@@ -99,7 +104,7 @@ func mustParseAgentVersionsTmpl(t *testing.T) *template.Template {
 	const content = `{{define "content"}}` +
 		`<h1>{{.Name}}</h1>` +
 		`<p class="desc">{{.Description}}</p>` +
-		`<p class="path">{{.DiscoveryFilePath}}</p>` +
+		`<p class="path">{{if .HasDiscoveryZip}}has{{end}}</p>` +
 		`<p class="deployed">{{if .CurrentDeployedVersionNum}}v{{.CurrentDeployedVersionNum}}{{else}}—{{end}}</p>` +
 		`{{range .Versions}}<div class="v">v{{.VersionNum}}:{{.Version.Status}}</div>{{end}}` +
 		`{{end}}`
@@ -133,29 +138,18 @@ func TestUIHandler_AgentDetail_RedirectsToTabbedPage(t *testing.T) {
 	}
 }
 
-type stubStorage struct {
-	openFn func(ctx context.Context, key string) (io.ReadCloser, error)
-}
-
-func (s *stubStorage) Put(ctx context.Context, key string, r io.Reader) error { return nil }
-func (s *stubStorage) Open(ctx context.Context, key string) (io.ReadCloser, error) {
-	return s.openFn(ctx, key)
-}
-
 func TestUIHandler_DiscoveryDownload_StreamsZip(t *testing.T) {
 	agentID := "33333333-3333-3333-3333-333333333333"
-	agent := &types.Agent{ID: agentID, Name: "X", DiscoveryFilePath: "abc.zip"}
 	body := []byte("PK\x03\x04 fake zip")
 	h := &UIHandler{
 		agentRepo: &mockGroupedAgentRepo{
-			getByID: func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
+			getDiscoveryZip: func(ctx context.Context, id string) ([]byte, error) {
+				if id != agentID {
+					t.Fatalf("GetDiscoveryZip called with %q, want %q", id, agentID)
+				}
+				return body, nil
+			},
 		},
-		storage: &stubStorage{openFn: func(ctx context.Context, key string) (io.ReadCloser, error) {
-			if key != "abc.zip" {
-				t.Fatalf("Open called with %q, want abc.zip", key)
-			}
-			return io.NopCloser(bytes.NewReader(body)), nil
-		}},
 		logger: slog.Default(),
 	}
 	req := httptest.NewRequest(http.MethodGet, "/agents/"+agentID+"/discovery", nil)
@@ -180,7 +174,7 @@ func TestUIHandler_DiscoveryDownload_StreamsZip(t *testing.T) {
 func TestUIHandler_DiscoveryDownload_AgentNotFound(t *testing.T) {
 	h := &UIHandler{
 		agentRepo: &mockGroupedAgentRepo{
-			getByID: func(ctx context.Context, id string) (*types.Agent, error) {
+			getDiscoveryZip: func(ctx context.Context, id string) ([]byte, error) {
 				return nil, types.ErrNotFound
 			},
 		},
@@ -195,34 +189,16 @@ func TestUIHandler_DiscoveryDownload_AgentNotFound(t *testing.T) {
 	}
 }
 
-func TestUIHandler_DiscoveryDownload_NoDiscoveryFile(t *testing.T) {
+// GetDiscoveryZip returns ErrNotFound for agents that exist but have no zip
+// stored — the handler folds both cases into the same 404.
+func TestUIHandler_DiscoveryDownload_NoDiscoveryZip(t *testing.T) {
 	agentID := "44444444-4444-4444-4444-444444444444"
-	agent := &types.Agent{ID: agentID, Name: "X", DiscoveryFilePath: ""}
 	h := &UIHandler{
 		agentRepo: &mockGroupedAgentRepo{
-			getByID: func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
+			getDiscoveryZip: func(ctx context.Context, id string) ([]byte, error) {
+				return nil, types.ErrNotFound
+			},
 		},
-		logger: slog.Default(),
-	}
-	req := httptest.NewRequest(http.MethodGet, "/agents/"+agentID+"/discovery", nil)
-	req.SetPathValue("agent_id", agentID)
-	w := httptest.NewRecorder()
-	h.DiscoveryDownload(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want 404", w.Code)
-	}
-}
-
-func TestUIHandler_DiscoveryDownload_FileMissingOnDisk(t *testing.T) {
-	agentID := "55555555-5555-5555-5555-555555555555"
-	agent := &types.Agent{ID: agentID, Name: "X", DiscoveryFilePath: "abc.zip"}
-	h := &UIHandler{
-		agentRepo: &mockGroupedAgentRepo{
-			getByID: func(ctx context.Context, id string) (*types.Agent, error) { return agent, nil },
-		},
-		storage: &stubStorage{openFn: func(ctx context.Context, key string) (io.ReadCloser, error) {
-			return nil, storage.ErrNotFound
-		}},
 		logger: slog.Default(),
 	}
 	req := httptest.NewRequest(http.MethodGet, "/agents/"+agentID+"/discovery", nil)

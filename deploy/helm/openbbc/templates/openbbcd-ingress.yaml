@@ -1,0 +1,36 @@
+{{- if .Values.openbbcd.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "openbbc.openbbcd.fullname" . }}
+  labels:
+    {{- include "openbbc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openbbcd
+  {{- with .Values.openbbcd.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.openbbcd.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.openbbcd.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.openbbcd.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "openbbc.openbbcd.fullname" $ }}
+                port:
+                  number: {{ $.Values.openbbcd.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

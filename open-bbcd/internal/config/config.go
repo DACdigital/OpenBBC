@@ -23,8 +23,7 @@ type DatabaseConfig struct {
 }
 
 type DiscoveryConfig struct {
-	StorageDir  string `env:"DISCOVERY_STORAGE_DIR" envDefault:"./data/discovery"`
-	MaxUploadMB int    `env:"DISCOVERY_MAX_UPLOAD_MB" envDefault:"50"`
+	MaxUploadMB int `env:"DISCOVERY_MAX_UPLOAD_MB" envDefault:"50"`
 }
 
 // AnthropicConfig holds runtime LLM provider settings. APIKey is NOT marked
