@@ -5,9 +5,13 @@ package anthropic
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"iter"
+	"net/http"
+	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -247,6 +251,25 @@ func convertMessage(m llm.Message) sdk.MessageParam {
 			// Result is json.RawMessage; NewToolResultBlock expects a string
 			// for the content parameter. Convert to string to pass through as-is.
 			blocks = append(blocks, sdk.NewToolResultBlock(x.ToolUseID, string(x.Result), x.IsError))
+		case llm.InlineMediaBlock:
+			// Materialised by RenderArtifactAsBlock upstream: raw bytes plus
+			// MIME, ready for base64 inlining into the provider-native block
+			// shape. Anthropic accepts image/* and application/pdf natively;
+			// callers only produce InlineMediaBlock for these MIMEs (see
+			// RenderArtifactAsBlock).
+			b64 := base64.StdEncoding.EncodeToString(x.Data)
+			switch {
+			case strings.HasPrefix(x.MIME, "image/"):
+				blocks = append(blocks, sdk.NewImageBlockBase64(x.MIME, b64))
+			case x.MIME == "application/pdf":
+				blocks = append(blocks, sdk.NewDocumentBlock(sdk.Base64PDFSourceParam{
+					Data:      b64,
+					MediaType: "application/pdf",
+				}))
+			}
+			// Other MIMEs never reach this switch because RenderArtifactAsBlock
+			// returns ErrUnsupported for them and the caller substitutes a
+			// TextBlock via llm.TextSurrogate before convertMessage sees it.
 		}
 	}
 
@@ -276,3 +299,76 @@ func parseInputSchema(raw json.RawMessage) sdk.ToolInputSchemaParam {
 	}
 	return param.Override[sdk.ToolInputSchemaParam](raw)
 }
+
+// supportedImageMIMEs is the set Anthropic accepts as native image blocks.
+// GIF and WEBP are accepted per the current Anthropic Vision docs; kept as
+// a map for O(1) lookup during rendering.
+var supportedImageMIMEs = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
+// RenderArtifactAsBlock implements llm.MultimodalRenderer for the Anthropic
+// provider. Materialises the artifact_ref's bytes into an InlineMediaBlock
+// when the MIME is natively supported (image/{png,jpeg,gif,webp} or
+// application/pdf); returns llm.ErrUnsupported otherwise. Callers get the
+// text-surrogate fallback via llm.TextSurrogate in that case.
+//
+// Byte fetch strategy: when the store's PreferredDelivery is DeliveryBytes
+// (integer 0), use Get() directly. When SignedURL (integer 1), fetch the
+// signed URL over HTTPS. Anthropic requires the bytes inlined as base64 —
+// there is no image-by-URL block for user messages in the Messages API
+// (only Anthropic's Files API supports that, out of phase 1 scope).
+func (l *LLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBlock, fetch llm.ArtifactFetcher) (llm.Block, error) {
+	if !supportedImageMIMEs[ref.MIME] && ref.MIME != "application/pdf" {
+		return nil, llm.ErrUnsupported
+	}
+
+	bytes, err := fetchBytes(ctx, ref.URI, fetch)
+	if err != nil {
+		return nil, err
+	}
+	return llm.InlineMediaBlock{MIME: ref.MIME, Data: bytes}, nil
+}
+
+// fetchBytes reads the blob addressed by uri through the fetcher's
+// preferred delivery mode. Bytes-mode gets a direct Get; SignedURL-mode
+// gets a Sign + follow. TTL for the Sign path is deliberately short (60s):
+// the caller uses the URL immediately and the bytes are then inlined into
+// the LLM request, so a long TTL adds no value and risks the URL leaking.
+func fetchBytes(ctx context.Context, uri string, fetch llm.ArtifactFetcher) ([]byte, error) {
+	// PreferredDelivery uses the integer contract on llm.ArtifactFetcher:
+	// 0 = DeliveryBytes, 1 = DeliverySignedURL. Kept as int rather than a
+	// re-declared enum to avoid cross-package coupling.
+	if fetch.PreferredDelivery() == 0 { // DeliveryBytes
+		rc, err := fetch.Get(ctx, uri)
+		if err != nil {
+			return nil, err
+		}
+		defer rc.Close()
+		return io.ReadAll(rc)
+	}
+	// SignedURL branch.
+	url, err := fetch.Sign(ctx, uri, 60*1_000_000_000) // 60s in nanoseconds — matches time.Duration semantics
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, errors.New("anthropic: signed URL fetch returned status " + resp.Status)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+// Compile-time check that *LLM satisfies llm.MultimodalRenderer.
+var _ llm.MultimodalRenderer = (*LLM)(nil)

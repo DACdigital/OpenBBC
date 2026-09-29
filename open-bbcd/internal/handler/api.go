@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/anthropic"
@@ -99,6 +101,36 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 
 	chatRepo := repository.NewChatRepository(db)
 	llmClient := anthropic.New(cfg.Anthropic)
+
+	// Artifact-store registry: env-driven, feature-gated. When the deployer
+	// hasn't configured any ARTIFACT_STORE_<ID>_* group, Load returns
+	// ErrRegistryDisabled; we treat that as "chat-artifacts feature off"
+	// (route wiring later checks artifactHandler != nil), NOT as a boot
+	// failure. Any other Load error IS a boot failure — the deployer
+	// misconfigured something and would silently ship without artifacts.
+	var artifactHandler *ArtifactHandler
+	{
+		reg, regErr := artifacts.Load(cfg.Artifacts)
+		switch {
+		case regErr == nil:
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if probeErr := reg.ProbeAll(ctx); probeErr != nil {
+				cancel()
+				fatal("probe artifact store", probeErr)
+			}
+			cancel()
+			artifactHandler = NewArtifactHandler(chatRepo, chatRepo, reg, cfg.Artifacts.MaxUploadMB, logger)
+			logger.Info("artifacts: registry hydrated",
+				slog.Int("stores", len(reg.IDs())),
+				slog.String("default", reg.DefaultID()),
+			)
+		case errors.Is(regErr, artifacts.ErrRegistryDisabled):
+			logger.Info("artifacts: registry disabled (no ARTIFACT_STORE_* env groups configured)")
+		default:
+			fatal("load artifact store registry", regErr)
+		}
+	}
+
 	backendRepo := repository.NewToolBackendRepository(db)
 	wiringRepo := repository.NewVersionWiringRepository(db)
 	agentWiringRepo := repository.NewAgentWiringRepository(db)
@@ -140,6 +172,14 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	}
 
 	orchestrator := chat.NewOrchestrator(versionRepo, chatRepo, llmClient, builder, logger)
+	// Wire artifact-support hooks when the registry is enabled — resolver
+	// for user-uploaded refs rendered before each LLM call, uploader for
+	// MCP tool result normalisation.
+	if artifactHandler != nil {
+		orchestrator.
+			WithArtifacts(artifactResolverFrom(artifactHandler.registry)).
+			WithArtifactUploader(artifactUploader{registry: artifactHandler.registry})
+	}
 	orchestrator.Model = cfg.Anthropic.DefaultModel
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
@@ -275,6 +315,15 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/assign-dataset", chatHandler.AssignDatasetModal)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/assign-dataset", chatHandler.AssignDataset)
 	mux.HandleFunc("DELETE /agent_versions/{version_id}/chat/{session_id}/assign-dataset", chatHandler.UnassignDataset)
+
+	// Chat artifacts — feature-gated on the artifact-store registry being
+	// enabled (at least one ARTIFACT_STORE_<ID>_* group configured). When
+	// the registry is disabled (default), these routes are not registered
+	// and requests to them return the mux's default 404.
+	if artifactHandler != nil {
+		mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/artifacts", artifactHandler.HandleUpload)
+		mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/artifacts/{path...}", artifactHandler.HandleRetrieve)
+	}
 
 	// Datasets — /datasets/new MUST precede /datasets/{dataset_id} so the
 	// literal path wins over the wildcard in Go's ServeMux.
