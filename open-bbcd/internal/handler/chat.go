@@ -500,9 +500,28 @@ func (h *ChatHandler) UpdateSessionTitle(w http.ResponseWriter, r *http.Request)
 type TurnRequest struct {
 	Input []TurnInputBlock `json:"input"`
 }
+
+// TurnInputBlock is the wire shape for one content block in the turn
+// input body. Discriminated on Type. Currently supported:
+//   - "text" — Text field is used, other fields ignored.
+//   - "artifact_ref" — StoreID/URI (required) plus MIME/SizeBytes/
+//     Sha256/Filename metadata (optional; the retrieval path resolves
+//     mime from the DB refs at chat-render time, so wire-side metadata
+//     is only used to seed the artifact_ref block that's persisted).
+//
+// Unrecognised Type values are silently dropped at the switch below —
+// backwards- and forwards-compatible with client-side additions.
 type TurnInputBlock struct {
 	Type string `json:"type"`
+	// Text-block fields
 	Text string `json:"text,omitempty"`
+	// Artifact-ref-block fields; only populated when Type == "artifact_ref"
+	StoreID   string `json:"store_id,omitempty"`
+	URI       string `json:"uri,omitempty"`
+	MIME      string `json:"mime,omitempty"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Sha256    string `json:"sha256,omitempty"`
+	Filename  string `json:"filename,omitempty"`
 }
 
 // Turn runs one chat turn end-to-end. Decodes the JSON request body,
@@ -537,12 +556,34 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build typed input blocks. v1 supports only text inputs; other
-	// block types are silently ignored (no error).
+	// Build typed input blocks. Recognised types: "text" and
+	// "artifact_ref". Other types are silently ignored (no error) so
+	// clients running ahead of the server on schema versions degrade
+	// gracefully.
 	input := make([]llm.Block, 0, len(req.Input))
 	for _, b := range req.Input {
-		if b.Type == "text" && b.Text != "" {
-			input = append(input, llm.TextBlock{Text: b.Text})
+		switch b.Type {
+		case "text":
+			if b.Text != "" {
+				input = append(input, llm.TextBlock{Text: b.Text})
+			}
+		case "artifact_ref":
+			// Minimum required fields are StoreID + URI. MIME + size
+			// + sha256 are recommended (populated by the upload
+			// endpoint's response body); Filename is optional display
+			// metadata. Refs missing StoreID or URI are dropped
+			// silently — a malformed client body must not stop the
+			// entire turn from being processed.
+			if b.StoreID != "" && b.URI != "" {
+				input = append(input, llm.ArtifactRefBlock{
+					StoreID:   b.StoreID,
+					URI:       b.URI,
+					MIME:      b.MIME,
+					SizeBytes: b.SizeBytes,
+					Sha256:    b.Sha256,
+					Filename:  b.Filename,
+				})
+			}
 		}
 	}
 

@@ -120,6 +120,18 @@ The mux mixes server-rendered htmx UI with a JSON REST API. Fixed paths take pre
 | GET | `/deployed/{agent_id}/sessions` | List sessions. |
 | POST | `/deployed/{agent_id}/sessions/{id}/turn` | Send a turn to a session (plus related session subroutes). |
 
+### Chat artifacts (feature-gated on `ARTIFACT_STORE_*` env config)
+
+Only registered when at least one `ARTIFACT_STORE_<ID>_*` env-var group is
+configured at boot. See `.env.example` for the full env-var reference and
+the `docs/superpowers/specs/2026-09-28-chat-artifacts-design.md` spec in
+the docs repo for the wire contract.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/agent_versions/{v}/chat/{s}/artifacts` | Upload one file (multipart with `file` field). Returns `{store_id, uri, mime, size_bytes, sha256, filename}` — client embeds into the outgoing turn body as an `artifact_ref` content block. Errors: 400 malformed / 404 session / 409 locked / 413 oversize / 502 upstream store. |
+| GET | `/agent_versions/{v}/chat/{s}/artifacts/{path}` | Session-scoped retrieval. `{path}` is `<store_id>/<uri>` joined with `/`. Delivery mode is adapter-dependent — `s3_compatible` returns `302` with a presigned URL; other adapters may proxy bytes with `Content-Type` set from the stored ref's mime. |
+
 ### Health
 
 | Method | Path | Description |

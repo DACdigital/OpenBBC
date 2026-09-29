@@ -47,5 +47,43 @@ services:
       - ./aikdm-work:/work
     working_dir: /work
 
+  # Local S3-compatible store for the chat-artifacts feature. Kept
+  # behind a profile so `docker compose up -d` (the default) does not
+  # provision it — only integration tests / operators exercising the
+  # artifact routes need it.
+  #
+  # Bootstrap (one-time, after `docker compose --profile artifacts up`):
+  #   docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
+  #   docker compose exec minio mc mb local/openbbc-artifacts
+  #
+  # Env vars for open-bbcd to talk to this instance (add to .env):
+  #   ARTIFACT_STORE_MAIN_KIND=s3_compatible
+  #   ARTIFACT_STORE_MAIN_ENDPOINT=http://minio:9000
+  #   ARTIFACT_STORE_MAIN_BUCKET=openbbc-artifacts
+  #   ARTIFACT_STORE_MAIN_REGION=us-east-1
+  #   ARTIFACT_STORE_MAIN_ACCESS_KEY=minioadmin
+  #   ARTIFACT_STORE_MAIN_SECRET_KEY=minioadmin
+  #   ARTIFACT_STORE_MAIN_PATH_STYLE=true
+  #   ARTIFACT_STORE_DEFAULT=MAIN
+  #   ARTIFACT_MAX_UPLOAD_MB=25
+  minio:
+    image: minio/minio:latest
+    profiles: [artifacts, dev-full]
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   postgres-data:
+  minio-data:

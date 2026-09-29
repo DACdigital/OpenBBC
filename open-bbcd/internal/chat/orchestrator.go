@@ -46,17 +46,57 @@ type ChatStore interface {
 	NextSeq(ctx context.Context, sessionID string) (int, error)
 }
 
+// ArtifactFetcherResolver resolves an llm.ArtifactFetcher for a given
+// store_id. Returning nil means "no such store" — the orchestrator
+// substitutes the text surrogate in place of the artifact_ref block.
+//
+// Optional dependency; when the resolver is nil (chat-artifacts feature
+// disabled), every ArtifactRefBlock in flight is dropped to the text
+// surrogate. This keeps the code path compiled even in artifact-free
+// deployments.
+type ArtifactFetcherResolver func(storeID string) llm.ArtifactFetcher
+
 type Orchestrator struct {
-	agents  AgentReader
-	chats   ChatStore
-	llm     llm.LLM
-	builder ToolHandlerBuilder
-	logger  *slog.Logger
+	agents            AgentReader
+	chats             ChatStore
+	llm               llm.LLM
+	builder           ToolHandlerBuilder
+	logger            *slog.Logger
+	artifactResolver  ArtifactFetcherResolver
+	artifactUploader  ArtifactUploader
 
 	// Tunables; set by NewAPI from config. Sensible defaults baked in.
 	Model         string
 	MaxTokens     int
 	MaxToolRounds int
+}
+
+// WithArtifacts wires a resolver for looking up ArtifactFetchers by
+// store_id. Returns the same orchestrator so callers can chain the call
+// during construction. Passing nil clears any previously-set resolver.
+func (o *Orchestrator) WithArtifacts(resolver ArtifactFetcherResolver) *Orchestrator {
+	o.artifactResolver = resolver
+	return o
+}
+
+// ArtifactUploader is the narrow slice of artifacts machinery the
+// orchestrator needs to normalise MCP tool results carrying inline
+// bytes (ImageContent / EmbeddedResource with `blob` or `text`) into
+// ArtifactRefBlocks. Bytes flow to the default store; ref metadata
+// (store_id, uri, sha256, mime, size) comes back for embedding on the
+// tool-role message.
+//
+// Callers pass a nil uploader to keep tool-result normalisation off
+// entirely (matches the artifact-feature-disabled default).
+type ArtifactUploader interface {
+	Upload(ctx context.Context, mime string, bytes []byte) (llm.ArtifactRefBlock, error)
+}
+
+// WithArtifactUploader wires the uploader used to normalise MCP tool
+// result payloads. Returns the same orchestrator for chaining.
+func (o *Orchestrator) WithArtifactUploader(uploader ArtifactUploader) *Orchestrator {
+	o.artifactUploader = uploader
+	return o
 }
 
 func NewOrchestrator(agents AgentReader, chats ChatStore, l llm.LLM, b ToolHandlerBuilder, logger *slog.Logger) *Orchestrator {
@@ -179,6 +219,12 @@ func (o *Orchestrator) Turn(
 	// 7. Tool-use loop. Each iteration drives one LLM round, persists the
 	// assistant message, optionally executes tools + persists the tool message,
 	// then loops. Exits when stop_reason != "tool_use" or MaxToolRounds is hit.
+	//
+	// Before every LLM call we render any llm.ArtifactRefBlock content
+	// blocks into provider-native inline media (via MultimodalRenderer)
+	// or the text surrogate fallback. Refs on newly-appended tool-role
+	// messages (see Phase 5 normalisation) are re-rendered by the same
+	// call at the top of the loop.
 	req := llm.Request{
 		Model:     o.Model,
 		System:    promptsHead.MainPrompt,
@@ -198,6 +244,16 @@ func (o *Orchestrator) Turn(
 			inputBuffers        = map[string]*bytes.Buffer{}
 			stopReasonThisRound string
 		)
+
+		// Render any artifact_ref blocks in the current message list
+		// into provider-native inline media (or text surrogates). Runs
+		// each iteration to also cover tool-role messages appended in
+		// the previous round.
+		rendered, renderErr := renderArtifactsForLLM(ctx, req.Messages, o.llm, o.artifactResolver)
+		if renderErr != nil {
+			return failTurn("artifact_render", "render_artifacts", renderErr)
+		}
+		req.Messages = rendered
 
 		assistantMsgID := uuid.NewString()
 		_ = sink.Send(ctx, transport.TextStartEvent{MessageID: assistantMsgID})
@@ -308,6 +364,35 @@ func (o *Orchestrator) Turn(
 				Result:     res.Output,
 				IsError:    res.IsError,
 			})
+			// Normalise MCP-shaped inline media in the tool result into
+			// ArtifactRefBlocks that precede the ToolResultBlock. The
+			// LLM sees both the artifact refs (rendered via
+			// MultimodalRenderer on the next round) and the original
+			// tool_result content. Uploader is optional — when nil,
+			// tool results pass through unchanged (feature-off path).
+			if o.artifactUploader != nil && !res.IsError {
+				refs, remaining, nerr := normaliseToolResult(ctx, res.Output, o.artifactUploader)
+				if nerr == nil {
+					for _, r := range refs {
+						toolBlocks = append(toolBlocks, r)
+					}
+					// If normalisation consumed EVERYTHING, still emit
+					// an empty tool_result so the model knows the tool
+					// returned (otherwise the assistant expects a
+					// tool_result matching this ID). Preserve the raw
+					// output shape when nothing was normalised.
+					if len(remaining) > 0 {
+						res.Output = remaining
+					}
+				} else {
+					// Log but continue with the raw output — a normaliser
+					// error must not fail the whole turn.
+					o.logger.Warn("tool result normalisation failed; passing through raw output",
+						slog.String("tool", tu.Name),
+						slog.Any("err", nerr),
+					)
+				}
+			}
 			toolBlocks = append(toolBlocks, llm.ToolResultBlock{
 				ToolUseID: tu.ID,
 				Result:    res.Output,
