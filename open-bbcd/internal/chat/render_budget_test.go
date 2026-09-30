@@ -323,22 +323,24 @@ func TestRenderCache_MissingBlobFetchedOnceAcrossPasses(t *testing.T) {
 	}
 }
 
-func TestRenderCache_ActualBytesOverBudgetFetchedOnceAcrossPasses(t *testing.T) {
+func TestRenderCache_ActualBytesOverBudgetReevaluatedEachPass(t *testing.T) {
 	// SizeBytes claims 1 byte, but the blob is 600 bytes (800 base64) > 500.
+	// Overflow depends on position, not the blob, so it is not cached: the
+	// ref is re-fetched each pass and stays a surrogate without failing.
 	f := &countingFetcher{data: make([]byte, 600)}
 	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/liar", 1)}}}
 	out := renderTwice(t, budgetLLM{budget: llm.RenderBudget{MaxBytes: 500}}, f, msgs)
 	if isInline(out[0].Content[0]) {
 		t.Fatal("over-budget ref must stay a surrogate")
 	}
-	if f.gets != 1 {
-		t.Fatalf("gets = %d, want 1 across two passes", f.gets)
+	if f.gets != 2 {
+		t.Fatalf("gets = %d, want 2 (over-budget is re-evaluated each pass)", f.gets)
 	}
 }
 
-func TestRenderCache_ActualBytesOverBudgetStillExhaustsInLaterPass(t *testing.T) {
-	// The liar (newer) exhausted the budget in pass 1, so the older ref
-	// was never fetched; pass 2 must reach the same decision.
+func TestRenderCache_ActualBytesOverBudgetExhaustsEachPass(t *testing.T) {
+	// The liar (newer) exhausts the budget in each pass, so the older ref
+	// is never fetched.
 	f := &countingFetcher{data: make([]byte, 600)}
 	msgs := []llm.Message{
 		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/older", 1)}},
@@ -348,8 +350,53 @@ func TestRenderCache_ActualBytesOverBudgetStillExhaustsInLaterPass(t *testing.T)
 	if isInline(out[0].Content[0]) || isInline(out[1].Content[0]) {
 		t.Fatalf("both refs must be surrogates; got %#v", out)
 	}
+	if f.gets != 2 {
+		t.Fatalf("gets = %d, want 2 (only the liar, once per pass)", f.gets)
+	}
+}
+
+func TestRenderCache_DuplicateBlobOverflowDoesNotSuppressPlacedCopy(t *testing.T) {
+	// The same content-addressed blob appears twice; each copy costs 800
+	// base64 bytes against MaxBytes 1000. The newest copy fits, the older
+	// overflows — in every pass.
+	f := &countingFetcher{data: make([]byte, 600)}
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/dup", 1)}},
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/dup", 1)}},
+	}
+	out := renderTwice(t, budgetLLM{budget: llm.RenderBudget{MaxBytes: 1000}}, f, msgs)
+	if !isInline(out[1].Content[0]) {
+		t.Fatal("pass 2: newest copy fits and must stay inline")
+	}
+	if isInline(out[0].Content[0]) {
+		t.Fatal("pass 2: older copy overflows and must be a surrogate")
+	}
 	if f.gets != 1 {
-		t.Fatalf("gets = %d, want 1 (only the liar, once)", f.gets)
+		t.Fatalf("gets = %d, want 1 (the placed copy is served from the cache)", f.gets)
+	}
+}
+
+func TestRenderCache_OverflowedKeyFitsWhenItReappearsNewest(t *testing.T) {
+	// Pass 1: K is the older ref and overflows behind X. Pass 2: K is also
+	// the newest ref, where it fits a fresh budget (800 <= 1000).
+	f := &countingFetcher{data: make([]byte, 600)}
+	l := budgetLLM{budget: llm.RenderBudget{MaxBytes: 1000}}
+	resolver := func(string) llm.ArtifactFetcher { return f }
+	cache := newRenderCache()
+	pass1 := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/K", 1)}},
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/X", 1)}},
+	}
+	if _, err := renderArtifactsForLLM(context.Background(), pass1, l, resolver, cache, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+	pass2 := append(append([]llm.Message{}, pass1...), llm.Message{Role: llm.RoleUser, Content: []llm.Block{png("sha256/K", 1)}})
+	out, err := renderArtifactsForLLM(context.Background(), pass2, l, resolver, cache, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isInline(out[2].Content[0]) {
+		t.Fatal("newest K fits a fresh budget and must be inline")
 	}
 }
 

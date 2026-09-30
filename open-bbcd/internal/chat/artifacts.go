@@ -23,32 +23,28 @@ type renderKey struct{ storeID, uri, mime string }
 //     pruned to the keys placed natively in that pass: history is
 //     append-only, so a ref that fell out of the native window never
 //     re-enters it.
-//   - notNative records keys whose fetch showed they cannot be placed
-//     natively this turn, so later passes decide without fetching again:
-//     notNativeSurrogate for a render that returned ErrUnsupported or a
-//     blob that Stat reports missing (uncharged surrogate), and
-//     notNativeOverBudget for a ref whose actual bytes overflowed the
-//     remaining MaxBytes. The latter exhausts the budget again in later
-//     passes: newer refs are charged first and history only grows, so the
-//     budget left at that ref can only shrink. These keys are never pruned
-//     (they are few). Transient failures are never recorded — they fail
-//     the turn.
+//   - notNative records keys whose fetch showed they can never be placed
+//     natively, whatever their position: a render that returned
+//     ErrUnsupported, or a blob that Stat reports missing. Later passes
+//     emit the uncharged surrogate without fetching. These keys are never
+//     pruned (they are few). Transient failures are never recorded — they
+//     fail the turn.
+//
+// A ref whose actual bytes overflow the remaining MaxBytes is not
+// recorded: overflow depends on the ref's position in the budget, not on
+// the blob (the same content-addressed blob can appear more than once,
+// and a later round may make it the newest ref). It is re-evaluated each
+// pass, so a blob whose store under-reports size_bytes may be re-fetched
+// in a later round.
 type renderCache struct {
 	rendered  map[renderKey]llm.Block
-	notNative map[renderKey]notNativeReason
+	notNative map[renderKey]bool
 }
-
-type notNativeReason int
-
-const (
-	notNativeSurrogate notNativeReason = iota + 1
-	notNativeOverBudget
-)
 
 func newRenderCache() *renderCache {
 	return &renderCache{
 		rendered:  map[renderKey]llm.Block{},
-		notNative: map[renderKey]notNativeReason{},
+		notNative: map[renderKey]bool{},
 	}
 }
 
@@ -132,10 +128,7 @@ func renderArtifactsForLLM(
 				continue
 			}
 			key := renderKey{ref.StoreID, ref.URI, ref.MIME}
-			if reason, ok := cache.notNative[key]; ok {
-				if reason == notNativeOverBudget {
-					exhausted = true
-				}
+			if cache.notNative[key] {
 				continue
 			}
 			rendered, err := renderOne(ctx, renderer, fetcher, cache, key, ref, logger)
@@ -151,9 +144,10 @@ func renderArtifactsForLLM(
 			}
 			cost := base64Len(size)
 			if overBytes(usedBytes, cost) {
+				// Not cached as not-native: overflow is per position.
+				// Keep any rendered entry — another copy of this blob
+				// may already be placed in this pass.
 				exhausted = true
-				delete(cache.rendered, key)
-				cache.notNative[key] = notNativeOverBudget
 				continue
 			}
 			usedBlocks++
@@ -188,7 +182,7 @@ func renderOne(
 	}
 	b, err := renderer.RenderArtifactAsBlock(ctx, ref, fetcher)
 	if errors.Is(err, llm.ErrUnsupported) {
-		cache.notNative[key] = notNativeSurrogate
+		cache.notNative[key] = true
 		return nil, nil
 	}
 	if err != nil {
@@ -203,7 +197,7 @@ func renderOne(
 				slog.String("store_id", ref.StoreID),
 				slog.String("uri", ref.URI),
 				slog.String("mime", ref.MIME))
-			cache.notNative[key] = notNativeSurrogate
+			cache.notNative[key] = true
 			return nil, nil
 		}
 		return nil, err
