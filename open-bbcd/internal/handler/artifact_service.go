@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -199,4 +202,96 @@ func (s *artifactService) fail(w http.ResponseWriter, op string, err error, attr
 		s.logger.Error("artifact "+op+" failed", args...)
 	}
 	Error(w, err)
+}
+
+// splitArtifactPath splits a {path...} wildcard into <store_id>/<uri>; the
+// uri keeps its own slashes (sha256/<hex>).
+func splitArtifactPath(raw string) (storeID, uri string, ok bool) {
+	slash := strings.IndexByte(raw, '/')
+	if slash < 1 || slash == len(raw)-1 {
+		return "", "", false
+	}
+	return raw[:slash], raw[slash+1:], true
+}
+
+// retrieve serves one artifact of sessionID: authorised by a row in the
+// session's artifact table (any origin, pending or consumed), then Stat
+// (missing -> 410), then the adapter's delivery mode with the same
+// Content-Type / Content-Disposition on both. Unknown ref, other session's
+// ref and unregistered store are all 404 so nothing leaks.
+func (s *artifactService) retrieve(w http.ResponseWriter, r *http.Request, sessionID string) {
+	ctx := r.Context()
+	storeID, uri, ok := splitArtifactPath(r.PathValue("path"))
+	if !ok {
+		http.Error(w, "path must be <store_id>/<uri>", http.StatusBadRequest)
+		return
+	}
+	row, err := s.rows.LookupSessionArtifact(ctx, sessionID, storeID, uri)
+	if err != nil {
+		s.fail(w, "retrieve lookup", err, slog.String("store_id", storeID), slog.String("uri", uri))
+		return
+	}
+	store := s.registry.Get(storeID)
+	if store == nil {
+		Error(w, types.ErrNotFound)
+		return
+	}
+	// Sign presigns offline and cannot see a missing blob; Stat can.
+	st, err := store.Stat(ctx, uri)
+	if err != nil {
+		s.logger.Error("artifact retrieve: stat failed",
+			slog.String("store_id", storeID), slog.String("uri", uri), slog.String("mime", row.MIME), slog.Any("err", err))
+		http.Error(w, "upstream store error", http.StatusBadGateway)
+		return
+	}
+	if !st.Exists {
+		http.Error(w, "blob was removed", http.StatusGone)
+		return
+	}
+
+	// Non-native types are served as octet-stream: a tool can label bytes
+	// text/javascript or text/css, which a browser would run via
+	// <script src>/<link> despite Content-Disposition: attachment.
+	ct := "application/octet-stream"
+	if artifacts.IsNativeRenderMIME(row.MIME) {
+		ct = row.MIME
+	}
+	disp := artifactContentDisposition(row.MIME, row.Filename)
+
+	storeErr := func(op string, err error) {
+		s.logger.Error("artifact retrieve: "+op+" failed",
+			slog.String("store_id", storeID), slog.String("uri", uri), slog.String("mime", row.MIME), slog.Any("err", err))
+		if errors.Is(err, artifacts.ErrBlobMissing) {
+			http.Error(w, "blob was removed", http.StatusGone)
+			return
+		}
+		http.Error(w, "upstream store error", http.StatusBadGateway)
+	}
+
+	switch store.PreferredDelivery() {
+	case artifacts.DeliverySignedURL:
+		url, err := store.Sign(ctx, uri, 0, artifacts.SignOptions{ContentType: ct, ContentDisposition: disp})
+		if err != nil {
+			storeErr("sign", err)
+			return
+		}
+		w.Header().Set("Location", url)
+		w.WriteHeader(http.StatusFound)
+	case artifacts.DeliveryBytes:
+		rc, err := store.Get(ctx, uri)
+		if err != nil {
+			storeErr("get", err)
+			return
+		}
+		defer rc.Close()
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Content-Length", strconv.FormatInt(row.SizeBytes, 10))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", disp)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, rc)
+	default:
+		s.logger.Error("artifact retrieve: unknown delivery mode", slog.String("store_id", storeID))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
 }

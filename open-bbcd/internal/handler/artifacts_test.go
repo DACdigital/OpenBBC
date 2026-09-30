@@ -353,6 +353,7 @@ func TestRetrieve_SignedURL302(t *testing.T) {
 		kind:      "test-fake",
 		delivery:  artifacts.DeliverySignedURL,
 		signedURL: "https://example.com/signed/foo",
+		statHit:   true,
 	}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
@@ -382,6 +383,7 @@ func TestRetrieve_BytesMode200(t *testing.T) {
 		kind:     "test-fake",
 		delivery: artifacts.DeliveryBytes,
 		getData:  payload,
+		statHit:  true,
 	}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
@@ -456,6 +458,7 @@ func TestRetrieve_BlobMissing410(t *testing.T) {
 		kind:     "test-fake",
 		delivery: artifacts.DeliverySignedURL,
 		signErr:  artifacts.ErrBlobMissing,
+		statHit:  true,
 	}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{

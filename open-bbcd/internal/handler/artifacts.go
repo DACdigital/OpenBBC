@@ -21,39 +21,6 @@ type ArtifactSessionReader interface {
 	GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error)
 }
 
-// ArtifactRefResolver looks up whether a given (store_id, uri) is
-// referenced by any message in a session. Used by the retrieval handler
-// to enforce session-scope access — the ref alone is not a bearer
-// capability. Implementation lives in the repository layer where the
-// JSONB SQL is; the handler holds only the shape.
-type ArtifactRefResolver interface {
-	// SessionReferences returns (true, mime, nil) if any chat_messages
-	// row for sessionID contains an artifact_ref content-block with
-	// matching (storeID, uri). Returns (false, "", nil) if not
-	// referenced. mime is required because the retrieval route uses it
-	// as the Content-Type when serving bytes.
-	SessionReferences(ctx context.Context, sessionID, storeID, uri string) (found bool, mime string, err error)
-}
-
-// rowRefResolver adapts the session-artifact table lookup to the legacy
-// ArtifactRefResolver shape. Removed in Task 9.
-type rowRefResolver struct {
-	rows interface {
-		LookupSessionArtifact(ctx context.Context, sessionID, storeID, uri string) (*types.SessionArtifact, error)
-	}
-}
-
-func (r rowRefResolver) SessionReferences(ctx context.Context, sessionID, storeID, uri string) (bool, string, error) {
-	a, err := r.rows.LookupSessionArtifact(ctx, sessionID, storeID, uri)
-	if errors.Is(err, types.ErrNotFound) {
-		return false, "", nil
-	}
-	if err != nil {
-		return false, "", err
-	}
-	return true, a.MIME, nil
-}
-
 // ArtifactHandler wires the BO chat-artifacts routes:
 //   - POST   /agent_versions/{version_id}/chat/{session_id}/artifacts
 //   - GET    /agent_versions/{version_id}/chat/{session_id}/artifacts/{path}
@@ -64,7 +31,6 @@ func (r rowRefResolver) SessionReferences(ctx context.Context, sessionID, storeI
 // surface-independent artifactService.
 type ArtifactHandler struct {
 	sessions ArtifactSessionReader
-	refs     ArtifactRefResolver // removed in Task 9
 	svc      *artifactService
 }
 
@@ -80,7 +46,6 @@ func NewArtifactHandler(
 	}
 	return &ArtifactHandler{
 		sessions: sessions,
-		refs:     rowRefResolver{rows: rows},
 		svc: &artifactService{rows: rows, registry: registry, maxUploadMB: maxUploadMB,
 			maxPending: maxPending, logger: logger},
 	}
@@ -175,135 +140,10 @@ func firstNonZero(vals ...int64) int64 {
 	return 0
 }
 
-// HandleRetrieve handles GET /agent_versions/{v}/chat/{s}/artifacts/{path}.
-//
-// The {path} wildcard captures store_id and the store-local URI joined
-// by a `/`; split on first `/` at the handler layer so `uri` values
-// carrying additional `/` characters (e.g. `sha256/<hex>`) pass through
-// intact.
-//
-// Delivery mode is the adapter's choice (bytes-proxy or 302 redirect to
-// a signed URL). Session-scope authorisation goes through
-// ArtifactRefResolver.SessionReferences: mismatch returns 404 (never 403)
-// so ref existence does not leak across sessions.
+// HandleRetrieve handles GET /agent_versions/{v}/chat/{s}/artifacts/{path...}.
 func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request) {
-	// Session existence + version match; 404 on either failure.
-	sessionID, ok := h.boSession(w, r, false)
-	if !ok {
-		return
-	}
-
-	// Path-suffix parse. The mux registers the route with a wildcard
-	// `.../artifacts/{path...}` (Go 1.22 net/http wildcard syntax);
-	// the raw suffix ends up in r.PathValue("path"). Split on first
-	// `/` — prefix is store_id, remainder is store-local uri.
-	raw := r.PathValue("path")
-	if raw == "" {
-		http.Error(w, "path is required", http.StatusBadRequest)
-		return
-	}
-	slash := strings.IndexByte(raw, '/')
-	if slash < 1 || slash == len(raw)-1 {
-		http.Error(w, "path must be <store_id>/<uri>", http.StatusBadRequest)
-		return
-	}
-	storeID := raw[:slash]
-	uri := raw[slash+1:]
-
-	// Session-scope authorisation: the (storeID, uri) ref must be
-	// referenced by at least one message in this session. Mismatch is
-	// indistinguishable from "unknown store" or "unknown uri" — 404.
-	found, mime, err := h.refs.SessionReferences(r.Context(), sessionID, storeID, uri)
-	if err != nil {
-		h.svc.logger.Error("artifact retrieve: session-scope check failed",
-			slog.String("session_id", sessionID),
-			slog.String("store_id", storeID),
-			slog.String("uri", uri),
-			slog.Any("err", err),
-		)
-		http.Error(w, "session-scope check failed", http.StatusInternalServerError)
-		return
-	}
-	if !found {
-		Error(w, types.ErrNotFound)
-		return
-	}
-
-	store := h.svc.registry.Get(storeID)
-	if store == nil {
-		// Registry doesn't have this store — treat as 404 (indistinguishable
-		// from an unknown ref) rather than a specific "store not configured"
-		// error, which would leak registry membership.
-		Error(w, types.ErrNotFound)
-		return
-	}
-
-	switch store.PreferredDelivery() {
-	case artifacts.DeliverySignedURL:
-		url, err := store.Sign(r.Context(), uri, 0, artifacts.SignOptions{}) // 0 = adapter default TTL
-		if err != nil {
-			h.svc.logger.Error("artifact retrieve: sign failed",
-				slog.String("store_id", storeID),
-				slog.String("uri", uri),
-				slog.Any("err", err),
-			)
-			if errors.Is(err, artifacts.ErrBlobMissing) {
-				http.Error(w, "blob was removed", http.StatusGone)
-				return
-			}
-			http.Error(w, "upstream store error", http.StatusBadGateway)
-			return
-		}
-		// Content-Type / Content-Disposition for signed-URL delivery are
-		// set by the store via presign response overrides, which arrive
-		// with Sign's SignOptions parameter.
-		w.Header().Set("Location", url)
-		w.WriteHeader(http.StatusFound) // 302
-		return
-
-	case artifacts.DeliveryBytes:
-		rc, err := store.Get(r.Context(), uri)
-		if err != nil {
-			h.svc.logger.Error("artifact retrieve: get failed",
-				slog.String("store_id", storeID),
-				slog.String("uri", uri),
-				slog.Any("err", err),
-			)
-			if errors.Is(err, artifacts.ErrBlobMissing) {
-				http.Error(w, "blob was removed", http.StatusGone)
-				return
-			}
-			http.Error(w, "upstream store error", http.StatusBadGateway)
-			return
-		}
-		defer rc.Close()
-		// Artifact bytes are user- or tool-supplied: never let a client
-		// sniff them into something renderable, and only render inline
-		// the native-render set. Content-Length is omitted: neither the
-		// session-scope check nor Get reports a size here. Filename is
-		// likewise unknown at this point, so Content-Disposition carries
-		// no filename parameter.
-		//
-		// Non-native types are served as octet-stream: a tool can label
-		// bytes text/javascript or text/css, which a browser would run
-		// via <script src>/<link> despite Content-Disposition: attachment.
-		ct := "application/octet-stream"
-		if artifacts.IsNativeRenderMIME(mime) {
-			ct = mime
-		}
-		w.Header().Set("Content-Type", ct)
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Disposition", artifactContentDisposition(mime, ""))
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.Copy(w, rc)
-		return
-
-	default:
-		h.svc.logger.Error("artifact retrieve: unknown delivery mode",
-			slog.String("store_id", storeID),
-			slog.Int("delivery", int(store.PreferredDelivery())),
-		)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if sid, ok := h.boSession(w, r, false); ok {
+		h.svc.retrieve(w, r, sid)
 	}
 }
 

@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
@@ -13,12 +14,14 @@ import (
 // whose session-scope resolver reports the ref with the given mime.
 func retrieveBytes(t *testing.T, mime string, payload []byte) *httptest.ResponseRecorder {
 	t.Helper()
-	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliveryBytes, getData: payload}
+	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliveryBytes, getData: payload, statHit: true}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
-	h := NewArtifactHandler(sessions, seededRows(t, "MAIN", "sha256/abc", mime), reg, 10, 10, nil)
+	rows := &memRows{}
+	seedRow(t, rows, "s1", "sha256/abc", mime, "f.bin", int64(len(payload)))
+	h := NewArtifactHandler(sessions, rows, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
@@ -41,13 +44,13 @@ func TestRetrieve_BytesHeaders(t *testing.T) {
 		disposition string
 		contentType string
 	}{
-		{"image/png", "inline", "image/png"},
-		{"application/pdf", "inline", "application/pdf"},
-		{"application/zip", "attachment", "application/octet-stream"},
-		{"text/html", "attachment", "application/octet-stream"},
-		{"text/javascript", "attachment", "application/octet-stream"},
-		{"text/css", "attachment", "application/octet-stream"},
-		{"", "attachment", "application/octet-stream"},
+		{"image/png", "inline; filename*=UTF-8''f.bin", "image/png"},
+		{"application/pdf", "inline; filename*=UTF-8''f.bin", "application/pdf"},
+		{"application/zip", "attachment; filename*=UTF-8''f.bin", "application/octet-stream"},
+		{"text/html", "attachment; filename*=UTF-8''f.bin", "application/octet-stream"},
+		{"text/javascript", "attachment; filename*=UTF-8''f.bin", "application/octet-stream"},
+		{"text/css", "attachment; filename*=UTF-8''f.bin", "application/octet-stream"},
+		{"", "attachment; filename*=UTF-8''f.bin", "application/octet-stream"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.mime, func(t *testing.T) {
@@ -57,6 +60,9 @@ func TestRetrieve_BytesHeaders(t *testing.T) {
 			}
 			if got := rec.Header().Get("Content-Disposition"); got != tc.disposition {
 				t.Errorf("Content-Disposition = %q, want %q", got, tc.disposition)
+			}
+			if got := rec.Header().Get("Content-Length"); got != strconv.Itoa(len(rec.Body.Bytes())) {
+				t.Errorf("Content-Length = %q, want %d", got, rec.Body.Len())
 			}
 			if got := rec.Header().Get("Content-Type"); got != tc.contentType {
 				t.Errorf("Content-Type = %q, want %q", got, tc.contentType)
