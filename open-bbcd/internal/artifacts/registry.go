@@ -185,16 +185,17 @@ func supportedKindsList() string {
 	return "s3_compatible"
 }
 
-// LockedSessionChecker reports whether a given (store_id, uri) pair is
-// referenced by any message in a dataset-locked chat session. The
-// implementation lives in the repository layer where the JSONB SQL is;
-// this package holds the invariant contract.
+// LockedSessionChecker reports whether a given (store_id, uri) pair is in
+// the read scope of any dataset-locked chat session. The implementation
+// lives in the repository layer; this package holds the invariant contract.
 //
-// Contract: returns (true, nil) if any chat_messages row for a session
-// with locked_at != NULL contains an artifact_ref block matching
-// (storeID, uri). Returns (false, nil) if not referenced or referenced
-// only by unlocked sessions. Wraps SQL errors verbatim on the second
-// return value.
+// Contract: returns (true, nil) if any chat_session_artifacts row (any
+// origin, pending or consumed) matching (storeID, uri) belongs to a
+// chat_sessions row with locked_at != NULL — a lookup on the
+// session-artifact table, not a scan of message content. Only BO sessions
+// can be locked, so deployed_session_artifacts is not consulted. Returns
+// (false, nil) if not referenced or referenced only by unlocked sessions.
+// Wraps SQL errors verbatim on the second return value.
 type LockedSessionChecker func(ctx context.Context, storeID, uri string) (bool, error)
 
 // DeleteWithGuard removes a blob only when no locked session references

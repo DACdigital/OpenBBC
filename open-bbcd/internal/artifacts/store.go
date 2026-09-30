@@ -1,8 +1,10 @@
 // Package artifacts declares the pluggable storage substrate for chat
-// artifact bytes. open-bbcd holds only refs in Postgres (embedded as
-// `artifact_ref` content blocks inside chat_messages.content JSONB); the
-// bytes themselves live in a deployer-configured Object store reached
-// through an ArtifactStore adapter.
+// artifact bytes. open-bbcd holds only refs in Postgres: each artifact in a
+// session's read scope is a row in that context's session-artifact table
+// (chat_session_artifacts for BO, deployed_session_artifacts for deployed),
+// and messages carry `artifact_ref` content blocks that retrieval authorises
+// by row lookup. The bytes themselves live in a deployer-configured Object
+// store reached through an ArtifactStore adapter.
 //
 // The store registry is loaded once at daemon boot from env vars
 // (ARTIFACT_STORE_<ID>_* groups + ARTIFACT_STORE_DEFAULT); there is no
