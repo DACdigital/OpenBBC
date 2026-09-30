@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -12,6 +13,8 @@ import (
 type DeployedRepositoryAPI interface {
 	GetSessionByID(ctx context.Context, sessionID string) (*types.DeployedSession, error)
 	AppendMessages(ctx context.Context, msgs []types.DeployedMessage) error
+	AppendUserTurn(ctx context.Context, m types.DeployedMessage) ([]llm.ArtifactRefBlock, error)
+	AppendToolMessage(ctx context.Context, m types.DeployedMessage, refs []llm.ArtifactRefBlock) error
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.DeployedMessage, error)
 	NextSeq(ctx context.Context, sessionID string) (int, error)
 }
@@ -74,6 +77,27 @@ func (s *DeployedChatStore) AppendMessages(ctx context.Context, agentVersionID s
 		}
 	}
 	return s.repo.AppendMessages(ctx, depl)
+}
+
+// AppendUserTurn stamps agentVersionID and passes the message id through so
+// claimed rows reference the persisted row.
+func (s *DeployedChatStore) AppendUserTurn(ctx context.Context, agentVersionID string, msg types.ChatMessage) ([]llm.ArtifactRefBlock, error) {
+	return s.repo.AppendUserTurn(ctx, toDeployedMessage(agentVersionID, msg))
+}
+
+func (s *DeployedChatStore) AppendToolMessage(ctx context.Context, agentVersionID string, msg types.ChatMessage, refs []llm.ArtifactRefBlock) error {
+	return s.repo.AppendToolMessage(ctx, toDeployedMessage(agentVersionID, msg), refs)
+}
+
+func toDeployedMessage(agentVersionID string, m types.ChatMessage) types.DeployedMessage {
+	return types.DeployedMessage{
+		ID:             m.ID,
+		SessionID:      m.SessionID,
+		AgentVersionID: agentVersionID,
+		Role:           m.Role,
+		Content:        m.Content,
+		Seq:            m.Seq,
+	}
 }
 
 func (s *DeployedChatStore) NextSeq(ctx context.Context, sessionID string) (int, error) {

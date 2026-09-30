@@ -44,6 +44,16 @@ type ChatStore interface {
 	EnsureSession(ctx context.Context, sessionID, scopeID string) error
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error)
 	AppendMessages(ctx context.Context, agentVersionID string, msgs []types.ChatMessage) error
+	// AppendUserTurn persists the user message and claims every pending
+	// artifact on the session in one transaction. Claimed refs are appended
+	// to msg.Content after its existing blocks, in (created_at, id) order,
+	// and returned. Returns types.ErrEmptyTurn (and persists nothing) if msg
+	// has no non-empty text block and nothing was claimed.
+	AppendUserTurn(ctx context.Context, agentVersionID string, msg types.ChatMessage) ([]llm.ArtifactRefBlock, error)
+	// AppendToolMessage persists a tool-role message and one
+	// origin='tool_result' row per ref (message_id = msg.ID) in one
+	// transaction. refs may be empty.
+	AppendToolMessage(ctx context.Context, agentVersionID string, msg types.ChatMessage, refs []llm.ArtifactRefBlock) error
 	NextSeq(ctx context.Context, sessionID string) (int, error)
 }
 
@@ -195,13 +205,18 @@ func (o *Orchestrator) Turn(
 		return failTurn("tools_init", "build_tool_defs", err)
 	}
 
-	msgs := historyToLLM(history)
-	msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: userInput})
-
-	// 5. Persist the user message NOW (before the LLM call). A failed
-	// turn still captures what the user asked.
+	// 5. Persist the user message NOW (before the LLM call), claiming every
+	// pending artifact on the session in the same transaction. A failed
+	// turn still captures what the user asked. Only text comes from the
+	// caller; user-role artifact_refs come solely from the claim.
+	textInput := make([]llm.Block, 0, len(userInput))
+	for _, b := range userInput {
+		if tb, ok := b.(llm.TextBlock); ok {
+			textInput = append(textInput, tb)
+		}
+	}
 	userMsgID := uuid.NewString()
-	userContent, err := blocksToJSON(userInput)
+	userContent, err := blocksToJSON(textInput)
 	if err != nil {
 		return failTurn("encode_user_msg", "serialize_user_blocks", err)
 	}
@@ -209,15 +224,27 @@ func (o *Orchestrator) Turn(
 	if err != nil {
 		return failTurn("seq_assign", "next_seq_user", err)
 	}
-	if err := o.chats.AppendMessages(ctx, version.ID, []types.ChatMessage{{
+	claimed, err := o.chats.AppendUserTurn(ctx, version.ID, types.ChatMessage{
 		ID:        userMsgID,
 		SessionID: sessionID,
 		Role:      types.ChatRoleUser,
 		Content:   userContent,
 		Seq:       userSeq,
-	}}); err != nil {
+	})
+	if errors.Is(err, types.ErrEmptyTurn) {
+		// A pending artifact was removed between the handler's validity
+		// check and the claim.
+		return failTurn("empty_turn", "claim_pending_artifacts", err)
+	}
+	if err != nil {
 		return failTurn("persist_user_msg", "append_user_msg", err)
 	}
+	userBlocks := textInput
+	for _, ref := range claimed {
+		userBlocks = append(userBlocks, ref)
+	}
+	msgs := historyToLLM(history)
+	msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: userBlocks})
 
 	// 6. Send session-start event.
 	_ = sink.Send(ctx, transport.SessionStartEvent{SessionID: sessionID, AgentID: agentID})
@@ -361,7 +388,7 @@ func (o *Orchestrator) Turn(
 		// order). Anthropic rejects a user message answering tool_use
 		// whose content does not start with the tool_result blocks.
 		toolResults := make([]llm.Block, 0, len(pendingToolUses))
-		var toolRefs []llm.Block
+		var toolRefs []llm.ArtifactRefBlock
 		var refEvents []transport.ArtifactRefEvent
 		for _, tu := range pendingToolUses {
 			res, err := toolHandler.Call(ctx, agent.Architecture, tools.Call{
@@ -406,9 +433,13 @@ func (o *Orchestrator) Turn(
 				IsError:   res.IsError,
 			})
 		}
-		toolBlocks := append(toolResults, toolRefs...)
+		toolBlocks := toolResults
+		for _, r := range toolRefs {
+			toolBlocks = append(toolBlocks, r)
+		}
 
-		// Persist the tool-role message.
+		// Persist the tool-role message and its tool_result rows in one
+		// transaction; ARTIFACT_REF is sent only after that commit.
 		toolMsgID := uuid.NewString()
 		toolContent, err := blocksToJSON(toolBlocks)
 		if err != nil {
@@ -418,13 +449,13 @@ func (o *Orchestrator) Turn(
 		if err != nil {
 			return failTurn("seq_assign", "next_seq_tool", err)
 		}
-		if err := o.chats.AppendMessages(ctx, version.ID, []types.ChatMessage{{
+		if err := o.chats.AppendToolMessage(ctx, version.ID, types.ChatMessage{
 			ID:        toolMsgID,
 			SessionID: sessionID,
 			Role:      types.ChatRoleTool,
 			Content:   toolContent,
 			Seq:       toolSeq,
-		}}); err != nil {
+		}, toolRefs); err != nil {
 			return failTurn("persist_tool_msg", "append_tool_msg", err)
 		}
 		for _, ev := range refEvents {

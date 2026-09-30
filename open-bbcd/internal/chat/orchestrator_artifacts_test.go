@@ -62,11 +62,12 @@ func messagesWithRole(chats *fakeChatRepo, role types.ChatRole) []types.ChatMess
 
 func TestOrchestrator_ArtifactRefsSurviveHistoryReload(t *testing.T) {
 	flm := &fakeLLM{script: [][]llm.Event{endRound(), endRound()}}
-	o, _, _ := newArtifactOrchestrator(t, flm, nil)
+	o, chats, _ := newArtifactOrchestrator(t, flm, nil)
 	ctx := context.Background()
 
 	ref := llm.ArtifactRefBlock{StoreID: "MAIN", URI: "sha256/abc", MIME: "application/pdf", SizeBytes: 42, Sha256: "abc", Filename: "q3.pdf"}
-	if err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "summarise"}, ref}, &recordingSink{}); err != nil {
+	chats.pending = map[string][]llm.ArtifactRefBlock{"s1": {ref}}
+	if err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "summarise"}}, &recordingSink{}); err != nil {
 		t.Fatalf("turn 1: %v", err)
 	}
 	if err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "and again"}}, &recordingSink{}); err != nil {
