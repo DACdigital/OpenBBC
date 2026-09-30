@@ -238,6 +238,11 @@ func (o *Orchestrator) Turn(
 		// their check and the claim (e.g. a racing DELETE).
 		return failTurn("empty_turn", "claim_pending_artifacts", err)
 	}
+	if errors.Is(err, types.ErrSessionLocked) {
+		// A dataset close locked the BO session after the handler's check;
+		// the claim re-reads locked_at and refuses, persisting nothing.
+		return failTurn("session_locked", "claim_pending_artifacts", err)
+	}
 	if err != nil {
 		return failTurn("persist_user_msg", "append_user_msg", err)
 	}

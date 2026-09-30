@@ -152,3 +152,32 @@ func TestOrchestrator_LLMFailureKeepsClaimedRefsForNextTurn(t *testing.T) {
 		t.Fatalf("history user message should carry text + ref: %+v", req.Messages)
 	}
 }
+
+// A BO session locked by a dataset close after the handler's check: the
+// claim refuses (ErrSessionLocked) and the turn fails with session_locked.
+func TestOrchestrator_LockedSessionAtClaim_RunErrorSessionLocked(t *testing.T) {
+	flm := &fakeLLM{script: [][]llm.Event{endRound()}}
+	o, chats, _ := newArtifactOrchestrator(t, flm, nil)
+	chats.pending = map[string][]llm.ArtifactRefBlock{"s1": {refA}}
+	chats.userTurnErr = types.ErrSessionLocked
+	sink := &recordingSink{}
+	err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "hi"}}, sink)
+	if !errors.Is(err, types.ErrSessionLocked) {
+		t.Fatalf("err = %v, want ErrSessionLocked", err)
+	}
+	var codes []string
+	for _, ev := range sink.events {
+		if e, ok := ev.(transport.ErrorEvent); ok {
+			codes = append(codes, e.Code)
+		}
+	}
+	if len(codes) != 1 || codes[0] != "session_locked" {
+		t.Fatalf("RUN_ERROR codes = %v, want [session_locked]", codes)
+	}
+	if len(flm.requests) != 0 {
+		t.Fatalf("LLM called %d times for a refused turn", len(flm.requests))
+	}
+	if n := len(chats.messages); n != 0 {
+		t.Fatalf("persisted %d messages", n)
+	}
+}

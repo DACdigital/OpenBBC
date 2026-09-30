@@ -39,14 +39,20 @@ type sessionArtifacts struct {
 	db    *sql.DB
 	table string
 	// sessionTable is the owning session table (trusted constant). The turn
-	// writes lock its row FOR KEY SHARE first, so lock order is always
-	// session row, then artifact rows (matching a cascading session delete).
+	// writes lock its row first (FOR KEY SHARE, or lockTurnSession), so lock
+	// order is always session row, then artifact rows (matching a cascading
+	// session delete).
 	sessionTable string
 	lockKey      int32
 	// recheckSession re-reads the owning session inside the upload commit
 	// transaction: ErrNotFound if it is gone, ErrSessionLocked if a BO
 	// session was locked by a dataset close during a slow upload.
 	recheckSession func(ctx context.Context, tx *sql.Tx, sessionID string) error
+	// lockTurnSession, if set, replaces lockSession as the first statement
+	// of appendUserTurn. BO uses it to take the session row lock and re-read
+	// locked_at in one step, so pending rows on a locked session are never
+	// claimed even when a dataset close commits after the handler's check.
+	lockTurnSession func(ctx context.Context, tx *sql.Tx, sessionID string) error
 }
 
 const sessionArtifactCols = `id::text, session_id::text, origin, store_id, uri, mime, size_bytes, sha256,
@@ -252,6 +258,30 @@ func recheckChatSession(ctx context.Context, tx *sql.Tx, sessionID string) error
 	return nil
 }
 
+// lockChatSessionForTurn is the BO lockTurnSession. The UPDATE takes the
+// session row lock (FOR NO KEY UPDATE) and RETURNING sees the latest
+// committed locked_at: a dataset close either commits first (seen here) or
+// waits for this turn. It bumps updated_at, which the message insert does
+// anyway. Not FOR SHARE: two concurrent turns would each hold it and then
+// deadlock on the later updated_at bump. Not FOR KEY SHARE: it does not
+// conflict with the close's UPDATE, so locked_at could change underneath.
+// Still no conflict with a cascading session delete's lock order: the
+// session row is locked first, then artifact rows.
+func lockChatSessionForTurn(ctx context.Context, tx *sql.Tx, sessionID string) error {
+	var lockedAt sql.NullTime
+	err := tx.QueryRowContext(ctx, `UPDATE chat_sessions SET updated_at = now() WHERE id = $1::uuid RETURNING locked_at`, sessionID).Scan(&lockedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if lockedAt.Valid {
+		return types.ErrSessionLocked
+	}
+	return nil
+}
+
 func recheckDeployedSession(ctx context.Context, tx *sql.Tx, sessionID string) error {
 	var one int
 	err := tx.QueryRowContext(ctx, `SELECT 1 FROM deployed_sessions WHERE id = $1::uuid`, sessionID).Scan(&one)
@@ -333,8 +363,10 @@ func (t sessionArtifacts) lockSession(ctx context.Context, tx *sql.Tx, sessionID
 	return err
 }
 
-// appendUserTurn is the shared body of AppendUserTurn: claim, empty-turn
-// check, content assembly, then insertMsg(tx, content), all in one tx.
+// appendUserTurn is the shared body of AppendUserTurn: session lock
+// (lockTurnSession, else lockSession), claim, empty-turn check, content
+// assembly, then insertMsg(tx, content), all in one tx. ErrSessionLocked
+// (BO only) rolls everything back, leaving pending rows pending.
 func (t sessionArtifacts) appendUserTurn(ctx context.Context, sessionID, messageID string, content json.RawMessage,
 	insertMsg func(tx *sql.Tx, content json.RawMessage) error) ([]llm.ArtifactRefBlock, error) {
 	tx, err := t.db.BeginTx(ctx, nil)
@@ -342,7 +374,11 @@ func (t sessionArtifacts) appendUserTurn(ctx context.Context, sessionID, message
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := t.lockSession(ctx, tx, sessionID); err != nil {
+	lock := t.lockSession
+	if t.lockTurnSession != nil {
+		lock = t.lockTurnSession
+	}
+	if err := lock(ctx, tx, sessionID); err != nil {
 		return nil, err
 	}
 	// Reject bad content before taking artifact row locks.

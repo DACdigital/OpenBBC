@@ -18,7 +18,7 @@ type ChatRepository struct {
 func NewChatRepository(db *sql.DB) *ChatRepository {
 	return &ChatRepository{db: db, sessionArtifacts: sessionArtifacts{
 		db: db, table: "chat_session_artifacts", sessionTable: "chat_sessions", lockKey: chatSessionArtifactsLockKey,
-		recheckSession: recheckChatSession,
+		recheckSession: recheckChatSession, lockTurnSession: lockChatSessionForTurn,
 	}}
 }
 

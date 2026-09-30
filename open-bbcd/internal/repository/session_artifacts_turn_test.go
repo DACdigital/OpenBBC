@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -435,5 +436,82 @@ func TestAppendUserTurn_ClaimTieBreakIsID(t *testing.T) {
 				t.Fatalf("refs = %+v, want id order [%s, %s]", refs, first.ID, second.ID)
 			}
 		})
+	}
+}
+
+// Spec: pending rows on a locked session are never claimed. The BO turn
+// re-reads locked_at under a row lock as its first statement, so a turn
+// that passed the handler's unlocked check just before a dataset close
+// committed still refuses to claim.
+func TestChatAppendUserTurn_LockedSession_NoClaim(t *testing.T) {
+	s := turnSurfaces(t)[0]
+	ctx := context.Background()
+	sid := s.newSession(t)
+	mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/aa", ""), 10)
+	if _, err := s.db.Exec(`UPDATE chat_sessions SET locked_at = now() WHERE id=$1::uuid`, sid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.appendUser(ctx, userMsg(sid, 1, "go")); !errors.Is(err, types.ErrSessionLocked) {
+		t.Fatalf("AppendUserTurn err=%v, want ErrSessionLocked", err)
+	}
+	pending, err := s.store.ListPendingArtifacts(ctx, sid)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending after refused turn: %d %v (want 1 still pending)", len(pending), err)
+	}
+	if contents, _ := s.load(ctx, sid); len(contents) != 0 {
+		t.Fatalf("refused turn persisted %d messages", len(contents))
+	}
+}
+
+// A dataset close that commits while a BO turn is blocked on the session row
+// is seen by that turn: its first statement (UPDATE … RETURNING locked_at)
+// waits on the row and re-reads the committed version.
+func TestChatAppendUserTurn_LockCommittedWhileWaiting_NoClaim(t *testing.T) {
+	s := turnSurfaces(t)[0]
+	ctx := context.Background()
+	sid := s.newSession(t)
+	mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/aa", ""), 10)
+	closer, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closer.Rollback() }()
+	if _, err := closer.ExecContext(ctx, `UPDATE chat_sessions SET locked_at = now() WHERE id=$1::uuid`, sid); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.appendUser(ctx, userMsg(sid, 1, "go"))
+		done <- err
+	}()
+	// Wait until the turn is blocked on the session row, then commit the lock.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("turn never blocked on the session row")
+		}
+		var waiting bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock'
+			AND query LIKE '%RETURNING locked_at%')`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("turn finished before the lock committed: %v", err)
+		default:
+		}
+	}
+	if err := closer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, types.ErrSessionLocked) {
+		t.Fatalf("AppendUserTurn err=%v, want ErrSessionLocked", err)
+	}
+	if pending, err := s.store.ListPendingArtifacts(ctx, sid); err != nil || len(pending) != 1 {
+		t.Fatalf("pending after refused turn: %d %v", len(pending), err)
 	}
 }

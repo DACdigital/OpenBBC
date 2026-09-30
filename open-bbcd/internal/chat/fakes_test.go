@@ -51,6 +51,8 @@ type fakeChatRepo struct {
 	// beforeClaim runs at the start of AppendUserTurn, outside the lock;
 	// tests use it to simulate a DELETE racing the claim.
 	beforeClaim func()
+	// userTurnErr, if set, is returned by AppendUserTurn (nothing persisted).
+	userTurnErr error
 }
 
 func (f *fakeChatRepo) EnsureSession(ctx context.Context, sessionID, scopeID string) error {
@@ -100,6 +102,9 @@ func (f *fakeChatRepo) AppendUserTurn(ctx context.Context, agentVersionID string
 	defer f.mu.Unlock()
 	if f.failRole == types.ChatRoleUser {
 		return nil, errors.New("fake: append failed")
+	}
+	if f.userTurnErr != nil {
+		return nil, f.userTurnErr
 	}
 	var raw []json.RawMessage
 	_ = json.Unmarshal(msg.Content, &raw)
