@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -55,6 +56,11 @@ type ChatStore interface {
 // surrogate. This keeps the code path compiled even in artifact-free
 // deployments.
 type ArtifactFetcherResolver func(storeID string) llm.ArtifactFetcher
+
+// ErrInlineMediaNotPersistable is returned by blocksToJSON when a message
+// carries renderer-produced bytes. Rendered media exists only inside one
+// LLM request; persisting it would put artifact bytes in Postgres.
+var ErrInlineMediaNotPersistable = errors.New("chat: inline media blocks must never be persisted")
 
 type Orchestrator struct {
 	agents            AgentReader
@@ -491,6 +497,24 @@ func parseBlocks(raw []json.RawMessage) []llm.Block {
 			}
 			_ = json.Unmarshal(r, &b)
 			out = append(out, llm.ToolResultBlock{ToolUseID: b.ToolUseID, Result: b.Content, IsError: b.IsError})
+		case "artifact_ref":
+			var b struct {
+				StoreID   string `json:"store_id"`
+				URI       string `json:"uri"`
+				MIME      string `json:"mime"`
+				SizeBytes int64  `json:"size_bytes"`
+				Sha256    string `json:"sha256"`
+				Filename  string `json:"filename"`
+			}
+			_ = json.Unmarshal(r, &b)
+			out = append(out, llm.ArtifactRefBlock{
+				StoreID:   b.StoreID,
+				URI:       b.URI,
+				MIME:      b.MIME,
+				SizeBytes: b.SizeBytes,
+				Sha256:    b.Sha256,
+				Filename:  b.Filename,
+			})
 		}
 	}
 	return out
@@ -516,6 +540,21 @@ func blocksToJSON(blocks []llm.Block) (json.RawMessage, error) {
 				"content":     json.RawMessage(x.Result),
 				"is_error":    x.IsError,
 			})
+		case llm.ArtifactRefBlock:
+			m := map[string]any{
+				"type":       "artifact_ref",
+				"store_id":   x.StoreID,
+				"uri":        x.URI,
+				"mime":       x.MIME,
+				"size_bytes": x.SizeBytes,
+				"sha256":     x.Sha256,
+			}
+			if x.Filename != "" {
+				m["filename"] = x.Filename
+			}
+			out = append(out, m)
+		case llm.InlineMediaBlock:
+			return nil, ErrInlineMediaNotPersistable
 		}
 	}
 	return json.Marshal(out)

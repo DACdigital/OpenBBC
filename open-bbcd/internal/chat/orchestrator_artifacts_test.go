@@ -1,0 +1,84 @@
+package chat
+
+import (
+	"context"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+)
+
+// onePixelPNG is a valid 1x1 PNG, base64-encoded.
+const onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+
+func imageToolOutput() []byte {
+	return []byte(`{"content":[{"type":"image","data":"` + onePixelPNG + `","mimeType":"image/png"}]}`)
+}
+
+// toolUseRound scripts one LLM round that calls the "Skill" tool once per id.
+func toolUseRound(ids ...string) []llm.Event {
+	var evs []llm.Event
+	for _, id := range ids {
+		evs = append(evs,
+			llm.ToolUseStartEvent{ID: id, Name: "Skill"},
+			llm.ToolUseInputEvent{ID: id, JSONFragment: `{}`},
+			llm.ToolUseEndEvent{ID: id},
+		)
+	}
+	return append(evs, llm.MessageStopEvent{StopReason: "tool_use"})
+}
+
+func endRound() []llm.Event {
+	return []llm.Event{llm.TextDeltaEvent{Delta: "done"}, llm.MessageStopEvent{StopReason: "end_turn"}}
+}
+
+// newArtifactOrchestrator builds an orchestrator over fakes with the
+// tool-result uploader wired. results are returned by the fake tool in call order.
+func newArtifactOrchestrator(t *testing.T, l llm.LLM, results []tools.Result) (*Orchestrator, *fakeChatRepo, *stubUploader) {
+	t.Helper()
+	version := &types.AgentVersion{ID: "v1", Prompts: []byte(`{"main_prompt":"sys"}`)}
+	agents := &fakeAgentRepo{version: version, agent: &types.Agent{ID: "a1", Architecture: []byte(`{}`)}}
+	chats := &fakeChatRepo{}
+	up := &stubUploader{}
+	o := NewOrchestrator(agents, chats, l, &fakeBuilder{handler: &fakeTools{results: results}}, slog.Default())
+	o.WithArtifactUploader(up)
+	return o, chats, up
+}
+
+func messagesWithRole(chats *fakeChatRepo, role types.ChatRole) []types.ChatMessage {
+	var out []types.ChatMessage
+	for _, m := range chats.messages {
+		if m.Role == role {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func TestOrchestrator_ArtifactRefsSurviveHistoryReload(t *testing.T) {
+	flm := &fakeLLM{script: [][]llm.Event{endRound(), endRound()}}
+	o, _, _ := newArtifactOrchestrator(t, flm, nil)
+	ctx := context.Background()
+
+	ref := llm.ArtifactRefBlock{StoreID: "MAIN", URI: "sha256/abc", MIME: "application/pdf", SizeBytes: 42, Sha256: "abc", Filename: "q3.pdf"}
+	if err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "summarise"}, ref}, &recordingSink{}); err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+	if err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "and again"}}, &recordingSink{}); err != nil {
+		t.Fatalf("turn 2: %v", err)
+	}
+
+	// Turn 2's request starts with turn 1's user message. No resolver is
+	// wired, so the ref is rendered as its text surrogate — but it must be there.
+	first := flm.requests[1].Messages[0]
+	if len(first.Content) != 2 {
+		t.Fatalf("reloaded user message has %d blocks, want 2 (ref dropped from history?)", len(first.Content))
+	}
+	tb, ok := first.Content[1].(llm.TextBlock)
+	if !ok || !strings.Contains(tb.Text, "[Attachment: q3.pdf") {
+		t.Fatalf("second block = %#v, want the q3.pdf text surrogate", first.Content[1])
+	}
+}

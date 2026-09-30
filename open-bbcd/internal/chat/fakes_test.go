@@ -78,16 +78,19 @@ func (f *fakeChatRepo) NextSeq(ctx context.Context, sessionID string) (int, erro
 }
 
 // fakeLLM emits a scripted event sequence. Each call to Generate consumes
-// the next slice from `script` and yields its events.
+// the next slice from `script` and yields its events. Every request is
+// recorded in `requests` so tests can assert what the model was sent.
 type fakeLLM struct {
-	name   string
-	script [][]llm.Event
-	calls  int
+	name     string
+	script   [][]llm.Event
+	calls    int
+	requests []llm.Request
 }
 
 func (f *fakeLLM) Name() string { return f.name }
 
 func (f *fakeLLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event, error] {
+	f.requests = append(f.requests, req)
 	return func(yield func(llm.Event, error) bool) {
 		if f.calls >= len(f.script) {
 			return
