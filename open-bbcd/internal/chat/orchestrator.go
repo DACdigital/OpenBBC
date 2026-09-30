@@ -359,6 +359,7 @@ func (o *Orchestrator) Turn(
 		// whose content does not start with the tool_result blocks.
 		toolResults := make([]llm.Block, 0, len(pendingToolUses))
 		var toolRefs []llm.Block
+		var refEvents []transport.ArtifactRefEvent
 		for _, tu := range pendingToolUses {
 			res, err := toolHandler.Call(ctx, agent.Architecture, tools.Call{
 				ID:    tu.ID,
@@ -370,11 +371,6 @@ func (o *Orchestrator) Turn(
 				errMsg, _ := json.Marshal(map[string]string{"error": err.Error()})
 				res = tools.Result{ToolUseID: tu.ID, Output: errMsg, IsError: true}
 			}
-			_ = sink.Send(ctx, transport.ToolResultEvent{
-				ToolCallID: tu.ID,
-				Result:     res.Output,
-				IsError:    res.IsError,
-			})
 			if o.artifactUploader != nil {
 				// Error-flagged results are normalised too: an MCP isError
 				// result may carry a screenshot of the failed state.
@@ -385,8 +381,22 @@ func (o *Orchestrator) Turn(
 				}
 				for _, r := range nr.Refs {
 					toolRefs = append(toolRefs, r)
+					refEvents = append(refEvents, transport.ArtifactRefEvent{
+						ToolCallID: tu.ID,
+						StoreID:    r.StoreID,
+						URI:        r.URI,
+						MIME:       r.MIME,
+						SizeBytes:  r.SizeBytes,
+						Sha256:     r.Sha256,
+						Filename:   r.Filename,
+					})
 				}
 			}
+			_ = sink.Send(ctx, transport.ToolResultEvent{
+				ToolCallID: tu.ID,
+				Result:     res.Output,
+				IsError:    res.IsError,
+			})
 			toolResults = append(toolResults, llm.ToolResultBlock{
 				ToolUseID: tu.ID,
 				Result:    res.Output,
@@ -413,6 +423,9 @@ func (o *Orchestrator) Turn(
 			Seq:       toolSeq,
 		}}); err != nil {
 			return failTurn("persist_tool_msg", "append_tool_msg", err)
+		}
+		for _, ev := range refEvents {
+			_ = sink.Send(ctx, ev)
 		}
 
 		// Extend the LLM request with both messages and loop.

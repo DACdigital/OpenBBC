@@ -9,6 +9,7 @@ import (
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -121,5 +122,57 @@ func TestOrchestrator_ErrorFlaggedToolResultIsNormalised(t *testing.T) {
 	}
 	if !strings.Contains(string(tm[0].Content), `"is_error":true`) {
 		t.Fatalf("is_error lost: %s", tm[0].Content)
+	}
+}
+
+func eventIndex(events []transport.Event, match func(transport.Event) bool) int {
+	for i, e := range events {
+		if match(e) {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestOrchestrator_ArtifactRefAfterToolMessagePersisted(t *testing.T) {
+	flm := &fakeLLM{script: [][]llm.Event{toolUseRound("tu1", "tu2"), endRound()}}
+	o, _, _ := newArtifactOrchestrator(t, flm, []tools.Result{
+		{ToolUseID: "tu1", Output: imageToolOutput()},
+		{ToolUseID: "tu2", Output: []byte(`{}`)},
+	})
+	sink := &recordingSink{}
+	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	refIdx := eventIndex(sink.events, func(e transport.Event) bool { _, ok := e.(transport.ArtifactRefEvent); return ok })
+	lastResult := -1
+	for i, e := range sink.events {
+		if tr, ok := e.(transport.ToolResultEvent); ok {
+			lastResult = i
+			if strings.Contains(string(tr.Result), onePixelPNG) {
+				t.Fatalf("ToolResultEvent carries base64: %s", tr.Result)
+			}
+		}
+	}
+	if refIdx < 0 {
+		t.Fatal("no ArtifactRefEvent sent")
+	}
+	if refIdx < lastResult {
+		t.Fatalf("ArtifactRefEvent (idx %d) sent before the round's last tool result (idx %d)", refIdx, lastResult)
+	}
+	ev := sink.events[refIdx].(transport.ArtifactRefEvent)
+	if ev.ToolCallID != "tu1" || ev.StoreID != "MAIN" || ev.MIME != "image/png" {
+		t.Fatalf("event = %#v", ev)
+	}
+}
+
+func TestOrchestrator_NoArtifactRefWhenToolMessagePersistFails(t *testing.T) {
+	flm := &fakeLLM{script: [][]llm.Event{toolUseRound("tu1"), endRound()}}
+	o, chats, _ := newArtifactOrchestrator(t, flm, []tools.Result{{ToolUseID: "tu1", Output: imageToolOutput()}})
+	chats.failRole = types.ChatRoleTool
+	sink := &recordingSink{}
+	_ = o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink)
+	if eventIndex(sink.events, func(e transport.Event) bool { _, ok := e.(transport.ArtifactRefEvent); return ok }) >= 0 {
+		t.Fatal("ArtifactRefEvent sent although the tool message was not persisted")
 	}
 }

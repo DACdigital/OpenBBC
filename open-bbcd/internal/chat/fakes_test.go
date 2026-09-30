@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 	"sync"
 
@@ -34,6 +35,7 @@ type fakeChatRepo struct {
 	ensured  map[string]string
 	messages []types.ChatMessage
 	nextSeq  int
+	failRole types.ChatRole
 }
 
 func (f *fakeChatRepo) EnsureSession(ctx context.Context, sessionID, scopeID string) error {
@@ -66,6 +68,11 @@ func (f *fakeChatRepo) AppendMessages(ctx context.Context, agentVersionID string
 	_ = agentVersionID
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	for _, m := range msgs {
+		if f.failRole != "" && m.Role == f.failRole {
+			return errors.New("fake: append failed")
+		}
+	}
 	f.messages = append(f.messages, msgs...)
 	return nil
 }
