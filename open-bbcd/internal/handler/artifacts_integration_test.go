@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,22 +28,66 @@ import (
 // blockingStore's Put signals putStarted, then waits for release.
 type blockingStore struct {
 	fakeArtifactStore
-	putStarted chan struct{}
-	release    chan struct{}
+	putStarted  chan struct{}
+	release     chan struct{}
+	startOnce   sync.Once
+	releaseOnce sync.Once
 }
 
 func (b *blockingStore) Put(ctx context.Context, uri, mime string, r io.Reader, size int64) (artifacts.PutResult, error) {
-	close(b.putStarted)
+	b.startOnce.Do(func() { close(b.putStarted) })
 	<-b.release
 	return b.fakeArtifactStore.Put(ctx, uri, mime, r, size)
 }
 
-func newBlockingStore() *blockingStore {
-	return &blockingStore{
+// releasePut unblocks Put; safe to call more than once.
+func (b *blockingStore) releasePut() {
+	b.releaseOnce.Do(func() { close(b.release) })
+}
+
+// newBlockingStore returns a blockingStore that is released at test
+// cleanup too, so an early t.Fatal cannot leak the blocked upload goroutine.
+func newBlockingStore(t *testing.T) *blockingStore {
+	t.Helper()
+	b := &blockingStore{
 		fakeArtifactStore: fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL},
 		putStarted:        make(chan struct{}),
 		release:           make(chan struct{}),
 	}
+	t.Cleanup(b.releasePut)
+	return b
+}
+
+// barrierStore's Put waits until n Puts have arrived (or times out), so
+// every concurrent upload has passed its pre-check before any commits.
+type barrierStore struct {
+	fakeArtifactStore
+	barrierMu sync.Mutex
+	waiting   int // Puts still to arrive
+	all       chan struct{}
+}
+
+func newBarrierStore(n int) *barrierStore {
+	return &barrierStore{
+		fakeArtifactStore: fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL},
+		waiting:           n,
+		all:               make(chan struct{}),
+	}
+}
+
+func (b *barrierStore) Put(ctx context.Context, uri, mime string, r io.Reader, size int64) (artifacts.PutResult, error) {
+	b.barrierMu.Lock()
+	b.waiting--
+	if b.waiting == 0 {
+		close(b.all)
+	}
+	b.barrierMu.Unlock()
+	select {
+	case <-b.all:
+	case <-time.After(5 * time.Second):
+		return artifacts.PutResult{}, errors.New("barrier: not every upload reached Put")
+	}
+	return b.fakeArtifactStore.Put(ctx, uri, mime, r, size)
 }
 
 // seedAgentVersion creates an agent with one version and returns both ids.
@@ -125,7 +170,7 @@ func uploadRequest(t *testing.T, target string) *http.Request {
 // Postgres and returns once its Put is blocked.
 func startBlockedBOUpload(t *testing.T, db *sql.DB, versionID, sessionID string) (*blockingStore, <-chan uploadResult) {
 	t.Helper()
-	store := newBlockingStore()
+	store := newBlockingStore(t)
 	reg, err := loadFakeRegistryStore(store)
 	if err != nil {
 		t.Fatalf("registry: %v", err)
@@ -153,7 +198,7 @@ func TestIntegration_BlockedUploadHoldsNoConnectionAndDoesNotBlockTurn(t *testin
 	store, done := startBlockedBOUpload(t, db, vid, sid)
 
 	if inUse := db.Stats().InUse; inUse != 0 {
-		close(store.release)
+		store.releasePut()
 		<-done
 		t.Fatalf("blocked upload holds %d DB connections, want 0", inUse)
 	}
@@ -170,7 +215,7 @@ func TestIntegration_BlockedUploadHoldsNoConnectionAndDoesNotBlockTurn(t *testin
 	if err := chatRepo.AppendToolMessage(ctx, vid, types.ChatMessage{ID: uuid.NewString(), SessionID: sid, Role: types.ChatRoleTool, Seq: 3, Content: json.RawMessage(`[]`)}, nil); err != nil {
 		t.Fatalf("tool msg while upload blocked: %v", err)
 	}
-	close(store.release)
+	store.releasePut()
 	if res := awaitUpload(t, done); res.code != http.StatusCreated {
 		t.Fatalf("upload: %d %s", res.code, res.body)
 	}
@@ -188,7 +233,7 @@ func TestIntegration_SessionLockedMidUpload_409NoRow(t *testing.T) {
 	if _, err := db.Exec(`UPDATE chat_sessions SET locked_at = now() WHERE id = $1::uuid`, sid); err != nil {
 		t.Fatal(err)
 	}
-	close(store.release)
+	store.releasePut()
 	if res := awaitUpload(t, done); res.code != http.StatusConflict {
 		t.Fatalf("upload: %d %s", res.code, res.body)
 	}
@@ -204,7 +249,7 @@ func TestIntegration_SessionDeletedMidUpload_404(t *testing.T) {
 	if _, err := db.Exec(`DELETE FROM chat_sessions WHERE id = $1::uuid`, sid); err != nil {
 		t.Fatal(err)
 	}
-	close(store.release)
+	store.releasePut()
 	if res := awaitUpload(t, done); res.code != http.StatusNotFound {
 		t.Fatalf("upload: %d %s", res.code, res.body)
 	}
@@ -221,7 +266,7 @@ func TestIntegration_DeployedSessionDeletedMidUpload_404(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	store := newBlockingStore()
+	store := newBlockingStore(t)
 	reg, err := loadFakeRegistryStore(store)
 	if err != nil {
 		t.Fatalf("registry: %v", err)
@@ -235,7 +280,7 @@ func TestIntegration_DeployedSessionDeletedMidUpload_404(t *testing.T) {
 	if _, err := db.Exec(`DELETE FROM deployed_sessions WHERE id = $1::uuid`, sess.ID); err != nil {
 		t.Fatal(err)
 	}
-	close(store.release)
+	store.releasePut()
 	if res := awaitUpload(t, done); res.code != http.StatusNotFound {
 		t.Fatalf("upload: %d %s", res.code, res.body)
 	}
@@ -244,17 +289,42 @@ func TestIntegration_DeployedSessionDeletedMidUpload_404(t *testing.T) {
 	}
 }
 
+// warmPool opens n idle connections, so concurrent commits start together
+// instead of being staggered by connection dials.
+func warmPool(t *testing.T, db *sql.DB, n int) {
+	t.Helper()
+	db.SetMaxIdleConns(n + 2)
+	conns := make([]*sql.Conn, n)
+	for i := range conns {
+		c, err := db.Conn(context.Background())
+		if err != nil {
+			t.Fatalf("warm pool: %v", err)
+		}
+		conns[i] = c
+	}
+	for _, c := range conns {
+		_ = c.Close()
+	}
+}
+
 func TestIntegration_ParallelUploadsRespectCap(t *testing.T) {
-	const maxPending = 3
+	// One upload more than the cap. All of them pass the pre-check and meet
+	// at the barrier in Put, so their commits race: without the per-session
+	// lock the cap overshoots.
+	const maxPending, uploads = 3, 4
 	db := openTestDBForHandlers(t)
+	warmPool(t, db, uploads)
 	vid, sid := seedBOSession(t, db)
-	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
-	reg := buildRegistry(t, store)
+	store := newBarrierStore(uploads)
+	reg, err := loadFakeRegistryStore(store)
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
 	chatRepo := repository.NewChatRepository(db)
 	h := NewArtifactHandler(chatRepo, chatRepo, reg, 5, maxPending, testLogger())
 
 	// Build the requests up front: t.Fatalf must not run off the test goroutine.
-	reqs := make([]*http.Request, maxPending+1)
+	reqs := make([]*http.Request, uploads)
 	for i := range reqs {
 		body, ct := newMultipartBody(t, "f.txt", "text/plain", []byte(fmt.Sprintf("distinct-%d", i)))
 		req := httptest.NewRequest(http.MethodPost, "/", body)
@@ -288,7 +358,7 @@ func TestIntegration_ParallelUploadsRespectCap(t *testing.T) {
 		}
 	}
 	n := countRows(t, db, "chat_session_artifacts", sid)
-	if created != maxPending || conflict != 1 || n != maxPending {
+	if created != maxPending || conflict != uploads-maxPending || n != maxPending {
 		t.Fatalf("created=%d conflict=%d rows=%d codes=%v", created, conflict, n, codes)
 	}
 }

@@ -77,7 +77,7 @@ type fakeArtifactStore struct {
 	statErr      error
 }
 
-func (s *fakeArtifactStore) Kind() string                             { return s.kind }
+func (s *fakeArtifactStore) Kind() string                              { return s.kind }
 func (s *fakeArtifactStore) PreferredDelivery() artifacts.DeliveryMode { return s.delivery }
 func (s *fakeArtifactStore) Put(ctx context.Context, uri, mime string, r io.Reader, size int64) (artifacts.PutResult, error) {
 	s.mu.Lock()
