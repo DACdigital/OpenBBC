@@ -118,9 +118,56 @@ func TestRenderBudget_UnsupportedRefsAreNotCharged(t *testing.T) {
 		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/1", 10)}},
 		{Role: llm.RoleUser, Content: []llm.Block{zip}},
 	}
-	out := render(t, budgetLLM{budget: llm.RenderBudget{MaxBlocks: 1}}, &countingFetcher{}, msgs)
+	f := &countingFetcher{}
+	out := render(t, budgetLLM{budget: llm.RenderBudget{MaxBlocks: 1}}, f, msgs)
 	if !isInline(out[0].Content[0]) {
 		t.Fatalf("older png must still be inline; the zip surrogate costs nothing: %#v", out)
+	}
+	if f.gets != 1 {
+		t.Fatalf("gets = %d, want 1 (only the png is fetched)", f.gets)
+	}
+}
+
+func TestRenderBudget_NilFetcherIsNotCharged(t *testing.T) {
+	gone := png("sha256/gone", 10)
+	gone.StoreID = "GONE"
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/1", 10)}},
+		{Role: llm.RoleUser, Content: []llm.Block{gone}},
+	}
+	f := &countingFetcher{}
+	resolver := func(id string) llm.ArtifactFetcher {
+		if id == "GONE" {
+			return nil
+		}
+		return f
+	}
+	out, err := renderArtifactsForLLM(context.Background(), msgs, budgetLLM{budget: llm.RenderBudget{MaxBlocks: 1}},
+		resolver, newRenderCache(), slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isInline(out[0].Content[0]) || isInline(out[1].Content[0]) {
+		t.Fatalf("want older MAIN inline, newer GONE surrogate; got %#v", out)
+	}
+}
+
+func TestRenderCache_FetchedOnceAcrossPasses(t *testing.T) {
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/1", 10)}}}
+	f := &countingFetcher{}
+	resolver := func(string) llm.ArtifactFetcher { return f }
+	cache := newRenderCache()
+	for i := 0; i < 2; i++ {
+		out, err := renderArtifactsForLLM(context.Background(), msgs, budgetLLM{}, resolver, cache, slog.Default())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isInline(out[0].Content[0]) {
+			t.Fatalf("pass %d: want inline, got %T", i, out[0].Content[0])
+		}
+	}
+	if f.gets != 1 {
+		t.Fatalf("gets = %d, want 1 across two passes", f.gets)
 	}
 }
 

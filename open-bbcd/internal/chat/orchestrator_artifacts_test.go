@@ -282,3 +282,20 @@ func TestOrchestrator_BudgetHoldsAcrossToolRounds(t *testing.T) {
 		}
 	}
 }
+
+func TestOrchestrator_BlobFetchedOncePerTurn(t *testing.T) {
+	flm := &mmFakeLLM{fakeLLM: &fakeLLM{script: [][]llm.Event{toolUseRound("t1"), toolUseRound("t2"), endRound()}}}
+	o, _, _ := newArtifactOrchestrator(t, flm, []tools.Result{
+		{ToolUseID: "t1", Output: imageToolOutput()},
+		{ToolUseID: "t2", Output: []byte(`{}`)},
+	})
+	f := &countingFetcher{}
+	o.WithArtifacts(func(string) llm.ArtifactFetcher { return f })
+	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	// The image ref is sent on calls 2 and 3.
+	if f.gets != 1 {
+		t.Fatalf("blob fetched %d times in one turn, want 1", f.gets)
+	}
+}

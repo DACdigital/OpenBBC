@@ -20,7 +20,9 @@ type renderKey struct{ storeID, uri, mime string }
 // rounds re-send it. It never holds refs, only rendered output, and is
 // discarded when the turn ends. After every render pass it is pruned to
 // the keys placed natively in that pass: history is append-only, so a ref
-// that fell out of the native window never re-enters it.
+// that fell out of the native window never re-enters it. A ref whose
+// actual bytes exceed the remaining budget is not cached and may be
+// re-fetched in a later round (only when a store under-reports size_bytes).
 type renderCache map[renderKey]llm.Block
 
 func newRenderCache() renderCache { return renderCache{} }
@@ -46,7 +48,7 @@ func base64Len(n int64) int64 { return ((n + 2) / 3) * 4 }
 //   - otherwise the ref is rendered (from the per-turn cache or by
 //     fetching). ErrUnsupported downgrades it to an uncharged surrogate.
 //     A rendered InlineMediaBlock is charged at the larger of its declared
-//     and actual size; if that actual cost exceeds MaxBytes the budget is
+//     and actual size; if that actual cost would exceed the remaining MaxBytes the budget is
 //     exhausted and the ref becomes a surrogate.
 //
 // On return the cache holds only the keys placed natively in this pass.
