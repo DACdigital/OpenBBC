@@ -68,7 +68,9 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 			http.Error(w, "upload exceeds ARTIFACT_MAX_UPLOAD_MB", http.StatusRequestEntityTooLarge)
 			return
 		}
-		s.logger.Info("artifact upload: malformed multipart", slog.Any("err", err))
+		// The parser error can echo the part's Content-Disposition line,
+		// which carries the filename: log a fixed message only.
+		s.logger.Info("artifact upload: malformed multipart", slog.Bool("max_bytes", false))
 		http.Error(w, "malformed multipart body", http.StatusBadRequest)
 		return
 	}
@@ -108,7 +110,8 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 	// 2. Pre-check (non-locking, fast fail): dedup hit or cap.
 	existing, err := s.rows.PrecheckUpload(ctx, sessionID, storeID, uri, s.maxPending)
 	if err != nil {
-		Error(w, err)
+		s.fail(w, "precheck upload", err, slog.String("session_id", sessionID),
+			slog.String("store_id", storeID), slog.String("uri", uri))
 		return
 	}
 	if existing != nil {
@@ -145,7 +148,8 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 		Filename:  header.Filename,
 	}, s.maxPending)
 	if err != nil {
-		Error(w, err)
+		s.fail(w, "commit upload", err, slog.String("session_id", sessionID),
+			slog.String("store_id", storeID), slog.String("uri", uri))
 		return
 	}
 	JSON(w, http.StatusCreated, pendingArtifactFrom(row))
@@ -155,7 +159,7 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 func (s *artifactService) listPending(w http.ResponseWriter, r *http.Request, sessionID string) {
 	rows, err := s.rows.ListPendingArtifacts(r.Context(), sessionID)
 	if err != nil {
-		Error(w, err)
+		s.fail(w, "list pending artifacts", err, slog.String("session_id", sessionID))
 		return
 	}
 	out := make([]PendingArtifact, 0, len(rows))
@@ -170,8 +174,29 @@ func (s *artifactService) listPending(w http.ResponseWriter, r *http.Request, se
 // deletePending removes one pending row (not the blob): 204, 404, or 409 if consumed.
 func (s *artifactService) deletePending(w http.ResponseWriter, r *http.Request, sessionID string) {
 	if err := s.rows.DeletePendingArtifact(r.Context(), sessionID, r.PathValue("id")); err != nil {
-		Error(w, err)
+		s.fail(w, "delete pending artifact", err, slog.String("session_id", sessionID),
+			slog.String("artifact_id", r.PathValue("id")))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// fail writes err via handler.Error, logging it first unless it is one of
+// the sentinels the artifact routes map to a client status. attrs must
+// never carry the filename.
+func (s *artifactService) fail(w http.ResponseWriter, op string, err error, attrs ...slog.Attr) {
+	switch {
+	case errors.Is(err, types.ErrNotFound),
+		errors.Is(err, types.ErrSessionLocked),
+		errors.Is(err, types.ErrPendingArtifactCap),
+		errors.Is(err, types.ErrArtifactConsumed):
+	default:
+		args := make([]any, 0, len(attrs)+1)
+		for _, a := range attrs {
+			args = append(args, a)
+		}
+		args = append(args, slog.Any("err", err))
+		s.logger.Error("artifact "+op+" failed", args...)
+	}
+	Error(w, err)
 }

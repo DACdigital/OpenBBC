@@ -18,12 +18,13 @@ import (
 // memRows is an in-memory SessionArtifactStore with the repository's
 // semantics (dedup, cap, pending/consumed, per-session scope).
 type memRows struct {
-	mu        sync.Mutex
-	rows      []*types.SessionArtifact
-	seq       int
-	commitErr error // if set, CommitUpload returns it
-	commits   int
-	lookupErr error // if set, LookupSessionArtifact returns it
+	mu          sync.Mutex
+	rows        []*types.SessionArtifact
+	seq         int
+	commitErr   error // if set, CommitUpload returns it
+	precheckErr error // if set, PrecheckUpload returns it
+	commits     int
+	lookupErr   error // if set, LookupSessionArtifact returns it
 }
 
 func (m *memRows) findPending(sid, store, uri string) *types.SessionArtifact {
@@ -48,6 +49,9 @@ func (m *memRows) countPending(sid string) int {
 func (m *memRows) PrecheckUpload(ctx context.Context, sid, store, uri string, max int) (*types.SessionArtifact, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.precheckErr != nil {
+		return nil, m.precheckErr
+	}
 	if r := m.findPending(sid, store, uri); r != nil {
 		c := *r
 		return &c, nil
@@ -201,6 +205,22 @@ func TestUpload_IdenticalBytesTwice_SameRowOnePut(t *testing.T) {
 	}
 	if n := len(b.rows.rows); n != 1 {
 		t.Fatalf("rows = %d, want 1", n)
+	}
+	// The dedup hit is settled at pre-check: no second Stat, no second commit.
+	if b.store.statCalls != 1 || b.rows.commits != 1 {
+		t.Fatalf("stat %d commits %d, want 1/1", b.store.statCalls, b.rows.commits)
+	}
+}
+
+func TestUpload_PrecheckError500_NoStoreOrCommit(t *testing.T) {
+	b := newBOHarness(t, 10)
+	b.rows.precheckErr = errors.New("db down")
+	rec, _ := b.upload(t, "a.txt", "text/plain", []byte("x"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want 500", rec.Code)
+	}
+	if b.store.statCalls != 0 || b.store.putCalls != 0 || b.rows.commits != 0 {
+		t.Fatalf("store/commit touched: stat %d put %d commits %d", b.store.statCalls, b.store.putCalls, b.rows.commits)
 	}
 }
 
@@ -367,7 +387,8 @@ func TestBOArtifactRoutes_SessionOfOtherVersion(t *testing.T) {
 	b := newBOHarness(t, 10)
 	rec := httptest.NewRecorder()
 	b.h.HandleListPending(rec, boRequest(http.MethodGet, "/", "v-other", "s1"))
-	if rec.Code == http.StatusOK {
-		t.Fatalf("list on another version's session: %d", rec.Code)
+	// GetSession reports ErrSessionAgentMismatch → 403 (the BO mapping).
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("list on another version's session: %d, want 403", rec.Code)
 	}
 }
