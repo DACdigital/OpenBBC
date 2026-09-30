@@ -270,6 +270,30 @@ func TestSessionArtifacts_DeleteAndLookup(t *testing.T) {
 	}
 }
 
+// uuid.Parse accepts urn:uuid:, braced and 32-hex spellings that Postgres
+// ::uuid rejects or that the handlers never produce; only the canonical
+// 36-char form may reach the query, anything else is ErrNotFound.
+func TestSessionArtifacts_DeleteNonCanonicalID_NotFound(t *testing.T) {
+	for _, s := range saSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			a, err := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []string{"urn:uuid:" + a.ID, "{" + a.ID + "}", strings.ReplaceAll(a.ID, "-", "")} {
+				if err := s.store.DeletePendingArtifact(ctx, sid, id); !errors.Is(err, types.ErrNotFound) {
+					t.Fatalf("delete %q: err=%v, want ErrNotFound", id, err)
+				}
+			}
+			if rows, err := s.store.ListPendingArtifacts(ctx, sid); err != nil || len(rows) != 1 {
+				t.Fatalf("pending after rejected deletes: %d %v", len(rows), err)
+			}
+		})
+	}
+}
+
 // Lookup must return the NEWEST row when a consumed and a pending row exist
 // for the same blob.
 func TestSessionArtifacts_LookupReturnsNewest(t *testing.T) {

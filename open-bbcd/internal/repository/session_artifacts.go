@@ -192,9 +192,11 @@ func (t sessionArtifacts) HasPendingArtifacts(ctx context.Context, sessionID str
 
 // DeletePendingArtifact removes one pending upload. ErrArtifactConsumed if
 // the row is in this session but already claimed; ErrNotFound if no row
-// with that id is in this session (including a malformed id).
+// with that id is in this session (including a malformed or non-canonical
+// id: uuid.Parse also accepts urn:uuid:, braced and 32-hex spellings, which
+// Postgres ::uuid rejects or which no handler ever returns).
 func (t sessionArtifacts) DeletePendingArtifact(ctx context.Context, sessionID, id string) error {
-	if _, err := uuid.Parse(id); err != nil {
+	if _, err := uuid.Parse(id); err != nil || len(id) != 36 {
 		return types.ErrNotFound
 	}
 	res, err := t.db.ExecContext(ctx, `
