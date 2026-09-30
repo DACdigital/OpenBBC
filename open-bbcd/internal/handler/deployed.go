@@ -27,6 +27,8 @@ type DeployedStore interface {
 	UpdateSessionTitle(ctx context.Context, sessionID, userID, title string) error
 	DeleteSession(ctx context.Context, sessionID, userID string) error
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.DeployedMessage, error)
+	// HasPendingArtifacts is true when the session has >=1 pending artifact (empty-turn rule).
+	HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error)
 }
 
 type DeployedHandler struct {
@@ -243,6 +245,19 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	for _, b := range req.Input {
 		if b.Type == "text" && b.Text != "" {
 			input = append(input, llm.TextBlock{Text: b.Text})
+		}
+	}
+
+	// Empty-turn rule (spec § REST — turn): mirrors the BO turn.
+	if len(input) == 0 {
+		has, err := h.store.HasPendingArtifacts(r.Context(), sessionID)
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		if !has {
+			http.Error(w, types.ErrEmptyTurn.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 

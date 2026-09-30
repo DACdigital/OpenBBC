@@ -109,6 +109,7 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	// failure. Any other Load error IS a boot failure — the deployer
 	// misconfigured something and would silently ship without artifacts.
 	var artifactHandler *ArtifactHandler
+	var deployedArtifactHandler *DeployedArtifactHandler
 	{
 		reg, regErr := artifacts.Load(cfg.Artifacts)
 		switch {
@@ -120,6 +121,7 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 			}
 			cancel()
 			artifactHandler = NewArtifactHandler(chatRepo, chatRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
+			deployedArtifactHandler = NewDeployedArtifactHandler(versionRepo, deployedRepo, deployedRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
 			logger.Info("artifacts: registry hydrated",
 				slog.Int("stores", len(reg.IDs())),
 				slog.String("default", reg.DefaultID()),
@@ -233,6 +235,13 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	deployedOrchestrator.Model = cfg.Anthropic.DefaultModel
 	deployedOrchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
+	// Deployed parity with BO: claimed refs render natively and MCP tool
+	// results are normalised into tool_result artifacts.
+	if artifactHandler != nil {
+		deployedOrchestrator.
+			WithArtifacts(artifactResolverFrom(artifactHandler.svc.registry)).
+			WithArtifactUploader(artifactUploader{registry: artifactHandler.svc.registry})
+	}
 
 	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger)
 	deployHandler := NewDeployHandler(agentRepo, versionRepo, agentWiringRepo)
@@ -394,6 +403,9 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("PATCH /deployed/{agent_id}/sessions/{session_id}/title", deployedHandler.UpdateTitle)
 	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}", deployedHandler.DeleteSession)
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions/{session_id}/turn", deployedHandler.Turn)
+	if deployedArtifactHandler != nil {
+		deployedArtifactHandler.Register(mux)
+	}
 
 	// Static
 	staticFS, err := fs.Sub(web.Assets, "static")

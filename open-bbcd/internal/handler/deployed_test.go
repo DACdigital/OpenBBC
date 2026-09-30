@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,9 +27,10 @@ func (s *stubDeployedAgentReader) CurrentDeployedID(ctx context.Context, agentID
 
 // stubDeployedStore is an in-memory DeployedStore.
 type stubDeployedStore struct {
-	sessions  map[string]*types.DeployedSession // by id
-	messages  map[string][]*types.DeployedMessage
-	createErr error
+	sessions   map[string]*types.DeployedSession // by id
+	messages   map[string][]*types.DeployedMessage
+	createErr  error
+	hasPending bool
 }
 
 func newStubDeployedStore() *stubDeployedStore {
@@ -52,6 +54,9 @@ func (s *stubDeployedStore) GetSession(ctx context.Context, sessionID, userID st
 		return nil, types.ErrNotFound
 	}
 	return sess, nil
+}
+func (s *stubDeployedStore) HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error) {
+	return s.hasPending, nil
 }
 func (s *stubDeployedStore) ListSessions(ctx context.Context, agentID, userID string) ([]*types.DeployedSession, error) {
 	var out []*types.DeployedSession
@@ -237,4 +242,52 @@ func TestDeployedHandler_Turn_NoDeployedVersion_404(t *testing.T) {
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("got %d", rr.Code)
 	}
+}
+
+func TestDeployedTurn_EmptyTurn_400(t *testing.T) {
+	store := newStubDeployedStore()
+	store.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "a1", UserID: "u1"}
+	runner := &stubTurnRunner{}
+	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: "v1"}, store, runner, jsonl.NewFactory())
+	req := httptest.NewRequest("POST", "/deployed/a1/sessions/s1/turn", strings.NewReader(`{"user_id":"u1","input":[]}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != "empty turn: no text and no pending artifacts" {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
+	}
+	if runner.capturedSessionID != "" {
+		t.Fatal("orchestrator ran")
+	}
+}
+
+func TestDeployedTurn_ArtifactOnly_Accepted(t *testing.T) {
+	store := newStubDeployedStore()
+	store.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "a1", UserID: "u1"}
+	store.hasPending = true
+	runner := &stubTurnRunner{}
+	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: "v1"}, store, runner, jsonl.NewFactory())
+	req := httptest.NewRequest("POST", "/deployed/a1/sessions/s1/turn", strings.NewReader(`{"user_id":"u1","input":[{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/x"}]}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || runner.capturedSessionID != "s1" || len(runner.capturedInput) != 0 {
+		t.Fatalf("status %d input %+v", rec.Code, runner.capturedInput)
+	}
+}
+
+// Go 1.22 ServeMux panics on conflicting patterns; prove the deployed turn /
+// session routes and the artifact routes coexist on one mux.
+func TestDeployedArtifactRoutes_NoPatternConflict(t *testing.T) {
+	d := newDeployedHarness(t, "v1")
+	ds := newStubDeployedStore()
+	h := NewDeployedHandler(&stubDeployedAgentReader{deployedID: "v1"}, ds, nil, &stubTurnRunner{}, jsonl.NewFactory(), testLogger())
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /deployed/{agent_id}/sessions", h.CreateSession)
+	mux.HandleFunc("GET /deployed/{agent_id}/sessions", h.ListSessions)
+	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{session_id}", h.GetSession)
+	mux.HandleFunc("PATCH /deployed/{agent_id}/sessions/{session_id}/title", h.UpdateTitle)
+	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}", h.DeleteSession)
+	mux.HandleFunc("POST /deployed/{agent_id}/sessions/{session_id}/turn", h.Turn)
+	sessions := newStubDeployedStore()
+	ah := NewDeployedArtifactHandler(&stubDeployedAgentReader{deployedID: "v1"}, sessions, d.rows, buildRegistry(t, d.store), 1, 10, nil)
+	ah.Register(mux) // panics on conflict
 }
