@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -207,7 +208,9 @@ func TestSessionArtifacts_ConcurrentCommitsRespectCap(t *testing.T) {
 				}
 			}
 			var n int
-			_ = s.db.QueryRow(`SELECT COUNT(*) FROM `+s.table+` WHERE session_id=$1::uuid`, sid).Scan(&n)
+			if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+s.table+` WHERE session_id=$1::uuid`, sid).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
 			if refused != 1 || n != max {
 				t.Fatalf("refused=%d rows=%d, want 1 and %d", refused, n, max)
 			}
@@ -220,7 +223,10 @@ func TestSessionArtifacts_DeleteAndLookup(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			ctx := context.Background()
 			sid, other := s.newSession(t), s.newSession(t)
-			a, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", "a.png"), 10)
+			a, err := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", "a.png"), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			if got, err := s.store.LookupSessionArtifact(ctx, sid, "MAIN", "sha256/aa"); err != nil || got.Filename != "a.png" {
 				t.Fatalf("lookup pending: %+v %v", got, err)
@@ -285,6 +291,69 @@ func TestSessionArtifacts_LookupReturnsNewest(t *testing.T) {
 			got, err := s.store.LookupSessionArtifact(ctx, sid, "MAIN", "sha256/aa")
 			if err != nil || got.Filename != "new.png" {
 				t.Fatalf("lookup newest: %+v %v", got, err)
+			}
+		})
+	}
+}
+
+// Postgres accepts several textual spellings of one uuid; the advisory lock
+// must be keyed on the canonical form or the cap / dedup can be bypassed.
+func TestSessionArtifacts_IDSpellingsShareLock(t *testing.T) {
+	spell := func(id string, i int) string {
+		switch i % 4 {
+		case 0:
+			return id
+		case 1:
+			return strings.ToUpper(id)
+		case 2:
+			return "{" + id + "}"
+		}
+		return strings.ReplaceAll(id, "-", "")
+	}
+	run := func(t *testing.T, s saSurface, max int, uri func(i int) string) ([]error, int) {
+		sid := s.newSession(t)
+		const n = 8
+		var wg sync.WaitGroup
+		errs := make([]error, n)
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				_, errs[i] = s.store.CommitUpload(context.Background(), pendingRow(spell(sid, i), uri(i), ""), max)
+			}(i)
+		}
+		wg.Wait()
+		var rows int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+s.table+` WHERE session_id=$1::uuid`, sid).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		return errs, rows
+	}
+	for _, s := range saSurfaces(t) {
+		t.Run(s.name+"/cap", func(t *testing.T) {
+			errs, rows := run(t, s, 1, func(i int) string { return fmt.Sprintf("sha256/%02d", i) })
+			refused := 0
+			for _, err := range errs {
+				switch {
+				case errors.Is(err, types.ErrPendingArtifactCap):
+					refused++
+				case err != nil:
+					t.Fatalf("unexpected: %v", err)
+				}
+			}
+			if rows != 1 || refused != len(errs)-1 {
+				t.Fatalf("rows=%d refused=%d, want 1 and %d", rows, refused, len(errs)-1)
+			}
+		})
+		t.Run(s.name+"/same-blob", func(t *testing.T) {
+			errs, rows := run(t, s, 10, func(int) string { return "sha256/aa" })
+			for _, err := range errs {
+				if err != nil {
+					t.Fatalf("unexpected: %v", err)
+				}
+			}
+			if rows != 1 {
+				t.Fatalf("rows=%d, want 1", rows)
 			}
 		})
 	}

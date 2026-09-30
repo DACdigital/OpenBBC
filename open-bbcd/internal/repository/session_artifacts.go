@@ -96,7 +96,9 @@ func (t sessionArtifacts) PrecheckUpload(ctx context.Context, sessionID, storeID
 // turns never take. Returns the existing pending row on a dedup hit (the cap
 // does not apply to it), ErrPendingArtifactCap at the cap, ErrNotFound if
 // the session is gone (re-read or FK violation), and ErrSessionLocked for a
-// locked BO session. Only a.SessionID, StoreID, URI, MIME, SizeBytes,
+// locked BO session. A dedup hit may return a row that an in-flight
+// (uncommitted) turn is about to claim; the file still reaches that turn.
+// Only a.SessionID, StoreID, URI, MIME, SizeBytes,
 // Sha256 and Filename are read.
 func (t sessionArtifacts) CommitUpload(ctx context.Context, a types.SessionArtifact, maxPending int) (*types.SessionArtifact, error) {
 	tx, err := t.db.BeginTx(ctx, nil)
@@ -105,7 +107,7 @@ func (t sessionArtifacts) CommitUpload(ctx context.Context, a types.SessionArtif
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1::int4, hashtext($2::text))`, t.lockKey, a.SessionID); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1::int4, hashtext($2::uuid::text))`, t.lockKey, a.SessionID); err != nil {
 		return nil, err
 	}
 	if err := t.recheckSession(ctx, tx, a.SessionID); err != nil {
@@ -134,9 +136,19 @@ func (t sessionArtifacts) CommitUpload(ctx context.Context, a types.SessionArtif
 		if isForeignKeyViolation(err) {
 			return nil, types.ErrNotFound
 		}
+		if isUniqueViolation(err) {
+			// Backstop: a concurrent commit inserted the same pending blob.
+			// The tx is aborted, so re-read outside it and treat as a dedup hit.
+			if dup, ferr := t.findPending(ctx, t.db, a.SessionID, a.StoreID, a.URI); ferr == nil && dup != nil {
+				return dup, nil
+			}
+		}
 		return nil, err
 	}
-	return row, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return row, nil
 }
 
 // ListPendingArtifacts returns the session's pending uploads in (created_at, id)
