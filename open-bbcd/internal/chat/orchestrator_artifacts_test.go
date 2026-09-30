@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -80,5 +81,25 @@ func TestOrchestrator_ArtifactRefsSurviveHistoryReload(t *testing.T) {
 	tb, ok := first.Content[1].(llm.TextBlock)
 	if !ok || !strings.Contains(tb.Text, "[Attachment: q3.pdf") {
 		t.Fatalf("second block = %#v, want the q3.pdf text surrogate", first.Content[1])
+	}
+}
+
+func TestOrchestrator_ToolMessage_ResultsBeforeRefs(t *testing.T) {
+	flm := &fakeLLM{script: [][]llm.Event{toolUseRound("tu1", "tu2"), endRound()}}
+	o, chats, _ := newArtifactOrchestrator(t, flm, []tools.Result{
+		{ToolUseID: "tu1", Output: imageToolOutput()},
+		{ToolUseID: "tu2", Output: []byte(`{}`)},
+	})
+	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	tm := messagesWithRole(chats, types.ChatRoleTool)
+	if len(tm) != 1 {
+		t.Fatalf("tool messages = %d, want 1", len(tm))
+	}
+	got := blockTypes(t, tm[0].Content)
+	want := []string{"tool_result", "tool_result", "artifact_ref"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tool message block order = %v, want %v", got, want)
 	}
 }

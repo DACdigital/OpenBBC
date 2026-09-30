@@ -352,8 +352,13 @@ func (o *Orchestrator) Turn(
 			break
 		}
 
-		// Execute the pending tools and build a tool-role message.
-		toolBlocks := make([]llm.Block, 0, len(pendingToolUses))
+		// Execute the pending tools and build the tool-role message.
+		// Block order matters: every tool_result comes first (tool-call
+		// order), then every artifact_ref (tool-call order, then item
+		// order). Anthropic rejects a user message answering tool_use
+		// whose content does not start with the tool_result blocks.
+		toolResults := make([]llm.Block, 0, len(pendingToolUses))
+		var toolRefs []llm.Block
 		for _, tu := range pendingToolUses {
 			res, err := toolHandler.Call(ctx, agent.Architecture, tools.Call{
 				ID:    tu.ID,
@@ -370,41 +375,27 @@ func (o *Orchestrator) Turn(
 				Result:     res.Output,
 				IsError:    res.IsError,
 			})
-			// Normalise MCP-shaped inline media in the tool result into
-			// ArtifactRefBlocks that precede the ToolResultBlock. The
-			// LLM sees both the artifact refs (rendered via
-			// MultimodalRenderer on the next round) and the original
-			// tool_result content. Uploader is optional — when nil,
-			// tool results pass through unchanged (feature-off path).
 			if o.artifactUploader != nil && !res.IsError {
 				refs, remaining, nerr := normaliseToolResult(ctx, res.Output, o.artifactUploader)
 				if nerr == nil {
-					for _, r := range refs {
-						toolBlocks = append(toolBlocks, r)
-					}
-					// If normalisation consumed EVERYTHING, still emit
-					// an empty tool_result so the model knows the tool
-					// returned (otherwise the assistant expects a
-					// tool_result matching this ID). Preserve the raw
-					// output shape when nothing was normalised.
+					toolRefs = append(toolRefs, refs...)
 					if len(remaining) > 0 {
 						res.Output = remaining
 					}
 				} else {
-					// Log but continue with the raw output — a normaliser
-					// error must not fail the whole turn.
 					o.logger.Warn("tool result normalisation failed; passing through raw output",
 						slog.String("tool", tu.Name),
 						slog.Any("err", nerr),
 					)
 				}
 			}
-			toolBlocks = append(toolBlocks, llm.ToolResultBlock{
+			toolResults = append(toolResults, llm.ToolResultBlock{
 				ToolUseID: tu.ID,
 				Result:    res.Output,
 				IsError:   res.IsError,
 			})
 		}
+		toolBlocks := append(toolResults, toolRefs...)
 
 		// Persist the tool-role message.
 		toolMsgID := uuid.NewString()
