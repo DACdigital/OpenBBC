@@ -73,8 +73,9 @@ func NewArtifactHandler(
 }
 
 // ArtifactUploadResponse is the JSON body the client receives on a
-// successful upload. The client embeds this into the outgoing turn body
-// as an artifact_ref content block on the user-role message.
+// successful upload. Note: the turn endpoint ignores client-supplied
+// artifact_ref input blocks, so an uploaded file cannot currently be
+// attached to a BO turn (staged uploads replace this flow).
 type ArtifactUploadResponse struct {
 	StoreID   string `json:"store_id"`
 	URI       string `json:"uri"`
