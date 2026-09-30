@@ -62,3 +62,12 @@ func TestProbe_MissingKeyForbidden_FailsNamingListPermission(t *testing.T) {
 		t.Fatalf("err = %v, want ErrProbeFailed naming s3:ListBucket", err)
 	}
 }
+
+func TestProbe_MissingKeyServerError_FailsWithoutListHint(t *testing.T) {
+	srv := fakeS3(t, http.StatusInternalServerError)
+	defer srv.Close()
+	err := probeStore(t, srv).Probe(context.Background())
+	if !errors.Is(err, ErrProbeFailed) || strings.Contains(err.Error(), "s3:ListBucket") {
+		t.Fatalf("err = %v, want ErrProbeFailed without the s3:ListBucket hint", err)
+	}
+}

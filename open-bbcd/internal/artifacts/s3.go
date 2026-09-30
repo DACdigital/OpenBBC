@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -208,7 +209,10 @@ func (s *s3Store) Probe(ctx context.Context) error {
 	missing := "_probe/missing-" + hex.EncodeToString(buf)
 	st, err := s.Stat(ctx, missing)
 	if err != nil {
-		return fmt.Errorf("%w: stat of a missing key did not report not-found (%v); the store credentials need list permission on bucket %q (s3:ListBucket)", ErrProbeFailed, err, s.bucket)
+		if minio.ToErrorResponse(err).StatusCode == http.StatusForbidden {
+			return fmt.Errorf("%w: stat of a missing key did not report not-found (%v); the store credentials need list permission on bucket %q (s3:ListBucket)", ErrProbeFailed, err, s.bucket)
+		}
+		return fmt.Errorf("%w: stat of missing key failed: %v", ErrProbeFailed, err)
 	}
 	if st.Exists {
 		return fmt.Errorf("%w: stat of random missing key %q reported it exists", ErrProbeFailed, missing)

@@ -53,20 +53,20 @@ func (f *fakeRefResolver) SessionReferences(ctx context.Context, sessionID, stor
 // fakeArtifactStore — minimal ArtifactStore stub for the handler tests.
 // Records calls; can be programmed with canned Get/Sign/Stat/Put outcomes.
 type fakeArtifactStore struct {
-	kind      string
-	delivery  artifacts.DeliveryMode
-	statHit   bool // if true, Stat reports existing blob (dedup path)
-	statSize  int64
-	putCalls  int
-	getCalls  int
-	signCalls int
+	kind         string
+	delivery     artifacts.DeliveryMode
+	statHit      bool // if true, Stat reports existing blob (dedup path)
+	statSize     int64
+	putCalls     int
+	getCalls     int
+	signCalls    int
 	lastSignOpts artifacts.SignOptions
-	getData   []byte
-	signedURL string
-	putErr    error
-	getErr    error
-	signErr   error
-	statErr   error
+	getData      []byte
+	signedURL    string
+	putErr       error
+	getErr       error
+	signErr      error
+	statErr      error
 }
 
 func (s *fakeArtifactStore) Kind() string                             { return s.kind }
