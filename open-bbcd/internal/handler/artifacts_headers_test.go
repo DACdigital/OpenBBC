@@ -18,7 +18,7 @@ func retrieveBytes(t *testing.T, mime string, payload []byte) *httptest.Response
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
-	h := NewArtifactHandler(sessions, &fakeRefResolver{found: true, mime: mime}, reg, 10, nil)
+	h := NewArtifactHandler(sessions, seededRows(t, "MAIN", "sha256/abc", mime), reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")

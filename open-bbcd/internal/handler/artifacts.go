@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
@@ -55,193 +54,77 @@ func (r rowRefResolver) SessionReferences(ctx context.Context, sessionID, storeI
 	return true, a.MIME, nil
 }
 
-// ArtifactHandler wires the two chat-artifacts routes:
-//   - POST /agent_versions/{version_id}/chat/{session_id}/artifacts
-//   - GET  /agent_versions/{version_id}/chat/{session_id}/artifacts/{path}
+// ArtifactHandler wires the BO chat-artifacts routes:
+//   - POST   /agent_versions/{version_id}/chat/{session_id}/artifacts
+//   - GET    /agent_versions/{version_id}/chat/{session_id}/artifacts/{path}
+//   - GET    /agent_versions/{version_id}/chat/{session_id}/pending-artifacts
+//   - DELETE /agent_versions/{version_id}/chat/{session_id}/pending-artifacts/{id}
 //
-// Both routes verify (sessionID, versionID) via the session store's
-// existing GetSession semantics — an unknown session or a session
-// belonging to a different version resolves as 404 (via
-// types.ErrNotFound / types.ErrSessionAgentMismatch mapping in
-// handler.Error).
+// Each route runs the BO preamble (boSession) and then delegates to the
+// surface-independent artifactService.
 type ArtifactHandler struct {
-	sessions    ArtifactSessionReader
-	refs        ArtifactRefResolver
-	registry    *artifacts.Registry
-	maxUploadMB int
-	logger      *slog.Logger
+	sessions ArtifactSessionReader
+	refs     ArtifactRefResolver // removed in Task 9
+	svc      *artifactService
 }
 
 func NewArtifactHandler(
 	sessions ArtifactSessionReader,
-	refs ArtifactRefResolver,
+	rows SessionArtifactStore,
 	registry *artifacts.Registry,
-	maxUploadMB int,
+	maxUploadMB, maxPending int,
 	logger *slog.Logger,
 ) *ArtifactHandler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &ArtifactHandler{
-		sessions:    sessions,
-		refs:        refs,
-		registry:    registry,
-		maxUploadMB: maxUploadMB,
-		logger:      logger,
+		sessions: sessions,
+		refs:     rowRefResolver{rows: rows},
+		svc: &artifactService{rows: rows, registry: registry, maxUploadMB: maxUploadMB,
+			maxPending: maxPending, logger: logger},
 	}
 }
 
-// ArtifactUploadResponse is the JSON body the client receives on a
-// successful upload. Note: the turn endpoint ignores client-supplied
-// artifact_ref input blocks, so an uploaded file cannot currently be
-// attached to a BO turn (staged uploads replace this flow).
-type ArtifactUploadResponse struct {
-	StoreID   string `json:"store_id"`
-	URI       string `json:"uri"`
-	MIME      string `json:"mime"`
-	SizeBytes int64  `json:"size_bytes"`
-	Sha256    string `json:"sha256"`
-	Filename  string `json:"filename,omitempty"`
-}
-
-// HandleUpload handles POST /agent_versions/{v}/chat/{s}/artifacts.
-//
-// Body: multipart/form-data with a single "file" field. The multipart
-// filename parameter (RFC 7578) is preserved on the response as a
-// display label; storage URI is content-addressable and does not use
-// the filename.
-//
-// Errors follow the daemon convention via handler.Error:
-//   - 400 malformed multipart / missing "file" field
-//   - 404 session not found or belongs to a different version
-//   - 409 session is dataset-locked (types.ErrSessionLocked)
-//   - 413 payload exceeds ARTIFACT_MAX_UPLOAD_MB
-//   - 502 upstream store error
-func (h *ArtifactHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
-	versionID := r.PathValue("version_id")
+// boSession runs the BO preamble: GetSession(session_id, version_id)
+// (unknown → 404, other version → handler.Error's mapping); with
+// requireUnlocked, a dataset-locked session → 409. Returns the session id.
+func (h *ArtifactHandler) boSession(w http.ResponseWriter, r *http.Request, requireUnlocked bool) (string, bool) {
 	sessionID := r.PathValue("session_id")
-
-	// Session existence + version match. Reuse the existing
-	// GetSession semantics so all BO chat routes stay in lock-step.
-	sess, err := h.sessions.GetSession(r.Context(), sessionID, versionID)
+	sess, err := h.sessions.GetSession(r.Context(), sessionID, r.PathValue("version_id"))
 	if err != nil {
 		Error(w, err)
-		return
+		return "", false
 	}
-	if sess.LockedAt != nil {
+	if requireUnlocked && sess.LockedAt != nil {
 		Error(w, types.ErrSessionLocked)
-		return
+		return "", false
 	}
-
-	// Cap request body size at the boundary — Go's http.MaxBytesReader
-	// wraps the body and returns an error on Read past the limit, which
-	// ParseMultipartForm surfaces as a request-too-large.
-	maxBytes := int64(h.maxUploadMB) << 20
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-
-	// ParseMultipartForm buffers small parts to memory and larger to
-	// disk temp files. The size parameter is a soft memory budget, not
-	// a hard cap — the hard cap comes from MaxBytesReader above.
-	if err := r.ParseMultipartForm(maxBytes); err != nil {
-		// MaxBytesError has an unexported type on some Go versions;
-		// distinguish by message so 413 wins over 400.
-		if isMaxBytesError(err) {
-			http.Error(w, "upload exceeds ARTIFACT_MAX_UPLOAD_MB", http.StatusRequestEntityTooLarge)
-			return
-		}
-		h.logger.Info("artifact upload: malformed multipart", slog.Any("err", err))
-		http.Error(w, "malformed multipart body", http.StatusBadRequest)
-		return
-	}
-
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		h.logger.Info("artifact upload: missing 'file' field", slog.Any("err", err))
-		http.Error(w, "missing 'file' field", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	// Content-Type from the multipart header, falling back to a generic
-	// value if the client didn't send one. This is only a hint:
-	// artifacts.ResolveMIME decides the stored label below (native-render
-	// types are verified against the bytes). The framework accepts anything.
-	mime := header.Header.Get("Content-Type")
-	if mime == "" {
-		mime = "application/octet-stream"
-	}
-	filename := header.Filename
-
-	// Route the write to the env-nominated default store.
-	store := h.registry.Default()
-	if store == nil {
-		h.logger.Error("artifact upload: registry has no default store (boot invariant violated)")
-		http.Error(w, "artifact registry misconfigured", http.StatusInternalServerError)
-		return
-	}
-	storeID := h.registry.DefaultID()
-
-	// Buffer the upload while hashing it. Uploading a 10-30MB media file
-	// into memory is acceptable at the ARTIFACT_MAX_UPLOAD_MB scale spec
-	// commits to; larger caps warrant temp-file spilling in a follow-on.
-	data, sum, err := hashAndBuffer(file, maxBytes)
-	if err != nil {
-		if errors.Is(err, errMaxSizeExceeded) {
-			http.Error(w, "upload exceeds ARTIFACT_MAX_UPLOAD_MB", http.StatusRequestEntityTooLarge)
-			return
-		}
-		Error(w, err)
-		return
-	}
-	size := int64(len(data))
-	buf := bytes.NewReader(data)
-	mime = artifacts.ResolveMIME(mime, data)
-	uri := "sha256/" + hex.EncodeToString(sum)
-
-	// Dedup: if this exact content is already in the store, skip the
-	// Put and return the existing ref. On any Stat error other than
-	// "not exists" we err on the side of retrying the Put — a Stat
-	// failure isn't a reason to refuse the upload.
-	if stat, err := store.Stat(r.Context(), uri); err == nil && stat.Exists {
-		// Prefer the stored metadata as source-of-truth for size/sha256
-		// even though they should equal the incoming stream's values.
-		// The framework computes sha256 from the URI (verbatim tail);
-		// size falls back to the incoming stream if Stat lacks it.
-		respondUploadJSON(w, ArtifactUploadResponse{
-			StoreID:   storeID,
-			URI:       uri,
-			MIME:      mime,
-			SizeBytes: firstNonZero(stat.SizeBytes, size),
-			Sha256:    hex.EncodeToString(sum),
-			Filename:  filename,
-		})
-		return
-	}
-
-	if _, err := store.Put(r.Context(), uri, mime, buf, size); err != nil {
-		h.logger.Error("artifact put failed",
-			slog.String("store_id", storeID),
-			slog.String("uri", uri),
-			slog.Any("err", err),
-		)
-		http.Error(w, "upstream store error", http.StatusBadGateway)
-		return
-	}
-
-	respondUploadJSON(w, ArtifactUploadResponse{
-		StoreID:   storeID,
-		URI:       uri,
-		MIME:      mime,
-		SizeBytes: size,
-		Sha256:    hex.EncodeToString(sum),
-		Filename:  filename,
-	})
+	return sessionID, true
 }
 
-func respondUploadJSON(w http.ResponseWriter, resp ArtifactUploadResponse) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	JSON(w, http.StatusCreated, resp)
+// HandleUpload handles POST /agent_versions/{v}/chat/{s}/artifacts: writes a
+// pending artifact (spec § REST — BO). 400 malformed, 404 session,
+// 409 locked or at ARTIFACT_MAX_PENDING, 413 too large, 502 store.
+func (h *ArtifactHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
+	if sid, ok := h.boSession(w, r, true); ok {
+		h.svc.upload(w, r, sid)
+	}
+}
+
+// HandleListPending handles GET /agent_versions/{v}/chat/{s}/pending-artifacts.
+func (h *ArtifactHandler) HandleListPending(w http.ResponseWriter, r *http.Request) {
+	if sid, ok := h.boSession(w, r, false); ok {
+		h.svc.listPending(w, r, sid)
+	}
+}
+
+// HandleDeletePending handles DELETE /agent_versions/{v}/chat/{s}/pending-artifacts/{id}.
+// A locked session → 409, matching upload.
+func (h *ArtifactHandler) HandleDeletePending(w http.ResponseWriter, r *http.Request) {
+	if sid, ok := h.boSession(w, r, true); ok {
+		h.svc.deletePending(w, r, sid)
+	}
 }
 
 var errMaxSizeExceeded = errors.New("upload exceeds ARTIFACT_MAX_UPLOAD_MB")
@@ -304,12 +187,9 @@ func firstNonZero(vals ...int64) int64 {
 // ArtifactRefResolver.SessionReferences: mismatch returns 404 (never 403)
 // so ref existence does not leak across sessions.
 func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request) {
-	versionID := r.PathValue("version_id")
-	sessionID := r.PathValue("session_id")
-
 	// Session existence + version match; 404 on either failure.
-	if _, err := h.sessions.GetSession(r.Context(), sessionID, versionID); err != nil {
-		Error(w, err)
+	sessionID, ok := h.boSession(w, r, false)
+	if !ok {
 		return
 	}
 
@@ -335,7 +215,7 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 	// indistinguishable from "unknown store" or "unknown uri" — 404.
 	found, mime, err := h.refs.SessionReferences(r.Context(), sessionID, storeID, uri)
 	if err != nil {
-		h.logger.Error("artifact retrieve: session-scope check failed",
+		h.svc.logger.Error("artifact retrieve: session-scope check failed",
 			slog.String("session_id", sessionID),
 			slog.String("store_id", storeID),
 			slog.String("uri", uri),
@@ -349,7 +229,7 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	store := h.registry.Get(storeID)
+	store := h.svc.registry.Get(storeID)
 	if store == nil {
 		// Registry doesn't have this store — treat as 404 (indistinguishable
 		// from an unknown ref) rather than a specific "store not configured"
@@ -362,7 +242,7 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 	case artifacts.DeliverySignedURL:
 		url, err := store.Sign(r.Context(), uri, 0, artifacts.SignOptions{}) // 0 = adapter default TTL
 		if err != nil {
-			h.logger.Error("artifact retrieve: sign failed",
+			h.svc.logger.Error("artifact retrieve: sign failed",
 				slog.String("store_id", storeID),
 				slog.String("uri", uri),
 				slog.Any("err", err),
@@ -384,7 +264,7 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 	case artifacts.DeliveryBytes:
 		rc, err := store.Get(r.Context(), uri)
 		if err != nil {
-			h.logger.Error("artifact retrieve: get failed",
+			h.svc.logger.Error("artifact retrieve: get failed",
 				slog.String("store_id", storeID),
 				slog.String("uri", uri),
 				slog.Any("err", err),
@@ -419,7 +299,7 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 		return
 
 	default:
-		h.logger.Error("artifact retrieve: unknown delivery mode",
+		h.svc.logger.Error("artifact retrieve: unknown delivery mode",
 			slog.String("store_id", storeID),
 			slog.Int("delivery", int(store.PreferredDelivery())),
 		)

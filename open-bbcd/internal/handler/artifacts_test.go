@@ -40,15 +40,18 @@ func (f *fakeSessionStore) GetSession(ctx context.Context, sessionID, versionID 
 	return s, nil
 }
 
-type fakeRefResolver struct {
-	found bool
-	mime  string
-	err   error
+// seededRows returns a memRows holding one row for session "s1" at
+// (storeID, uri) with the given mime, so the retrieval scope check finds it.
+func seededRows(t *testing.T, storeID, uri, mime string) *memRows {
+	t.Helper()
+	rows := &memRows{}
+	if _, err := rows.CommitUpload(context.Background(), types.SessionArtifact{SessionID: "s1", StoreID: storeID, URI: uri, MIME: mime}, 10); err != nil {
+		t.Fatalf("seed row: %v", err)
+	}
+	return rows
 }
 
-func (f *fakeRefResolver) SessionReferences(ctx context.Context, sessionID, storeID, uri string) (bool, string, error) {
-	return f.found, f.mime, f.err
-}
+func timeNow() time.Time { return time.Now() }
 
 // fakeArtifactStore — minimal ArtifactStore stub for the handler tests.
 // Records calls; can be programmed with canned Get/Sign/Stat/Put outcomes.
@@ -58,6 +61,7 @@ type fakeArtifactStore struct {
 	statHit      bool // if true, Stat reports existing blob (dedup path)
 	statSize     int64
 	putCalls     int
+	statCalls    int
 	getCalls     int
 	signCalls    int
 	lastSignOpts artifacts.SignOptions
@@ -96,6 +100,7 @@ func (s *fakeArtifactStore) Sign(ctx context.Context, uri string, ttl time.Durat
 	return s.signedURL, nil
 }
 func (s *fakeArtifactStore) Stat(ctx context.Context, uri string) (artifacts.StatResult, error) {
+	s.statCalls++
 	if s.statErr != nil {
 		return artifacts.StatResult{}, s.statErr
 	}
@@ -181,7 +186,7 @@ func TestUpload_HappyPath_NoDedup(t *testing.T) {
 			"s1": {ID: "s1", AgentVersionID: "v1"},
 		},
 	}
-	h := NewArtifactHandler(sessions, &fakeRefResolver{}, reg, 10, nil)
+	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
 
 	body, ct := newMultipartBody(t, "hello.txt", "text/plain", []byte("hello world"))
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
@@ -195,7 +200,7 @@ func TestUpload_HappyPath_NoDedup(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
-	var got ArtifactUploadResponse
+	var got PendingArtifact
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("json unmarshal: %v; body=%s", err, rec.Body.String())
 	}
@@ -232,7 +237,7 @@ func TestUpload_DedupSkipsPut(t *testing.T) {
 			"s1": {ID: "s1", AgentVersionID: "v1"},
 		},
 	}
-	h := NewArtifactHandler(sessions, &fakeRefResolver{}, reg, 10, nil)
+	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
 
 	body, ct := newMultipartBody(t, "hello.txt", "text/plain", []byte("hello world"))
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
@@ -255,7 +260,7 @@ func TestUpload_MissingSession404(t *testing.T) {
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{sessions: map[string]*types.ChatSession{}}
-	h := NewArtifactHandler(sessions, &fakeRefResolver{}, reg, 10, nil)
+	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
 
 	body, ct := newMultipartBody(t, "f.txt", "text/plain", []byte("x"))
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/missing/artifacts", body)
@@ -278,7 +283,7 @@ func TestUpload_LockedSession409(t *testing.T) {
 			"s1": {ID: "s1", AgentVersionID: "v1", LockedAt: &now},
 		},
 	}
-	h := NewArtifactHandler(sessions, &fakeRefResolver{}, reg, 10, nil)
+	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
 
 	body, ct := newMultipartBody(t, "f.txt", "text/plain", []byte("x"))
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
@@ -299,7 +304,7 @@ func TestUpload_TooLarge413(t *testing.T) {
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
 	// Cap at 1 MB.
-	h := NewArtifactHandler(sessions, &fakeRefResolver{}, reg, 1, nil)
+	h := NewArtifactHandler(sessions, &memRows{}, reg, 1, 10, nil)
 
 	body, ct := newMultipartBody(t, "big.bin", "application/octet-stream", make([]byte, 2*1024*1024))
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
@@ -319,7 +324,7 @@ func TestUpload_MissingFileField400(t *testing.T) {
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
-	h := NewArtifactHandler(sessions, &fakeRefResolver{}, reg, 10, nil)
+	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
 
 	// Multipart with a NON-"file" field.
 	var buf bytes.Buffer
@@ -353,8 +358,8 @@ func TestRetrieve_SignedURL302(t *testing.T) {
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
-	refs := &fakeRefResolver{found: true, mime: "image/png"}
-	h := NewArtifactHandler(sessions, refs, reg, 10, nil)
+	refs := seededRows(t, "MAIN", "sha256/abc", "image/png")
+	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
@@ -382,8 +387,8 @@ func TestRetrieve_BytesMode200(t *testing.T) {
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
-	refs := &fakeRefResolver{found: true, mime: "image/png"}
-	h := NewArtifactHandler(sessions, refs, reg, 10, nil)
+	refs := seededRows(t, "MAIN", "sha256/abc", "image/png")
+	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
@@ -409,8 +414,8 @@ func TestRetrieve_UnknownRef404(t *testing.T) {
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
-	refs := &fakeRefResolver{found: false} // ref NOT referenced by this session
-	h := NewArtifactHandler(sessions, refs, reg, 10, nil)
+	refs := &memRows{} // ref NOT referenced by this session
+	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
@@ -431,8 +436,8 @@ func TestRetrieve_UnknownStore404(t *testing.T) {
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
 	// ref resolver reports found — but the store_id doesn't match registry.
-	refs := &fakeRefResolver{found: true, mime: "image/png"}
-	h := NewArtifactHandler(sessions, refs, reg, 10, nil)
+	refs := seededRows(t, "UNKNOWN", "sha256/abc", "image/png")
+	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/UNKNOWN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
@@ -456,8 +461,8 @@ func TestRetrieve_BlobMissing410(t *testing.T) {
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
-	refs := &fakeRefResolver{found: true, mime: "image/png"}
-	h := NewArtifactHandler(sessions, refs, reg, 10, nil)
+	refs := seededRows(t, "MAIN", "sha256/abc", "image/png")
+	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
@@ -477,7 +482,7 @@ func TestRetrieve_MalformedPath400(t *testing.T) {
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
-	h := NewArtifactHandler(sessions, &fakeRefResolver{}, reg, 10, nil)
+	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
 
 	// Path has no slash — cannot be split into store_id + uri.
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/nosolash", nil)
@@ -498,8 +503,8 @@ func TestRetrieve_ResolverError500(t *testing.T) {
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
-	refs := &fakeRefResolver{err: errors.New("db down")}
-	h := NewArtifactHandler(sessions, refs, reg, 10, nil)
+	refs := &memRows{lookupErr: errors.New("db down")}
+	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
@@ -517,7 +522,7 @@ func TestUpload_ResolvesMIMEFromBytes(t *testing.T) {
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}}}
-	h := NewArtifactHandler(sessions, &fakeRefResolver{}, reg, 10, nil)
+	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
 
 	png, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC")
 	body, ct := newMultipartBody(t, "shot.bin", "application/octet-stream", png)
@@ -532,7 +537,7 @@ func TestUpload_ResolvesMIMEFromBytes(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
 	}
-	var got ArtifactUploadResponse
+	var got PendingArtifact
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
 	if got.MIME != "image/png" {
 		t.Fatalf("MIME = %q, want image/png (resolved from bytes)", got.MIME)

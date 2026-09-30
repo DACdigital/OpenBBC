@@ -119,7 +119,7 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 				fatal("probe artifact store", probeErr)
 			}
 			cancel()
-			artifactHandler = NewArtifactHandler(chatRepo, rowRefResolver{rows: chatRepo}, reg, cfg.Artifacts.MaxUploadMB, logger)
+			artifactHandler = NewArtifactHandler(chatRepo, chatRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
 			logger.Info("artifacts: registry hydrated",
 				slog.Int("stores", len(reg.IDs())),
 				slog.String("default", reg.DefaultID()),
@@ -177,8 +177,8 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	// MCP tool result normalisation.
 	if artifactHandler != nil {
 		orchestrator.
-			WithArtifacts(artifactResolverFrom(artifactHandler.registry)).
-			WithArtifactUploader(artifactUploader{registry: artifactHandler.registry})
+			WithArtifacts(artifactResolverFrom(artifactHandler.svc.registry)).
+			WithArtifactUploader(artifactUploader{registry: artifactHandler.svc.registry})
 	}
 	orchestrator.Model = cfg.Anthropic.DefaultModel
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
@@ -323,6 +323,8 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	if artifactHandler != nil {
 		mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/artifacts", artifactHandler.HandleUpload)
 		mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/artifacts/{path...}", artifactHandler.HandleRetrieve)
+		mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/pending-artifacts", artifactHandler.HandleListPending)
+		mux.HandleFunc("DELETE /agent_versions/{version_id}/chat/{session_id}/pending-artifacts/{id}", artifactHandler.HandleDeletePending)
 	}
 
 	// Datasets — /datasets/new MUST precede /datasets/{dataset_id} so the
