@@ -1,9 +1,9 @@
 package handler
 
 import (
-	"encoding/base64"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
