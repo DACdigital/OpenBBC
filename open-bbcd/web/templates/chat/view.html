@@ -105,17 +105,17 @@
 
 {{if .ArtifactsEnabled}}
 <div id="pending-artifacts" class="pending-artifacts" aria-label="Files attached to your next message">
-  {{range .PendingArtifacts}}
+  {{- range .PendingArtifacts}}
   <span class="artifact-chip" id="pending-artifact-{{.ID}}">
     <span class="artifact-chip-label">{{.Label}}</span>
-    {{if not $.Locked}}
+    {{- if not $.Locked}}
     <button type="button" class="artifact-chip-remove" aria-label="Remove {{.Label}}"
             hx-delete="/agent_versions/{{$.VersionID}}/chat/{{$.SessionID}}/pending-artifacts/{{.ID}}"
             hx-swap="none"
             hx-on::after-request="if (event.detail.successful) this.closest('.artifact-chip').remove()">×</button>
-    {{end}}
+    {{- end}}
   </span>
-  {{end}}
+  {{- end -}}
 </div>
 {{end}}
 

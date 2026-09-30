@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
@@ -40,6 +42,8 @@ type stubChatStore struct {
 	err      error
 	// hasPending is returned by HasPendingArtifacts (empty-turn rule).
 	hasPending bool
+	// locked makes GetSession return a session with LockedAt set.
+	locked bool
 }
 
 func (s *stubChatStore) EnsureSession(ctx context.Context, sessionID, versionID string) error {
@@ -47,7 +51,12 @@ func (s *stubChatStore) EnsureSession(ctx context.Context, sessionID, versionID 
 	return s.err
 }
 func (s *stubChatStore) GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error) {
-	return &types.ChatSession{ID: sessionID, AgentVersionID: versionID}, s.err
+	sess := &types.ChatSession{ID: sessionID, AgentVersionID: versionID}
+	if s.locked {
+		now := time.Now()
+		sess.LockedAt = &now
+	}
+	return sess, s.err
 }
 func (s *stubChatStore) ListSessions(ctx context.Context, versionID string, limit, offset int) ([]*types.ChatSession, int, error) {
 	return s.sessions, len(s.sessions), s.err
@@ -300,7 +309,6 @@ func TestChatView_RendersPendingChipsWithRemoveControl(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ChatView(w, r)
 	body := w.Body.String()
-	t.Logf("rendered chip block: %s", body[strings.Index(body, `id="pending-artifacts"`):][:700])
 	for _, want := range []string{
 		`id="pending-artifacts"`,
 		`Q3 report.pdf`,
@@ -310,5 +318,36 @@ func TestChatView_RendersPendingChipsWithRemoveControl(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("chat view missing %q", want)
 		}
+	}
+}
+
+func renderChatView(t *testing.T, store *stubChatStore, rows []*types.SessionArtifact) string {
+	t.Helper()
+	h := newTestChatHandlerWithStore(t, store, &stubTurnRunner{}, web.Assets)
+	h.WithPendingArtifacts(stubPendingLister{rows: rows})
+	r := httptest.NewRequest("GET", "/agent_versions/v/chat/s", nil)
+	r.SetPathValue("version_id", "v")
+	r.SetPathValue("session_id", "s")
+	w := httptest.NewRecorder()
+	h.ChatView(w, r)
+	return w.Body.String()
+}
+
+func TestChatView_NoPending_ContainerEmptyNoWhitespace(t *testing.T) {
+	body := renderChatView(t, &stubChatStore{}, nil)
+	if !regexp.MustCompile(`<div id="pending-artifacts"[^>]*></div>`).MatchString(body) {
+		t.Fatal("pending-artifacts container missing or has whitespace children (:empty would not match)")
+	}
+}
+
+func TestChatView_LockedSession_ChipWithoutRemoveControl(t *testing.T) {
+	body := renderChatView(t, &stubChatStore{locked: true}, []*types.SessionArtifact{
+		{ID: "11111111-1111-1111-1111-111111111111", Filename: "Q3 report.pdf", MIME: "application/pdf"},
+	})
+	if !strings.Contains(body, "Q3 report.pdf") {
+		t.Error("chip label missing")
+	}
+	if strings.Contains(body, "hx-delete=\"/agent_versions/v/chat/s/pending-artifacts/") {
+		t.Error("locked session must not render a remove control")
 	}
 }
