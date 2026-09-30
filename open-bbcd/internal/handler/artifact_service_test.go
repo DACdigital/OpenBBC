@@ -139,7 +139,7 @@ func (m *memRows) consumeAll(sid string) {
 	}
 }
 
-// boHarness wires an ArtifactHandler over memRows + a fake store for session "s1"/"v1".
+// boHarness wires an ArtifactHandler over memRows + a fake store for session testSID/"v1".
 type boHarness struct {
 	h     *ArtifactHandler
 	rows  *memRows
@@ -151,7 +151,7 @@ func newBOHarness(t *testing.T, maxPending int) *boHarness {
 	t.Helper()
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL, signedURL: "https://signed.example/x"}
 	rows := &memRows{}
-	sess := &fakeSessionStore{sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}}}
+	sess := &fakeSessionStore{sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}}}
 	return &boHarness{
 		h:    NewArtifactHandler(sess, rows, buildRegistry(t, store), 1, maxPending, nil),
 		rows: rows, store: store, sess: sess,
@@ -164,7 +164,7 @@ func (b *boHarness) upload(t *testing.T, filename, ct string, data []byte) (*htt
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
 	req.Header.Set("Content-Type", mct)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	rec := httptest.NewRecorder()
 	b.h.HandleUpload(rec, req)
 	var got PendingArtifact
@@ -188,7 +188,7 @@ func TestUpload_WritesPendingRowAndReturnsPendingObject(t *testing.T) {
 		got.Filename != "hello.txt" || got.MIME != "text/plain" || got.Status != "pending" || got.ID == "" {
 		t.Fatalf("response = %+v", got)
 	}
-	if list, _ := b.rows.ListPendingArtifacts(context.Background(), "s1"); len(list) != 1 || list[0].ID != got.ID {
+	if list, _ := b.rows.ListPendingArtifacts(context.Background(), testSID); len(list) != 1 || list[0].ID != got.ID {
 		t.Fatalf("rows = %+v", list)
 	}
 }
@@ -240,7 +240,7 @@ func TestUpload_AtCap_RefusedAtPrecheckWithoutPut(t *testing.T) {
 		t.Fatalf("dedup at cap: %d", rec.Code)
 	}
 	// After a turn consumes them, uploads succeed again.
-	b.rows.consumeAll("s1")
+	b.rows.consumeAll(testSID)
 	if rec, _ := b.upload(t, "b.txt", "text/plain", []byte("two")); rec.Code != http.StatusCreated {
 		t.Fatalf("after consume: %d", rec.Code)
 	}
@@ -249,7 +249,7 @@ func TestUpload_AtCap_RefusedAtPrecheckWithoutPut(t *testing.T) {
 func TestUpload_ReuploadOfConsumedContent_NewRow(t *testing.T) {
 	b := newBOHarness(t, 10)
 	_, first := b.upload(t, "a.txt", "text/plain", []byte("x"))
-	b.rows.consumeAll("s1")
+	b.rows.consumeAll(testSID)
 	_, second := b.upload(t, "a.txt", "text/plain", []byte("x"))
 	if second.ID == "" || second.ID == first.ID {
 		t.Fatalf("want a new pending row, got %+v (first %+v)", second, first)
@@ -305,7 +305,7 @@ func TestUpload_CommitErrorsMapToStatuses(t *testing.T) {
 func TestUpload_LockedSession409BeforeRead(t *testing.T) {
 	b := newBOHarness(t, 10)
 	now := timeNow()
-	b.sess.sessions["s1"].LockedAt = &now
+	b.sess.sessions[testSID].LockedAt = &now
 	if rec, _ := b.upload(t, "a.txt", "text/plain", []byte("x")); rec.Code != http.StatusConflict {
 		t.Fatalf("status %d", rec.Code)
 	}
@@ -324,14 +324,14 @@ func boRequest(method, path, versionID, sessionID string) *http.Request {
 func TestListPending_OrderAndEmpty(t *testing.T) {
 	b := newBOHarness(t, 10)
 	rec := httptest.NewRecorder()
-	b.h.HandleListPending(rec, boRequest(http.MethodGet, "/", "v1", "s1"))
+	b.h.HandleListPending(rec, boRequest(http.MethodGet, "/", "v1", testSID))
 	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"pending_artifacts":[]}` {
 		t.Fatalf("empty list: %d %s", rec.Code, rec.Body.String())
 	}
 	_, a := b.upload(t, "a.txt", "text/plain", []byte("a"))
 	_, c := b.upload(t, "c.txt", "text/plain", []byte("c"))
 	rec = httptest.NewRecorder()
-	b.h.HandleListPending(rec, boRequest(http.MethodGet, "/", "v1", "s1"))
+	b.h.HandleListPending(rec, boRequest(http.MethodGet, "/", "v1", testSID))
 	var got struct {
 		PendingArtifacts []PendingArtifact `json:"pending_artifacts"`
 	}
@@ -339,9 +339,9 @@ func TestListPending_OrderAndEmpty(t *testing.T) {
 	if len(got.PendingArtifacts) != 2 || got.PendingArtifacts[0].ID != a.ID || got.PendingArtifacts[1].ID != c.ID || got.PendingArtifacts[0].Status != "pending" {
 		t.Fatalf("list = %+v", got)
 	}
-	b.rows.consumeAll("s1")
+	b.rows.consumeAll(testSID)
 	rec = httptest.NewRecorder()
-	b.h.HandleListPending(rec, boRequest(http.MethodGet, "/", "v1", "s1"))
+	b.h.HandleListPending(rec, boRequest(http.MethodGet, "/", "v1", testSID))
 	if strings.TrimSpace(rec.Body.String()) != `{"pending_artifacts":[]}` {
 		t.Fatalf("after consume: %s", rec.Body.String())
 	}
@@ -351,7 +351,7 @@ func TestDeletePending_Statuses(t *testing.T) {
 	b := newBOHarness(t, 1)
 	_, a := b.upload(t, "a.txt", "text/plain", []byte("a"))
 	del := func(id string) int {
-		req := boRequest(http.MethodDelete, "/", "v1", "s1")
+		req := boRequest(http.MethodDelete, "/", "v1", testSID)
 		req.SetPathValue("id", id)
 		rec := httptest.NewRecorder()
 		b.h.HandleDeletePending(rec, req)
@@ -371,13 +371,13 @@ func TestDeletePending_Statuses(t *testing.T) {
 	if b2.ID == "" {
 		t.Fatal("upload after delete refused")
 	}
-	b.rows.consumeAll("s1")
+	b.rows.consumeAll(testSID)
 	if code := del(b2.ID); code != http.StatusConflict {
 		t.Fatalf("delete consumed: %d", code)
 	}
 	// Locked BO session → 409.
 	now := timeNow()
-	b.sess.sessions["s1"].LockedAt = &now
+	b.sess.sessions[testSID].LockedAt = &now
 	if code := del(b2.ID); code != http.StatusConflict {
 		t.Fatalf("delete on locked session: %d", code)
 	}
@@ -386,7 +386,7 @@ func TestDeletePending_Statuses(t *testing.T) {
 func TestBOArtifactRoutes_SessionOfOtherVersion(t *testing.T) {
 	b := newBOHarness(t, 10)
 	rec := httptest.NewRecorder()
-	b.h.HandleListPending(rec, boRequest(http.MethodGet, "/", "v-other", "s1"))
+	b.h.HandleListPending(rec, boRequest(http.MethodGet, "/", "v-other", testSID))
 	// GetSession reports ErrSessionAgentMismatch → 403 (the BO mapping).
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("list on another version's session: %d, want 403", rec.Code)

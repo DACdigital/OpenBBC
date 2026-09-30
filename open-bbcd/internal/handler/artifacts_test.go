@@ -43,12 +43,12 @@ func (f *fakeSessionStore) GetSession(ctx context.Context, sessionID, versionID 
 	return s, nil
 }
 
-// seededRows returns a memRows holding one row for session "s1" at
+// seededRows returns a memRows holding one row for session testSID at
 // (storeID, uri) with the given mime, so the retrieval scope check finds it.
 func seededRows(t *testing.T, storeID, uri, mime string) *memRows {
 	t.Helper()
 	rows := &memRows{}
-	if _, err := rows.CommitUpload(context.Background(), types.SessionArtifact{SessionID: "s1", StoreID: storeID, URI: uri, MIME: mime}, 10); err != nil {
+	if _, err := rows.CommitUpload(context.Background(), types.SessionArtifact{SessionID: testSID, StoreID: storeID, URI: uri, MIME: mime}, 10); err != nil {
 		t.Fatalf("seed row: %v", err)
 	}
 	return rows
@@ -208,7 +208,7 @@ func TestUpload_HappyPath_NoDedup(t *testing.T) {
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{
-			"s1": {ID: "s1", AgentVersionID: "v1"},
+			testSID: {ID: testSID, AgentVersionID: "v1"},
 		},
 	}
 	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
@@ -217,7 +217,7 @@ func TestUpload_HappyPath_NoDedup(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
 	req.Header.Set("Content-Type", ct)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	rec := httptest.NewRecorder()
 
 	h.HandleUpload(rec, req)
@@ -259,7 +259,7 @@ func TestUpload_DedupSkipsPut(t *testing.T) {
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{
-			"s1": {ID: "s1", AgentVersionID: "v1"},
+			testSID: {ID: testSID, AgentVersionID: "v1"},
 		},
 	}
 	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
@@ -268,7 +268,7 @@ func TestUpload_DedupSkipsPut(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
 	req.Header.Set("Content-Type", ct)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	rec := httptest.NewRecorder()
 
 	h.HandleUpload(rec, req)
@@ -305,7 +305,7 @@ func TestUpload_LockedSession409(t *testing.T) {
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{
-			"s1": {ID: "s1", AgentVersionID: "v1", LockedAt: &now},
+			testSID: {ID: testSID, AgentVersionID: "v1", LockedAt: &now},
 		},
 	}
 	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
@@ -314,7 +314,7 @@ func TestUpload_LockedSession409(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
 	req.Header.Set("Content-Type", ct)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	rec := httptest.NewRecorder()
 	h.HandleUpload(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -326,7 +326,7 @@ func TestUpload_TooLarge413(t *testing.T) {
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
-		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
+		sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}},
 	}
 	// Cap at 1 MB.
 	h := NewArtifactHandler(sessions, &memRows{}, reg, 1, 10, nil)
@@ -335,7 +335,7 @@ func TestUpload_TooLarge413(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
 	req.Header.Set("Content-Type", ct)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	rec := httptest.NewRecorder()
 	h.HandleUpload(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -347,7 +347,7 @@ func TestUpload_MissingFileField400(t *testing.T) {
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
-		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
+		sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}},
 	}
 	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
 
@@ -363,7 +363,7 @@ func TestUpload_MissingFileField400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", &buf)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	rec := httptest.NewRecorder()
 	h.HandleUpload(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -382,14 +382,14 @@ func TestRetrieve_SignedURL302(t *testing.T) {
 	}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
-		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
+		sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}},
 	}
 	refs := seededRows(t, "MAIN", "sha256/abc", "image/png")
 	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	req.SetPathValue("path", "MAIN/sha256/abc")
 	rec := httptest.NewRecorder()
 	h.HandleRetrieve(rec, req)
@@ -412,15 +412,15 @@ func TestRetrieve_BytesMode200(t *testing.T) {
 	}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
-		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
+		sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}},
 	}
 	refs := &memRows{}
-	seedRow(t, refs, "s1", "sha256/abc", "image/png", "", int64(len(payload)))
+	seedRow(t, refs, testSID, "sha256/abc", "image/png", "", int64(len(payload)))
 	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	req.SetPathValue("path", "MAIN/sha256/abc")
 	rec := httptest.NewRecorder()
 	h.HandleRetrieve(rec, req)
@@ -443,14 +443,14 @@ func TestRetrieve_UnknownRef404(t *testing.T) {
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
-		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
+		sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}},
 	}
 	refs := &memRows{} // ref NOT referenced by this session
 	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	req.SetPathValue("path", "MAIN/sha256/abc")
 	rec := httptest.NewRecorder()
 	h.HandleRetrieve(rec, req)
@@ -464,7 +464,7 @@ func TestRetrieve_UnknownStore404(t *testing.T) {
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
-		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
+		sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}},
 	}
 	// ref resolver reports found — but the store_id doesn't match registry.
 	refs := seededRows(t, "UNKNOWN", "sha256/abc", "image/png")
@@ -472,7 +472,7 @@ func TestRetrieve_UnknownStore404(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/UNKNOWN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	req.SetPathValue("path", "UNKNOWN/sha256/abc")
 	rec := httptest.NewRecorder()
 	h.HandleRetrieve(rec, req)
@@ -491,14 +491,14 @@ func TestRetrieve_BlobMissing410(t *testing.T) {
 	}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
-		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
+		sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}},
 	}
 	refs := seededRows(t, "MAIN", "sha256/abc", "image/png")
 	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	req.SetPathValue("path", "MAIN/sha256/abc")
 	rec := httptest.NewRecorder()
 	h.HandleRetrieve(rec, req)
@@ -512,14 +512,14 @@ func TestRetrieve_MalformedPath400(t *testing.T) {
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
-		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
+		sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}},
 	}
 	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
 
 	// Path has no slash — cannot be split into store_id + uri.
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/nosolash", nil)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	req.SetPathValue("path", "nosolash")
 	rec := httptest.NewRecorder()
 	h.HandleRetrieve(rec, req)
@@ -533,14 +533,14 @@ func TestRetrieve_ResolverError500(t *testing.T) {
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
-		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
+		sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}},
 	}
 	refs := &memRows{lookupErr: errors.New("db down")}
 	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	req.SetPathValue("path", "MAIN/sha256/abc")
 	rec := httptest.NewRecorder()
 	h.HandleRetrieve(rec, req)
@@ -553,7 +553,7 @@ func TestRetrieve_ResolverError500(t *testing.T) {
 func TestUpload_ResolvesMIMEFromBytes(t *testing.T) {
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
 	reg := buildRegistry(t, store)
-	sessions := &fakeSessionStore{sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}}}
+	sessions := &fakeSessionStore{sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}}}
 	h := NewArtifactHandler(sessions, &memRows{}, reg, 10, 10, nil)
 
 	png, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC")
@@ -561,7 +561,7 @@ func TestUpload_ResolvesMIMEFromBytes(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
 	req.Header.Set("Content-Type", ct)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	rec := httptest.NewRecorder()
 
 	h.HandleUpload(rec, req)
@@ -596,7 +596,7 @@ func TestUpload_SanitisesFilenameAndDeclaredMIME(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
 			reg := buildRegistry(t, store)
-			sessions := &fakeSessionStore{sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}}}
+			sessions := &fakeSessionStore{sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}}}
 			rows := &memRows{}
 			h := NewArtifactHandler(sessions, rows, reg, 10, 10, nil)
 
@@ -614,7 +614,7 @@ func TestUpload_SanitisesFilenameAndDeclaredMIME(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", &buf)
 			req.Header.Set("Content-Type", mw.FormDataContentType())
 			req.SetPathValue("version_id", "v1")
-			req.SetPathValue("session_id", "s1")
+			req.SetPathValue("session_id", testSID)
 			rec := httptest.NewRecorder()
 
 			h.HandleUpload(rec, req)
@@ -636,5 +636,53 @@ func TestUpload_SanitisesFilenameAndDeclaredMIME(t *testing.T) {
 				t.Errorf("filename not valid/capped: %q (%d bytes)", got.Filename, len(got.Filename))
 			}
 		})
+	}
+}
+
+// BO test session ids: canonical UUIDs, since the BO preamble rejects others.
+const (
+	testSID  = "11111111-1111-4111-8111-111111111111"
+	testSID2 = "22222222-2222-4222-8222-222222222222"
+)
+
+// A non-canonical session id is a 404 on every BO artifact route before any
+// lookup, as on deployed: Postgres ::uuid would reject it (22P02 -> 500).
+func TestBOArtifacts_MalformedSessionID404(t *testing.T) {
+	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
+	reg := buildRegistry(t, store)
+	// Any GetSession call fails like Postgres would on a bad ::uuid.
+	sessions := &fakeSessionStore{err: errors.New(`pq: invalid input syntax for type uuid`)}
+	rows := &memRows{}
+	h := NewArtifactHandler(sessions, rows, reg, 10, 10, nil)
+	routes := []struct {
+		name   string
+		method string
+		serve  func(http.ResponseWriter, *http.Request)
+	}{
+		{"upload", http.MethodPost, h.HandleUpload},
+		{"list", http.MethodGet, h.HandleListPending},
+		{"delete", http.MethodDelete, h.HandleDeletePending},
+		{"retrieve", http.MethodGet, h.HandleRetrieve},
+	}
+	for _, sid := range []string{"not-a-uuid", "urn:uuid:" + testSID, strings.ReplaceAll(testSID, "-", "")} {
+		for _, rt := range routes {
+			t.Run(rt.name+"/"+sid, func(t *testing.T) {
+				body, ct := newMultipartBody(t, "a.txt", "text/plain", []byte("x"))
+				req := httptest.NewRequest(rt.method, "/agent_versions/v1/chat/x/artifacts", body)
+				req.Header.Set("Content-Type", ct)
+				req.SetPathValue("version_id", "v1")
+				req.SetPathValue("session_id", sid)
+				req.SetPathValue("id", testSID2)
+				req.SetPathValue("path", "MAIN/sha256/aa")
+				rec := httptest.NewRecorder()
+				rt.serve(rec, req)
+				if rec.Code != http.StatusNotFound {
+					t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+				}
+			})
+		}
+	}
+	if store.putCalls != 0 || rows.commits != 0 {
+		t.Fatalf("store/rows touched: put=%d commits=%d", store.putCalls, rows.commits)
 	}
 }

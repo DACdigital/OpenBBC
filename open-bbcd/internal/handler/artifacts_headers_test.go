@@ -17,15 +17,15 @@ func retrieveBytes(t *testing.T, mime string, payload []byte) *httptest.Response
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliveryBytes, getData: payload, statHit: true}
 	reg := buildRegistry(t, store)
 	sessions := &fakeSessionStore{
-		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
+		sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}},
 	}
 	rows := &memRows{}
-	seedRow(t, rows, "s1", "sha256/abc", mime, "f.bin", int64(len(payload)))
+	seedRow(t, rows, testSID, "sha256/abc", mime, "f.bin", int64(len(payload)))
 	h := NewArtifactHandler(sessions, rows, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
 	req.SetPathValue("version_id", "v1")
-	req.SetPathValue("session_id", "s1")
+	req.SetPathValue("session_id", testSID)
 	req.SetPathValue("path", "MAIN/sha256/abc")
 	rec := httptest.NewRecorder()
 	h.HandleRetrieve(rec, req)

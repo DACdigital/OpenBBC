@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/google/uuid"
 )
 
 type ErrorResponse struct {
@@ -123,4 +124,16 @@ func Error(w http.ResponseWriter, err error) {
 	}
 
 	JSON(w, status, ErrorResponse{Error: err.Error()})
+}
+
+// validUUID reports whether id is a canonical 36-char UUID. uuid.Parse also
+// accepts urn:uuid:, braced and bare-hex forms; require the canonical length
+// so only ids Postgres accepts pass (others would surface as a 500). Shared
+// by the BO and deployed path-id checks.
+func validUUID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	_, err := uuid.Parse(id)
+	return err == nil
 }

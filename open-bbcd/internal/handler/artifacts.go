@@ -51,11 +51,16 @@ func NewArtifactHandler(
 	}
 }
 
-// boSession runs the BO preamble: GetSession(session_id, version_id)
-// (unknown → 404, other version → handler.Error's mapping); with
+// boSession runs the BO preamble: a non-canonical session_id → 404 (as on
+// deployed), then GetSession(session_id, version_id) (unknown → 404, other
+// version → handler.Error's mapping); with
 // requireUnlocked, a dataset-locked session → 409. Returns the session id.
 func (h *ArtifactHandler) boSession(w http.ResponseWriter, r *http.Request, requireUnlocked bool) (string, bool) {
 	sessionID := r.PathValue("session_id")
+	if !validUUID(sessionID) {
+		Error(w, types.ErrNotFound)
+		return "", false
+	}
 	sess, err := h.sessions.GetSession(r.Context(), sessionID, r.PathValue("version_id"))
 	if err != nil {
 		Error(w, err)

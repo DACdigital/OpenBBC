@@ -5,8 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/google/uuid"
-
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -51,17 +49,6 @@ func (h *DeployedArtifactHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{session_id}/artifacts/{path...}", h.guard(h.svc.retrieve))
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{session_id}/pending-artifacts", h.guard(h.svc.listPending))
 	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}/pending-artifacts/{id}", h.guard(h.svc.deletePending))
-}
-
-// validUUID reports whether id is a canonical 36-char UUID. uuid.Parse also
-// accepts urn:uuid:, braced and bare-hex forms; require the canonical length
-// so only ids Postgres accepts pass (others would surface as a 500).
-func validUUID(id string) bool {
-	if len(id) != 36 {
-		return false
-	}
-	_, err := uuid.Parse(id)
-	return err == nil
 }
 
 // guard runs the deployed turn preamble — agent deployed, user_id present,

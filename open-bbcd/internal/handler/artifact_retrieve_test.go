@@ -43,7 +43,7 @@ func TestRetrieve_PendingUploadIsRetrievable_SignedWithOverrides(t *testing.T) {
 	_, up := b.upload(t, "shot.png", "image/png", onePixelPNGBytes(t))
 	b.store.statHit = true
 	rec := httptest.NewRecorder()
-	b.h.HandleRetrieve(rec, retrieveReq("v1", "s1", up.StoreID+"/"+up.URI))
+	b.h.HandleRetrieve(rec, retrieveReq("v1", testSID, up.StoreID+"/"+up.URI))
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://signed.example/x" {
 		t.Fatalf("status %d loc %q", rec.Code, rec.Header().Get("Location"))
 	}
@@ -55,9 +55,9 @@ func TestRetrieve_PendingUploadIsRetrievable_SignedWithOverrides(t *testing.T) {
 
 func TestRetrieve_NonNativeSignedAsAttachmentOctetStream(t *testing.T) {
 	b := newBOHarness(t, 10)
-	seedRow(t, b.rows, "s1", "sha256/zz", "application/zip", "a.zip", 5)
+	seedRow(t, b.rows, testSID, "sha256/zz", "application/zip", "a.zip", 5)
 	b.store.statHit = true
-	b.h.HandleRetrieve(httptest.NewRecorder(), retrieveReq("v1", "s1", "MAIN/sha256/zz"))
+	b.h.HandleRetrieve(httptest.NewRecorder(), retrieveReq("v1", testSID, "MAIN/sha256/zz"))
 	want := artifacts.SignOptions{ContentType: "application/octet-stream", ContentDisposition: "attachment; filename*=UTF-8''a.zip"}
 	if b.store.lastSignOpts != want {
 		t.Fatalf("sign opts = %+v", b.store.lastSignOpts)
@@ -73,21 +73,21 @@ func TestRetrieve_Statuses(t *testing.T) {
 	}{
 		{"no row", func(t *testing.T, b *boHarness) {}, "MAIN/sha256/aa", http.StatusNotFound},
 		{"row in another session only", func(t *testing.T, b *boHarness) {
-			b.sess.sessions["s2"] = &types.ChatSession{ID: "s2", AgentVersionID: "v1"}
-			seedRow(t, b.rows, "s2", "sha256/aa", "image/png", "", 1)
+			b.sess.sessions[testSID2] = &types.ChatSession{ID: testSID2, AgentVersionID: "v1"}
+			seedRow(t, b.rows, testSID2, "sha256/aa", "image/png", "", 1)
 			b.store.statHit = true
 		}, "MAIN/sha256/aa", http.StatusNotFound},
 		{"unregistered store", func(t *testing.T, b *boHarness) {
-			if _, err := b.rows.CommitUpload(context.Background(), types.SessionArtifact{SessionID: "s1", StoreID: "OTHER", URI: "sha256/aa", MIME: "image/png"}, 10); err != nil {
+			if _, err := b.rows.CommitUpload(context.Background(), types.SessionArtifact{SessionID: testSID, StoreID: "OTHER", URI: "sha256/aa", MIME: "image/png"}, 10); err != nil {
 				t.Fatal(err)
 			}
 		}, "OTHER/sha256/aa", http.StatusNotFound},
 		{"blob removed", func(t *testing.T, b *boHarness) {
-			seedRow(t, b.rows, "s1", "sha256/aa", "image/png", "", 1)
+			seedRow(t, b.rows, testSID, "sha256/aa", "image/png", "", 1)
 			b.store.statHit = false
 		}, "MAIN/sha256/aa", http.StatusGone},
 		{"stat error", func(t *testing.T, b *boHarness) {
-			seedRow(t, b.rows, "s1", "sha256/aa", "image/png", "", 1)
+			seedRow(t, b.rows, testSID, "sha256/aa", "image/png", "", 1)
 			b.store.statErr = errors.New("net down")
 		}, "MAIN/sha256/aa", http.StatusBadGateway},
 		{"lookup error", func(t *testing.T, b *boHarness) {
@@ -95,7 +95,7 @@ func TestRetrieve_Statuses(t *testing.T) {
 		}, "MAIN/sha256/aa", http.StatusInternalServerError},
 		{"bad path", func(t *testing.T, b *boHarness) {}, "MAIN", http.StatusBadRequest},
 		{"tool-result row", func(t *testing.T, b *boHarness) {
-			b.rows.rows = append(b.rows.rows, &types.SessionArtifact{ID: "t", SessionID: "s1", Origin: types.ArtifactOriginToolResult,
+			b.rows.rows = append(b.rows.rows, &types.SessionArtifact{ID: "t", SessionID: testSID, Origin: types.ArtifactOriginToolResult,
 				StoreID: "MAIN", URI: "sha256/tt", MIME: "image/png", MessageID: "m"})
 			b.store.statHit = true
 		}, "MAIN/sha256/tt", http.StatusFound},
@@ -105,7 +105,7 @@ func TestRetrieve_Statuses(t *testing.T) {
 			b := newBOHarness(t, 10)
 			c.setup(t, b)
 			rec := httptest.NewRecorder()
-			b.h.HandleRetrieve(rec, retrieveReq("v1", "s1", c.path))
+			b.h.HandleRetrieve(rec, retrieveReq("v1", testSID, c.path))
 			if rec.Code != c.want {
 				t.Fatalf("status %d, want %d (%s)", rec.Code, c.want, rec.Body.String())
 			}
@@ -118,9 +118,9 @@ func TestRetrieve_BytesMode_HeadersFromRow(t *testing.T) {
 	b.store.delivery = artifacts.DeliveryBytes
 	b.store.statHit = true
 	b.store.getData = []byte("PK\x03\x04zip")
-	seedRow(t, b.rows, "s1", "sha256/zz", "application/zip", "a.zip", 7)
+	seedRow(t, b.rows, testSID, "sha256/zz", "application/zip", "a.zip", 7)
 	rec := httptest.NewRecorder()
-	b.h.HandleRetrieve(rec, retrieveReq("v1", "s1", "MAIN/sha256/zz"))
+	b.h.HandleRetrieve(rec, retrieveReq("v1", testSID, "MAIN/sha256/zz"))
 	h := rec.Header()
 	if rec.Code != http.StatusOK || h.Get("Content-Length") != "7" || h.Get("X-Content-Type-Options") != "nosniff" ||
 		h.Get("Content-Type") != "application/octet-stream" || h.Get("Content-Disposition") != "attachment; filename*=UTF-8''a.zip" {
