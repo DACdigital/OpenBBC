@@ -17,7 +17,7 @@ type ChatRepository struct {
 
 func NewChatRepository(db *sql.DB) *ChatRepository {
 	return &ChatRepository{db: db, sessionArtifacts: sessionArtifacts{
-		db: db, table: "chat_session_artifacts", lockKey: chatSessionArtifactsLockKey,
+		db: db, table: "chat_session_artifacts", sessionTable: "chat_sessions", lockKey: chatSessionArtifactsLockKey,
 		recheckSession: recheckChatSession,
 	}}
 }
@@ -291,9 +291,13 @@ func (r *ChatRepository) SetSessionHeaderOverrides(ctx context.Context, sessionI
 // msg.Content after its existing blocks, in (created_at, id) order, and
 // returned. Returns types.ErrEmptyTurn (persisting nothing) if msg has no
 // non-empty text block and nothing was claimed. agentVersionID is ignored
-// (BO sessions are version-pinned), as in AppendMessages.
+// (BO sessions are version-pinned), as in AppendMessages. There is no
+// ON CONFLICT: a retried msg.ID errors, by design. msg.ID is required.
 func (r *ChatRepository) AppendUserTurn(ctx context.Context, agentVersionID string, msg types.ChatMessage) ([]llm.ArtifactRefBlock, error) {
 	_ = agentVersionID
+	if msg.ID == "" {
+		return nil, errors.New("message ID required")
+	}
 	return r.sessionArtifacts.appendUserTurn(ctx, msg.SessionID, msg.ID, msg.Content, func(tx *sql.Tx, content json.RawMessage) error {
 		return r.insertChatMessageTx(ctx, tx, msg, content)
 	})
@@ -301,8 +305,12 @@ func (r *ChatRepository) AppendUserTurn(ctx context.Context, agentVersionID stri
 
 // AppendToolMessage persists a tool-role message and one origin='tool_result'
 // row per ref (message_id = msg.ID) in one transaction. refs may be empty.
+// No ON CONFLICT: a retried msg.ID errors, by design. msg.ID is required.
 func (r *ChatRepository) AppendToolMessage(ctx context.Context, agentVersionID string, msg types.ChatMessage, refs []llm.ArtifactRefBlock) error {
 	_ = agentVersionID
+	if msg.ID == "" {
+		return errors.New("message ID required")
+	}
 	return r.sessionArtifacts.appendToolMessage(ctx, msg.SessionID, msg.ID, refs, func(tx *sql.Tx) error {
 		return r.insertChatMessageTx(ctx, tx, msg, msg.Content)
 	})
@@ -315,6 +323,9 @@ func (r *ChatRepository) insertChatMessageTx(ctx context.Context, tx *sql.Tx, m 
 		INSERT INTO chat_messages (id, session_id, role, content, seq)
 		VALUES ($1::uuid, $2::uuid, $3, $4, $5)
 	`, m.ID, m.SessionID, string(m.Role), []byte(content), m.Seq); err != nil {
+		if isForeignKeyViolation(err) {
+			return types.ErrNotFound
+		}
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE chat_sessions SET updated_at = now() WHERE id = $1::uuid`, m.SessionID)

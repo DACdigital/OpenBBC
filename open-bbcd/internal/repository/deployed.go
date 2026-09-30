@@ -18,7 +18,7 @@ type DeployedRepository struct {
 
 func NewDeployedRepository(db *sql.DB) *DeployedRepository {
 	return &DeployedRepository{db: db, sessionArtifacts: sessionArtifacts{
-		db: db, table: "deployed_session_artifacts", lockKey: deployedSessionArtifactsLockKey,
+		db: db, table: "deployed_session_artifacts", sessionTable: "deployed_sessions", lockKey: deployedSessionArtifactsLockKey,
 		recheckSession: recheckDeployedSession,
 	}}
 }
@@ -223,15 +223,26 @@ func (r *DeployedRepository) NextSeq(ctx context.Context, sessionID string) (int
 }
 
 // AppendUserTurn: see ChatRepository.AppendUserTurn. The message id is
-// inserted explicitly (m.ID) so claimed rows' message_id names the real row.
+// inserted explicitly (m.ID, required) so claimed rows' message_id names the
+// real row. Unlike the BO method it takes a DeployedMessage (AgentVersionID on
+// the message) instead of an agentVersionID argument. No ON CONFLICT: a
+// retried m.ID errors, by design.
 func (r *DeployedRepository) AppendUserTurn(ctx context.Context, m types.DeployedMessage) ([]llm.ArtifactRefBlock, error) {
+	if m.ID == "" {
+		return nil, errors.New("message ID required")
+	}
 	return r.sessionArtifacts.appendUserTurn(ctx, m.SessionID, m.ID, m.Content, func(tx *sql.Tx, content json.RawMessage) error {
 		return insertDeployedMessageTx(ctx, tx, m, content)
 	})
 }
 
-// AppendToolMessage: see ChatRepository.AppendToolMessage.
+// AppendToolMessage: see ChatRepository.AppendToolMessage. It takes a
+// DeployedMessage (AgentVersionID on the message) instead of an agentVersionID
+// argument; m.ID is required.
 func (r *DeployedRepository) AppendToolMessage(ctx context.Context, m types.DeployedMessage, refs []llm.ArtifactRefBlock) error {
+	if m.ID == "" {
+		return errors.New("message ID required")
+	}
 	return r.sessionArtifacts.appendToolMessage(ctx, m.SessionID, m.ID, refs, func(tx *sql.Tx) error {
 		return insertDeployedMessageTx(ctx, tx, m, m.Content)
 	})
@@ -242,5 +253,8 @@ func insertDeployedMessageTx(ctx context.Context, tx *sql.Tx, m types.DeployedMe
 		INSERT INTO deployed_messages (id, session_id, agent_version_id, role, content, seq)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6)
 	`, m.ID, m.SessionID, m.AgentVersionID, string(m.Role), []byte(content), m.Seq)
+	if isForeignKeyViolation(err) {
+		return types.ErrNotFound
+	}
 	return err
 }

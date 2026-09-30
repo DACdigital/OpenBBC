@@ -36,9 +36,13 @@ type sqlQueryer interface {
 //
 // table is a trusted constant set by the constructors, never user input.
 type sessionArtifacts struct {
-	db      *sql.DB
-	table   string
-	lockKey int32
+	db    *sql.DB
+	table string
+	// sessionTable is the owning session table (trusted constant). The turn
+	// writes lock its row FOR KEY SHARE first, so lock order is always
+	// session row, then artifact rows (matching a cascading session delete).
+	sessionTable string
+	lockKey      int32
 	// recheckSession re-reads the owning session inside the upload commit
 	// transaction: ErrNotFound if it is gone, ErrSessionLocked if a BO
 	// session was locked by a dataset close during a slow upload.
@@ -257,8 +261,10 @@ func recheckDeployedSession(ctx context.Context, tx *sql.Tx, sessionID string) e
 
 // claimPending assigns every pending upload on the session to messageID
 // inside tx and returns their refs in (created_at, id) order. Concurrent
-// claims serialise on the row locks; the loser re-evaluates
-// message_id IS NULL and matches nothing, so each row is claimed once.
+// claims over existing pending rows serialise on the row locks; the loser
+// re-evaluates message_id IS NULL and matches nothing, so each row is claimed
+// once. With none pending both turns proceed and UNIQUE(session_id, seq) is
+// the backstop.
 func (t sessionArtifacts) claimPending(ctx context.Context, tx *sql.Tx, sessionID, messageID string) ([]llm.ArtifactRefBlock, error) {
 	rows, err := tx.QueryContext(ctx, `
 		UPDATE `+t.table+` SET message_id = $2::uuid, updated_at = now()
@@ -313,6 +319,18 @@ func (t sessionArtifacts) insertToolResultRows(ctx context.Context, tx *sql.Tx, 
 	return nil
 }
 
+// lockSession takes FOR KEY SHARE on the session row as the first statement of
+// a turn write, so it cannot deadlock with a cascading session delete.
+// ErrNotFound if the session is gone.
+func (t sessionArtifacts) lockSession(ctx context.Context, tx *sql.Tx, sessionID string) error {
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM `+t.sessionTable+` WHERE id = $1::uuid FOR KEY SHARE`, sessionID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ErrNotFound
+	}
+	return err
+}
+
 // appendUserTurn is the shared body of AppendUserTurn: claim, empty-turn
 // check, content assembly, then insertMsg(tx, content), all in one tx.
 func (t sessionArtifacts) appendUserTurn(ctx context.Context, sessionID, messageID string, content json.RawMessage,
@@ -322,11 +340,15 @@ func (t sessionArtifacts) appendUserTurn(ctx context.Context, sessionID, message
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	refs, err := t.claimPending(ctx, tx, sessionID, messageID)
+	if err := t.lockSession(ctx, tx, sessionID); err != nil {
+		return nil, err
+	}
+	// Reject bad content before taking artifact row locks.
+	blocks, hasText, err := decodeUserContent(content)
 	if err != nil {
 		return nil, err
 	}
-	blocks, hasText, err := decodeUserContent(content)
+	refs, err := t.claimPending(ctx, tx, sessionID, messageID)
 	if err != nil {
 		return nil, err
 	}
@@ -365,6 +387,9 @@ func (t sessionArtifacts) appendToolMessage(ctx context.Context, sessionID, mess
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := t.lockSession(ctx, tx, sessionID); err != nil {
+		return err
+	}
 	if err := insertMsg(tx); err != nil {
 		return err
 	}

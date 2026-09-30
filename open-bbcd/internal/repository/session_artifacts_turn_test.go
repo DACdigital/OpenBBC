@@ -70,6 +70,17 @@ func turnSurfaces(t *testing.T) []turnSurface {
 	}
 }
 
+func mustCommit(t *testing.T, store interface {
+	CommitUpload(ctx context.Context, a types.SessionArtifact, maxPending int) (*types.SessionArtifact, error)
+}, ctx context.Context, row types.SessionArtifact, maxPending int) *types.SessionArtifact {
+	t.Helper()
+	a, err := store.CommitUpload(ctx, row, maxPending)
+	if err != nil {
+		t.Fatalf("CommitUpload: %v", err)
+	}
+	return a
+}
+
 func userMsg(sid string, seq int, text string) types.ChatMessage {
 	content := `[]`
 	if text != "" {
@@ -100,8 +111,8 @@ func TestAppendUserTurn_ClaimsInOrder(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			ctx := context.Background()
 			sid := s.newSession(t)
-			a, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", "a.png"), 10)
-			b, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/bb", ""), 10)
+			a := mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/aa", "a.png"), 10)
+			b := mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/bb", ""), 10)
 
 			msg := userMsg(sid, 1, "summarise")
 			refs, err := s.appendUser(ctx, msg)
@@ -152,7 +163,7 @@ func TestAppendUserTurn_ArtifactOnly_Accepted(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			ctx := context.Background()
 			sid := s.newSession(t)
-			_, _ = s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/aa", ""), 10)
 			if _, err := s.appendUser(ctx, userMsg(sid, 1, "")); err != nil {
 				t.Fatalf("AppendUserTurn: %v", err)
 			}
@@ -184,7 +195,7 @@ func TestAppendUserTurn_ConcurrentTurnsClaimOnce(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			ctx := context.Background()
 			sid := s.newSession(t)
-			_, _ = s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/aa", ""), 10)
 			var wg sync.WaitGroup
 			total := make([]int, 2)
 			errs := make([]error, 2)
@@ -227,7 +238,7 @@ func TestDeleteVsClaim_ExactlyOneWins(t *testing.T) {
 			ctx := context.Background()
 			for i := 0; i < 20; i++ {
 				sid := s.newSession(t)
-				a, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
+				a := mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/aa", ""), 10)
 				var wg sync.WaitGroup
 				var delErr, turnErr error
 				var claimed int
@@ -295,8 +306,8 @@ func TestAppendUserTurn_ClaimOrderIsCreatedAtNotHeap(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			ctx := context.Background()
 			sid := s.newSession(t)
-			a, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
-			b, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/bb", ""), 10)
+			a := mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			b := mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/bb", ""), 10)
 			// Make B older than A while heap order stays A, B.
 			if _, err := s.db.Exec(`UPDATE `+s.table+` SET created_at = now() - interval '1 minute' WHERE id = $1::uuid`, b.ID); err != nil {
 				t.Fatal(err)
@@ -329,17 +340,99 @@ func TestAppendUserTurn_MessageInsertFailureRollsBackClaim(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			ctx := context.Background()
 			sid := s.newSession(t)
-			_, _ = s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/aa", ""), 10)
 			if _, err := s.appendUser(ctx, userMsg(sid, 1, "first")); err != nil {
 				t.Fatalf("first turn: %v", err)
 			}
-			b, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/bb", ""), 10)
+			b := mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/bb", ""), 10)
 			if _, err := s.appendUser(ctx, userMsg(sid, 1, "dup seq")); err == nil {
 				t.Fatal("expected UNIQUE(session_id, seq) violation")
 			}
 			list, _ := s.store.ListPendingArtifacts(ctx, sid)
 			if len(list) != 1 || list[0].ID != b.ID || list[0].MessageID != "" {
 				t.Fatalf("pending after failed turn = %+v, want B still pending", list)
+			}
+		})
+	}
+}
+
+func TestAppendUserTurn_InvalidContent_LeavesPending(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			m := userMsg(sid, 1, "x")
+			m.Content = json.RawMessage(`not json`)
+			if _, err := s.appendUser(ctx, m); err == nil {
+				t.Fatal("expected error for invalid content")
+			}
+			if list, _ := s.store.ListPendingArtifacts(ctx, sid); len(list) != 1 {
+				t.Fatalf("pending = %d, want 1", len(list))
+			}
+		})
+	}
+}
+
+func TestAppendToolMessage_NilRefs(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			msg := types.ChatMessage{ID: uuid.NewString(), SessionID: sid, Role: types.ChatRoleTool, Seq: 1,
+				Content: json.RawMessage(`[{"type":"tool_result","tool_use_id":"t1","content":{},"is_error":false}]`)}
+			if err := s.appendTool(ctx, msg, nil); err != nil {
+				t.Fatalf("AppendToolMessage: %v", err)
+			}
+			if contents, _ := s.load(ctx, sid); len(contents) != 1 {
+				t.Fatalf("messages = %d, want 1", len(contents))
+			}
+			var n int
+			_ = s.db.QueryRow(`SELECT COUNT(*) FROM `+s.table+` WHERE session_id=$1::uuid`, sid).Scan(&n)
+			if n != 0 {
+				t.Fatalf("rows = %d, want 0", n)
+			}
+		})
+	}
+}
+
+func TestTurnWrites_DeletedSession_NotFound(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			s.delSession(t, sid)
+			if _, err := s.appendUser(ctx, userMsg(sid, 1, "hi")); !errors.Is(err, types.ErrNotFound) {
+				t.Fatalf("AppendUserTurn err=%v, want ErrNotFound", err)
+			}
+			msg := types.ChatMessage{ID: uuid.NewString(), SessionID: sid, Role: types.ChatRoleTool, Seq: 1, Content: json.RawMessage(`[]`)}
+			if err := s.appendTool(ctx, msg, nil); !errors.Is(err, types.ErrNotFound) {
+				t.Fatalf("AppendToolMessage err=%v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
+func TestAppendUserTurn_ClaimTieBreakIsID(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			a := mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			b := mustCommit(t, s.store, ctx, pendingRow(sid, "sha256/bb", ""), 10)
+			if _, err := s.db.Exec(`UPDATE `+s.table+` SET created_at = '2026-01-01T00:00:00Z' WHERE session_id = $1::uuid`, sid); err != nil {
+				t.Fatal(err)
+			}
+			first, second := a, b
+			if b.ID < a.ID {
+				first, second = b, a
+			}
+			refs, err := s.appendUser(ctx, userMsg(sid, 1, "go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(refs) != 2 || refs[0].URI != first.URI || refs[1].URI != second.URI {
+				t.Fatalf("refs = %+v, want id order [%s, %s]", refs, first.ID, second.ID)
 			}
 		})
 	}
