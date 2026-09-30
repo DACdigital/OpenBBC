@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 )
 
@@ -110,132 +112,145 @@ type mcpResourceObj struct {
 	Text     string `json:"text,omitempty"` // plain text
 }
 
-// normaliseToolResult walks a JSON tool-result payload looking for MCP-
-// shaped inline media (ImageContent, EmbeddedResource with `blob` or
-// `text`) and uploads the extracted bytes to the artifact store,
-// producing one ArtifactRefBlock per recognised item. Non-media items
-// (TextContent, URI-only EmbeddedResource) stay in the returned
-// `remaining` bytes so the model still sees them in the tool_result.
+// marshalJSON is json.Marshal, replaceable in tests to exercise the
+// re-serialisation failure branch.
+var marshalJSON = json.Marshal
+
+// unavailableToolResult replaces a tool result whose normalised remainder
+// could not be re-serialised. Never fall back to the raw payload: it may
+// carry base64 media.
+var unavailableToolResult = json.RawMessage(`{"content":[{"type":"text","text":"[tool result unavailable]"}]}`)
+
+// normaliseResult is the outcome of normalising one tool result.
+type normaliseResult struct {
+	// Refs are the artifacts uploaded from inline media, in item order.
+	Refs []llm.ArtifactRefBlock
+	// Output is what is streamed as the tool result and persisted in the
+	// tool_result block: the payload with inline media removed (or
+	// replaced by a text note when its upload failed).
+	Output json.RawMessage
+	// ForceError is set when Output is unavailableToolResult; the caller
+	// marks the tool result is_error.
+	ForceError bool
+}
+
+// normaliseToolResult walks an MCP-shaped tool result and moves inline
+// media (ImageContent, EmbeddedResource with blob/text) into the artifact
+// store, one ref per item. Per item:
+//   - upload succeeds → the item is removed from the remainder and a ref returned;
+//   - base64 does not decode, or upload fails → the item is replaced by
+//     {"type":"text","text":"[artifact unavailable: <mime>, <size>]"} and a
+//     warn is logged (store_id/uri/mime/tool only — never a filename).
 //
-// If the payload is not a JSON object with a `content` array — the
-// canonical MCP wire shape — the function passes through: nil refs,
-// original bytes unchanged, no error. This keeps http_endpoint tool
-// results (which are arbitrary REST responses) untouched.
-//
-// Returns:
-//   - refs: newly-created ArtifactRefBlocks for each normalised item.
-//   - remaining: the tool result JSON with normalised items removed
-//     from the content array. Empty if every content item was
-//     normalised (caller may drop the ToolResultBlock in that case,
-//     though current code always keeps it for tool_use_id linkage).
-//   - err: only fatal errors (upload failures) propagate; malformed
-//     payloads pass through.
+// Non-MCP payloads (no top-level content array) pass through unchanged.
+// A re-serialisation failure yields unavailableToolResult with ForceError.
 func normaliseToolResult(
 	ctx context.Context,
 	payload json.RawMessage,
 	uploader ArtifactUploader,
-) (refs []llm.Block, remaining json.RawMessage, err error) {
-	// Attempt to parse as an MCP-shaped tool result. Failure is not an
-	// error — many tool backends return arbitrary JSON.
-	var parsed struct {
-		Content []json.RawMessage `json:"content"`
-		Other   map[string]json.RawMessage
-	}
+	logger *slog.Logger,
+	toolName string,
+) normaliseResult {
+	passThrough := normaliseResult{Output: payload}
 	if len(payload) == 0 {
-		return nil, payload, nil
+		return passThrough
 	}
-	if e := json.Unmarshal(payload, &parsed); e != nil {
-		return nil, payload, nil
-	}
-	if parsed.Content == nil {
-		return nil, payload, nil
-	}
-
-	// Rewind: parse into a map to preserve top-level fields other than
-	// "content" (some backends attach metadata alongside).
 	var top map[string]json.RawMessage
-	if e := json.Unmarshal(payload, &top); e != nil {
-		return nil, payload, nil
+	if err := json.Unmarshal(payload, &top); err != nil {
+		return passThrough
+	}
+	rawContent, ok := top["content"]
+	if !ok {
+		return passThrough
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(rawContent, &items); err != nil {
+		return passThrough
 	}
 
-	preserved := make([]json.RawMessage, 0, len(parsed.Content))
-	for _, raw := range parsed.Content {
+	var res normaliseResult
+	kept := make([]json.RawMessage, 0, len(items))
+	for _, raw := range items {
 		var item mcpContentItem
-		if e := json.Unmarshal(raw, &item); e != nil {
-			preserved = append(preserved, raw)
+		if err := json.Unmarshal(raw, &item); err != nil {
+			kept = append(kept, raw)
 			continue
 		}
-		switch item.Type {
-		case "image":
-			bytes, decErr := base64.StdEncoding.DecodeString(item.Data)
-			if decErr != nil {
-				preserved = append(preserved, raw)
-				continue
-			}
-			mime := item.MIMEType
-			if mime == "" {
-				mime = "application/octet-stream"
-			}
-			ref, upErr := uploader.Upload(ctx, mime, bytes)
-			if upErr != nil {
-				return nil, payload, upErr
-			}
-			refs = append(refs, ref)
-		case "resource":
-			if item.Resource == nil {
-				preserved = append(preserved, raw)
-				continue
-			}
-			r := item.Resource
-			mime := r.MIMEType
-			var b []byte
-			switch {
-			case r.Blob != "":
-				decoded, decErr := base64.StdEncoding.DecodeString(r.Blob)
-				if decErr != nil {
-					preserved = append(preserved, raw)
-					continue
-				}
-				b = decoded
-			case r.Text != "":
-				if mime == "" {
-					mime = "text/plain"
-				}
-				b = []byte(r.Text)
-			default:
-				// URI-only EmbeddedResource — preserved as opaque content;
-				// framework does not fetch external URIs (see spec § Scope).
-				preserved = append(preserved, raw)
-				continue
-			}
-			if mime == "" {
-				mime = "application/octet-stream"
-			}
-			ref, upErr := uploader.Upload(ctx, mime, b)
-			if upErr != nil {
-				return nil, payload, upErr
-			}
-			refs = append(refs, ref)
-		default:
-			// TextContent and unknown types: preserve verbatim.
-			preserved = append(preserved, raw)
+		declared, data, decoded, isMedia := inlineMedia(item)
+		if !isMedia {
+			kept = append(kept, raw)
+			continue
+		}
+		if !decoded {
+			logger.Warn("tool result media not decodable; replaced with note",
+				slog.String("tool", toolName), slog.String("mime", declared))
+			kept = append(kept, unavailableNote(declared, "unknown"))
+			continue
+		}
+		ref, err := uploader.Upload(ctx, declared, data)
+		if err != nil {
+			resolved := artifacts.ResolveMIME(declared, data)
+			logger.Warn("tool result media upload failed; replaced with note",
+				slog.String("tool", toolName), slog.String("mime", resolved), slog.Any("err", err))
+			kept = append(kept, unavailableNote(resolved, llm.HumanBytes(int64(len(data)))))
+			continue
+		}
+		res.Refs = append(res.Refs, ref)
+	}
+
+	keptJSON, err := marshalJSON(kept)
+	if err == nil {
+		top["content"] = keptJSON
+		var out []byte
+		if out, err = marshalJSON(top); err == nil {
+			res.Output = out
+			return res
 		}
 	}
-
-	// Reserialize the top-level object with the preserved content array
-	// (which may be empty if everything got normalised).
-	preservedContent, marshalErr := json.Marshal(preserved)
-	if marshalErr != nil {
-		return refs, payload, nil // fall back to raw output
-	}
-	top["content"] = preservedContent
-	newPayload, marshalErr := json.Marshal(top)
-	if marshalErr != nil {
-		return refs, payload, nil
-	}
-	return refs, newPayload, nil
+	logger.Warn("tool result re-serialisation failed; replaced with unavailable result",
+		slog.String("tool", toolName), slog.Any("err", err))
+	res.Output = unavailableToolResult
+	res.ForceError = true
+	return res
 }
 
-// unused: keep errors imported until normaliseToolResult grows a real
-// error case beyond the upload failure path.
-var _ = errors.New
+// inlineMedia extracts inline bytes from an MCP content item. isMedia is
+// false for text items, URI-only resources and unknown types (kept as-is).
+// decoded is false when the item is media but its base64 does not decode.
+func inlineMedia(item mcpContentItem) (declared string, data []byte, decoded, isMedia bool) {
+	switch item.Type {
+	case "image":
+		declared = orDefault(item.MIMEType, "application/octet-stream")
+		b, err := base64.StdEncoding.DecodeString(item.Data)
+		return declared, b, err == nil, true
+	case "resource":
+		if item.Resource == nil {
+			return "", nil, false, false
+		}
+		r := item.Resource
+		switch {
+		case r.Blob != "":
+			declared = orDefault(r.MIMEType, "application/octet-stream")
+			b, err := base64.StdEncoding.DecodeString(r.Blob)
+			return declared, b, err == nil, true
+		case r.Text != "":
+			return orDefault(r.MIMEType, "text/plain"), []byte(r.Text), true, true
+		}
+	}
+	return "", nil, false, false
+}
+
+func unavailableNote(mime, size string) json.RawMessage {
+	b, _ := json.Marshal(map[string]string{
+		"type": "text",
+		"text": "[artifact unavailable: " + mime + ", " + size + "]",
+	})
+	return b
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}

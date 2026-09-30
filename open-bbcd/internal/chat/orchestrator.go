@@ -375,18 +375,16 @@ func (o *Orchestrator) Turn(
 				Result:     res.Output,
 				IsError:    res.IsError,
 			})
-			if o.artifactUploader != nil && !res.IsError {
-				refs, remaining, nerr := normaliseToolResult(ctx, res.Output, o.artifactUploader)
-				if nerr == nil {
-					toolRefs = append(toolRefs, refs...)
-					if len(remaining) > 0 {
-						res.Output = remaining
-					}
-				} else {
-					o.logger.Warn("tool result normalisation failed; passing through raw output",
-						slog.String("tool", tu.Name),
-						slog.Any("err", nerr),
-					)
+			if o.artifactUploader != nil {
+				// Error-flagged results are normalised too: an MCP isError
+				// result may carry a screenshot of the failed state.
+				nr := normaliseToolResult(ctx, res.Output, o.artifactUploader, o.logger, tu.Name)
+				res.Output = nr.Output
+				if nr.ForceError {
+					res.IsError = true
+				}
+				for _, r := range nr.Refs {
+					toolRefs = append(toolRefs, r)
 				}
 			}
 			toolResults = append(toolResults, llm.ToolResultBlock{

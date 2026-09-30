@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"iter"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,15 +171,16 @@ func TestRenderArtifacts_UnknownStoreProducesSurrogate(t *testing.T) {
 
 // --- normaliseToolResult tests ----------------------------------------
 
-// stubUploader records uploads and returns predictable refs.
+// stubUploader records uploads and returns predictable refs. failCalls
+// lists 1-based upload call numbers that fail.
 type stubUploader struct {
-	uploads int
-	fail    bool
+	uploads   int
+	failCalls map[int]bool
 }
 
 func (u *stubUploader) Upload(ctx context.Context, mime string, data []byte) (llm.ArtifactRefBlock, error) {
 	u.uploads++
-	if u.fail {
+	if u.failCalls[u.uploads] {
 		return llm.ArtifactRefBlock{}, errors.New("upload failed")
 	}
 	return llm.ArtifactRefBlock{
@@ -189,24 +192,29 @@ func (u *stubUploader) Upload(ctx context.Context, mime string, data []byte) (ll
 	}, nil
 }
 
+func remainingContent(t *testing.T, raw json.RawMessage) []map[string]any {
+	t.Helper()
+	var parsed struct {
+		Content []map[string]any `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("remaining not an MCP result: %v (%s)", err, raw)
+	}
+	return parsed.Content
+}
+
 func TestNormalise_ImageContentUploaded(t *testing.T) {
 	up := &stubUploader{}
 	payload := []byte(`{"content":[{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}]}`)
-	refs, remaining, err := normaliseToolResult(context.Background(), payload, up)
-	if err != nil {
-		t.Fatalf("err %v", err)
+	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	if len(res.Refs) != 1 || up.uploads != 1 {
+		t.Fatalf("refs=%d uploads=%d, want 1/1", len(res.Refs), up.uploads)
 	}
-	if len(refs) != 1 {
-		t.Fatalf("len(refs) = %d, want 1", len(refs))
+	if res.ForceError {
+		t.Fatal("ForceError set on success")
 	}
-	if up.uploads != 1 {
-		t.Errorf("uploads = %d, want 1", up.uploads)
-	}
-	// content array in remaining should be empty (item was normalised).
-	var parsed struct{ Content []json.RawMessage }
-	_ = json.Unmarshal(remaining, &parsed)
-	if len(parsed.Content) != 0 {
-		t.Errorf("remaining content = %v, want empty", parsed.Content)
+	if c := remainingContent(t, res.Output); len(c) != 0 {
+		t.Errorf("remaining content = %v, want empty", c)
 	}
 }
 
@@ -214,92 +222,120 @@ func TestNormalise_EmbeddedResourceWithBlob(t *testing.T) {
 	up := &stubUploader{}
 	inline := base64.StdEncoding.EncodeToString([]byte("PDF data"))
 	payload := []byte(`{"content":[{"type":"resource","resource":{"uri":"file:///x","mimeType":"application/pdf","blob":"` + inline + `"}}]}`)
-	refs, _, err := normaliseToolResult(context.Background(), payload, up)
-	if err != nil {
-		t.Fatalf("err %v", err)
-	}
-	if len(refs) != 1 {
-		t.Errorf("len(refs) = %d, want 1", len(refs))
+	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	if len(res.Refs) != 1 {
+		t.Errorf("len(refs) = %d, want 1", len(res.Refs))
 	}
 }
 
 func TestNormalise_EmbeddedResourceWithText(t *testing.T) {
 	up := &stubUploader{}
 	payload := []byte(`{"content":[{"type":"resource","resource":{"uri":"file:///x","mimeType":"text/csv","text":"a,b\n1,2"}}]}`)
-	refs, _, err := normaliseToolResult(context.Background(), payload, up)
-	if err != nil {
-		t.Fatalf("err %v", err)
-	}
-	if len(refs) != 1 {
-		t.Errorf("len(refs) = %d, want 1", len(refs))
-	}
-	ref := refs[0].(llm.ArtifactRefBlock)
-	if ref.MIME != "text/csv" {
-		t.Errorf("MIME = %q, want text/csv", ref.MIME)
+	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	if len(res.Refs) != 1 || res.Refs[0].MIME != "text/csv" {
+		t.Fatalf("refs = %#v, want one text/csv ref", res.Refs)
 	}
 }
 
 func TestNormalise_URIOnlyEmbeddedResource_PassesThrough(t *testing.T) {
 	up := &stubUploader{}
-	// EmbeddedResource with NO blob or text — should be passed through.
 	payload := []byte(`{"content":[{"type":"resource","resource":{"uri":"file:///x","mimeType":"application/pdf"}}]}`)
-	refs, remaining, err := normaliseToolResult(context.Background(), payload, up)
-	if err != nil {
-		t.Fatalf("err %v", err)
+	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	if len(res.Refs) != 0 || up.uploads != 0 {
+		t.Fatalf("URI-only resource must not be uploaded: refs=%v uploads=%d", res.Refs, up.uploads)
 	}
-	if len(refs) != 0 {
-		t.Errorf("URI-only resource should NOT be uploaded; refs=%v", refs)
-	}
-	if up.uploads != 0 {
-		t.Errorf("uploads = %d, want 0", up.uploads)
-	}
-	// Item should remain in content.
-	var parsed struct{ Content []json.RawMessage }
-	_ = json.Unmarshal(remaining, &parsed)
-	if len(parsed.Content) != 1 {
-		t.Errorf("URI-only item should be preserved in remaining content, got %v", parsed.Content)
+	if c := remainingContent(t, res.Output); len(c) != 1 {
+		t.Errorf("URI-only item should be preserved, got %v", c)
 	}
 }
 
 func TestNormalise_TextContentPreserved(t *testing.T) {
 	up := &stubUploader{}
 	payload := []byte(`{"content":[{"type":"text","text":"result summary"}]}`)
-	refs, remaining, err := normaliseToolResult(context.Background(), payload, up)
-	if err != nil {
-		t.Fatalf("err %v", err)
+	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	if len(res.Refs) != 0 || up.uploads != 0 {
+		t.Fatalf("text must not be normalised")
 	}
-	if len(refs) != 0 {
-		t.Errorf("text should NOT be normalised; refs=%v", refs)
-	}
-	if up.uploads != 0 {
-		t.Errorf("uploads = %d, want 0 for text content", up.uploads)
-	}
-	if string(remaining) == "" {
-		t.Errorf("remaining should preserve original payload")
+	if c := remainingContent(t, res.Output); len(c) != 1 || c[0]["text"] != "result summary" {
+		t.Errorf("text item not preserved: %v", c)
 	}
 }
 
 func TestNormalise_NonMCPShape_PassesThrough(t *testing.T) {
 	up := &stubUploader{}
-	// Arbitrary REST response (no content array).
 	payload := []byte(`{"status":"ok","result":42}`)
-	refs, remaining, err := normaliseToolResult(context.Background(), payload, up)
-	if err != nil {
-		t.Fatalf("err %v", err)
-	}
-	if len(refs) != 0 {
-		t.Errorf("non-MCP payload should be passed through untouched")
-	}
-	if string(remaining) != string(payload) {
-		t.Errorf("payload should be preserved verbatim; got %s", string(remaining))
+	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	if len(res.Refs) != 0 || string(res.Output) != string(payload) {
+		t.Fatalf("non-MCP payload must pass through verbatim; got %s", res.Output)
 	}
 }
 
-func TestNormalise_UploadErrorPropagates(t *testing.T) {
-	up := &stubUploader{fail: true}
+func TestNormalise_UploadFailureBecomesTextNote(t *testing.T) {
+	up := &stubUploader{failCalls: map[int]bool{1: true}}
 	payload := []byte(`{"content":[{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}]}`)
-	_, _, err := normaliseToolResult(context.Background(), payload, up)
-	if err == nil {
-		t.Fatal("expected upload error to propagate")
+	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	if len(res.Refs) != 0 {
+		t.Fatalf("no ref may be produced for a failed upload")
+	}
+	if strings.Contains(string(res.Output), "aGVsbG8=") {
+		t.Fatalf("base64 leaked into remainder: %s", res.Output)
+	}
+	c := remainingContent(t, res.Output)
+	if len(c) != 1 || c[0]["type"] != "text" || !strings.HasPrefix(c[0]["text"].(string), "[artifact unavailable: ") {
+		t.Fatalf("failed item not replaced by a note: %v", c)
+	}
+	if c[0]["text"] != "[artifact unavailable: application/octet-stream, 5 B]" {
+		// "hello" declared image/png does not sniff as an image, so the
+		// resolved MIME is octet-stream; the size is the decoded 5 bytes.
+		t.Errorf("note = %q", c[0]["text"])
+	}
+}
+
+func TestNormalise_UndecodableBase64BecomesNoteWithUnknownSize(t *testing.T) {
+	up := &stubUploader{}
+	payload := []byte(`{"content":[{"type":"image","data":"%%%not-base64%%%","mimeType":"image/png"}]}`)
+	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	if up.uploads != 0 {
+		t.Fatalf("undecodable item must not be uploaded")
+	}
+	c := remainingContent(t, res.Output)
+	if len(c) != 1 || c[0]["text"] != "[artifact unavailable: image/png, unknown]" {
+		t.Fatalf("remainder = %v", c)
+	}
+}
+
+func TestNormalise_OnlyFailingItemIsReplaced(t *testing.T) {
+	up := &stubUploader{failCalls: map[int]bool{2: true}}
+	img := `{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}`
+	payload := []byte(`{"content":[` + img + `,` + img + `]}`)
+	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	if len(res.Refs) != 1 {
+		t.Fatalf("refs = %d, want 1", len(res.Refs))
+	}
+	c := remainingContent(t, res.Output)
+	if len(c) != 1 || !strings.HasPrefix(c[0]["text"].(string), "[artifact unavailable: ") {
+		t.Fatalf("remainder = %v, want exactly one note", c)
+	}
+}
+
+func TestNormalise_MarshalFailureBecomesUnavailableError(t *testing.T) {
+	orig := marshalJSON
+	marshalJSON = func(any) ([]byte, error) { return nil, errors.New("boom") }
+	defer func() { marshalJSON = orig }()
+
+	up := &stubUploader{}
+	payload := []byte(`{"content":[{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}]}`)
+	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	if !res.ForceError {
+		t.Fatal("ForceError not set on re-marshal failure")
+	}
+	if string(res.Output) != `{"content":[{"type":"text","text":"[tool result unavailable]"}]}` {
+		t.Fatalf("output = %s", res.Output)
+	}
+	if len(res.Refs) != 1 {
+		t.Errorf("refs uploaded before the failure must be kept, got %d", len(res.Refs))
+	}
+	if strings.Contains(string(res.Output), "aGVsbG8=") {
+		t.Fatal("raw payload returned")
 	}
 }

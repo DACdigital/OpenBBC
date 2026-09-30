@@ -161,13 +161,13 @@ func TextSurrogate(ref ArtifactRefBlock) TextBlock {
 			label = ref.URI
 		}
 	}
-	return TextBlock{Text: "[Attachment: " + label + " (" + ref.MIME + ", " + humanBytes(ref.SizeBytes) + ")]"}
+	return TextBlock{Text: "[Attachment: " + label + " (" + ref.MIME + ", " + HumanBytes(ref.SizeBytes) + ")]"}
 }
 
-// humanBytes renders a byte count in a compact human-readable form:
+// HumanBytes renders a byte count in a compact human-readable form:
 // bytes, KB, MB, GB. Deliberately small and dependency-free — pulling
 // in github.com/dustin/go-humanize just for one call would be overkill.
-func humanBytes(n int64) string {
+func HumanBytes(n int64) string {
 	const (
 		kb = int64(1) << 10
 		mb = int64(1) << 20

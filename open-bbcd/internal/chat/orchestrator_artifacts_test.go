@@ -103,3 +103,23 @@ func TestOrchestrator_ToolMessage_ResultsBeforeRefs(t *testing.T) {
 		t.Fatalf("tool message block order = %v, want %v", got, want)
 	}
 }
+
+func TestOrchestrator_ErrorFlaggedToolResultIsNormalised(t *testing.T) {
+	flm := &fakeLLM{script: [][]llm.Event{toolUseRound("tu1"), endRound()}}
+	o, chats, up := newArtifactOrchestrator(t, flm, []tools.Result{
+		{ToolUseID: "tu1", Output: imageToolOutput(), IsError: true},
+	})
+	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if up.uploads != 1 {
+		t.Fatalf("uploads = %d, want 1 (isError results must be normalised)", up.uploads)
+	}
+	tm := messagesWithRole(chats, types.ChatRoleTool)
+	if strings.Contains(string(tm[0].Content), onePixelPNG) {
+		t.Fatalf("base64 persisted in tool message: %s", tm[0].Content)
+	}
+	if !strings.Contains(string(tm[0].Content), `"is_error":true`) {
+		t.Fatalf("is_error lost: %s", tm[0].Content)
+	}
+}
