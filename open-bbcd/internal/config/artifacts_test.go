@@ -276,3 +276,32 @@ func TestParseArtifacts_DisabledWhenOnlyGlobalsSet(t *testing.T) {
 		t.Errorf("SignedURLTTL = %v, want 600s", cfg.SignedURLTTL)
 	}
 }
+
+func TestParseArtifacts_MaxPendingDefault(t *testing.T) {
+	cfg, err := parseArtifactsFromEnv(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxPending != 10 {
+		t.Errorf("MaxPending = %d, want default 10", cfg.MaxPending)
+	}
+}
+
+func TestParseArtifacts_MaxPendingOverride(t *testing.T) {
+	cfg, err := parseArtifactsFromEnv([]string{"ARTIFACT_MAX_PENDING=3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxPending != 3 {
+		t.Errorf("MaxPending = %d, want 3", cfg.MaxPending)
+	}
+}
+
+func TestParseArtifacts_MaxPendingInvalid(t *testing.T) {
+	for _, v := range []string{"0", "-1", "ten", "1.5"} {
+		_, err := parseArtifactsFromEnv([]string{"ARTIFACT_MAX_PENDING=" + v})
+		if err == nil || !strings.Contains(err.Error(), "ARTIFACT_MAX_PENDING") {
+			t.Errorf("ARTIFACT_MAX_PENDING=%q: err = %v, want error naming the var", v, err)
+		}
+	}
+}

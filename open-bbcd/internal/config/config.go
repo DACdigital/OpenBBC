@@ -75,6 +75,10 @@ type ArtifactsConfig struct {
 	// shipped; deployers set this explicitly.
 	MaxUploadMB int
 
+	// MaxPending caps pending (uploaded, not yet claimed) artifacts per
+	// session. ARTIFACT_MAX_PENDING, default 10, must be >= 1.
+	MaxPending int
+
 	// SignedURLTTL is passed to ArtifactStore.Sign when the retrieval
 	// route serves a 302 redirect. Default 300s.
 	SignedURLTTL time.Duration
@@ -141,6 +145,7 @@ func parseArtifactsFromEnv(environ []string) (ArtifactsConfig, error) {
 		Stores:       map[string]ArtifactStoreConfig{},
 		DefaultID:    kv["ARTIFACT_STORE_DEFAULT"],
 		SignedURLTTL: 300 * time.Second,
+		MaxPending:   10,
 	}
 
 	if v := kv["ARTIFACT_MAX_UPLOAD_MB"]; v != "" {
@@ -157,6 +162,14 @@ func parseArtifactsFromEnv(environ []string) (ArtifactsConfig, error) {
 			return ArtifactsConfig{}, fmt.Errorf("ARTIFACT_SIGNED_URL_TTL_SECONDS: expected positive integer, got %q", v)
 		}
 		cfg.SignedURLTTL = time.Duration(n) * time.Second
+	}
+
+	if v := kv["ARTIFACT_MAX_PENDING"]; v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return ArtifactsConfig{}, fmt.Errorf("ARTIFACT_MAX_PENDING: expected integer >= 1, got %q", v)
+		}
+		cfg.MaxPending = n
 	}
 
 	// Group per-store vars: ARTIFACT_STORE_<ID>_<FIELD>=<value>.
