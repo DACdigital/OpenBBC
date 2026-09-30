@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -389,7 +390,8 @@ func TestRetrieve_BytesMode200(t *testing.T) {
 	sessions := &fakeSessionStore{
 		sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}},
 	}
-	refs := seededRows(t, "MAIN", "sha256/abc", "image/png")
+	refs := &memRows{}
+	seedRow(t, refs, "s1", "sha256/abc", "image/png", "", int64(len(payload)))
 	h := NewArtifactHandler(sessions, refs, reg, 10, 10, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent_versions/v1/chat/s1/artifacts/MAIN/sha256/abc", nil)
@@ -399,6 +401,9 @@ func TestRetrieve_BytesMode200(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleRetrieve(rec, req)
 
+	if got := rec.Header().Get("Content-Length"); got != strconv.Itoa(len(payload)) {
+		t.Errorf("Content-Length = %q, want %d", got, len(payload))
+	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}

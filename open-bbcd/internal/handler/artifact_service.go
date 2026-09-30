@@ -228,7 +228,7 @@ func (s *artifactService) retrieve(w http.ResponseWriter, r *http.Request, sessi
 	}
 	row, err := s.rows.LookupSessionArtifact(ctx, sessionID, storeID, uri)
 	if err != nil {
-		s.fail(w, "retrieve lookup", err, slog.String("store_id", storeID), slog.String("uri", uri))
+		s.fail(w, "retrieve lookup", err, slog.String("session_id", sessionID), slog.String("store_id", storeID), slog.String("uri", uri))
 		return
 	}
 	store := s.registry.Get(storeID)
@@ -240,7 +240,7 @@ func (s *artifactService) retrieve(w http.ResponseWriter, r *http.Request, sessi
 	st, err := store.Stat(ctx, uri)
 	if err != nil {
 		s.logger.Error("artifact retrieve: stat failed",
-			slog.String("store_id", storeID), slog.String("uri", uri), slog.String("mime", row.MIME), slog.Any("err", err))
+			slog.String("session_id", sessionID), slog.String("store_id", storeID), slog.String("uri", uri), slog.String("mime", row.MIME), slog.Any("err", err))
 		http.Error(w, "upstream store error", http.StatusBadGateway)
 		return
 	}
@@ -260,7 +260,7 @@ func (s *artifactService) retrieve(w http.ResponseWriter, r *http.Request, sessi
 
 	storeErr := func(op string, err error) {
 		s.logger.Error("artifact retrieve: "+op+" failed",
-			slog.String("store_id", storeID), slog.String("uri", uri), slog.String("mime", row.MIME), slog.Any("err", err))
+			slog.String("session_id", sessionID), slog.String("store_id", storeID), slog.String("uri", uri), slog.String("mime", row.MIME), slog.Any("err", err))
 		if errors.Is(err, artifacts.ErrBlobMissing) {
 			http.Error(w, "blob was removed", http.StatusGone)
 			return
@@ -291,7 +291,9 @@ func (s *artifactService) retrieve(w http.ResponseWriter, r *http.Request, sessi
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.Copy(w, rc)
 	default:
-		s.logger.Error("artifact retrieve: unknown delivery mode", slog.String("store_id", storeID))
+		s.logger.Error("artifact retrieve: unknown delivery mode",
+			slog.String("session_id", sessionID), slog.String("store_id", storeID),
+			slog.Int("delivery", int(store.PreferredDelivery())))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
 }
