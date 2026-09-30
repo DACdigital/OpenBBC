@@ -158,6 +158,7 @@ func (s *sink) translate(ev transport.Event) (events.Event, error) {
 			"sha256":     e.Sha256,
 			"filename":   filename,
 		})), nil
+
 	case transport.TurnEndEvent:
 		return events.NewRunFinishedEvent(s.threadID, s.runID), nil
 

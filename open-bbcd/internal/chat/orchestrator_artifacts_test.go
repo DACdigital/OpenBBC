@@ -171,8 +171,48 @@ func TestOrchestrator_NoArtifactRefWhenToolMessagePersistFails(t *testing.T) {
 	o, chats, _ := newArtifactOrchestrator(t, flm, []tools.Result{{ToolUseID: "tu1", Output: imageToolOutput()}})
 	chats.failRole = types.ChatRoleTool
 	sink := &recordingSink{}
-	_ = o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink)
+	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink); err == nil {
+		t.Fatal("expected Turn error when the tool message fails to persist")
+	}
+	if eventIndex(sink.events, func(e transport.Event) bool {
+		tr, ok := e.(transport.ToolResultEvent)
+		return ok && tr.ToolCallID == "tu1"
+	}) < 0 {
+		t.Fatal("ToolResultEvent for tu1 should still have been sent")
+	}
 	if eventIndex(sink.events, func(e transport.Event) bool { _, ok := e.(transport.ArtifactRefEvent); return ok }) >= 0 {
 		t.Fatal("ArtifactRefEvent sent although the tool message was not persisted")
+	}
+}
+
+func TestOrchestrator_ArtifactRefOrder_ToolCallThenItem(t *testing.T) {
+	img := `{"type":"image","data":"` + onePixelPNG + `","mimeType":"image/png"}`
+	flm := &fakeLLM{script: [][]llm.Event{toolUseRound("tu1", "tu2"), endRound()}}
+	o, _, _ := newArtifactOrchestrator(t, flm, []tools.Result{
+		{ToolUseID: "tu1", Output: []byte(`{"content":[` + img + `,` + img + `]}`)},
+		{ToolUseID: "tu2", Output: []byte(`{"content":[` + img + `]}`)},
+	})
+	sink := &recordingSink{}
+	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	var refIDs []string
+	firstRef, lastResult := -1, -1
+	for i, e := range sink.events {
+		switch ev := e.(type) {
+		case transport.ArtifactRefEvent:
+			if firstRef < 0 {
+				firstRef = i
+			}
+			refIDs = append(refIDs, ev.ToolCallID)
+		case transport.ToolResultEvent:
+			lastResult = i
+		}
+	}
+	if want := []string{"tu1", "tu1", "tu2"}; !reflect.DeepEqual(refIDs, want) {
+		t.Fatalf("ref order = %v, want %v", refIDs, want)
+	}
+	if firstRef < lastResult {
+		t.Fatalf("first ArtifactRefEvent (idx %d) before last ToolResultEvent (idx %d)", firstRef, lastResult)
 	}
 }

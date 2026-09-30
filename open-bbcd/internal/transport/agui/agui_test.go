@@ -81,3 +81,12 @@ func TestAGUI_ArtifactRefIsCustomEvent(t *testing.T) {
 		}
 	}
 }
+
+func TestAGUI_ArtifactRefWithFilename(t *testing.T) {
+	var buf bytes.Buffer
+	sink := newWriterSink(&buf)
+	_ = sink.Send(context.Background(), transport.ArtifactRefEvent{ToolCallID: "tc_1", StoreID: "MAIN", URI: "sha256/abc", Filename: "chart.png"})
+	if out := buf.String(); !strings.Contains(out, `"filename":"chart.png"`) {
+		t.Fatalf("missing filename in %q", out)
+	}
+}

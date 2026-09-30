@@ -84,3 +84,12 @@ func TestJSONL_ArtifactRef(t *testing.T) {
 		}
 	}
 }
+
+func TestJSONL_ArtifactRefEmptyFilenameIsNull(t *testing.T) {
+	var buf bytes.Buffer
+	sink, _ := NewFactory().NewWriterSink(&buf)
+	_ = sink.Send(context.Background(), transport.ArtifactRefEvent{ToolCallID: "tc_1", StoreID: "MAIN", URI: "sha256/abc"})
+	if out := buf.String(); !strings.Contains(out, `"filename":null`) {
+		t.Fatalf("missing null filename in %q", out)
+	}
+}
