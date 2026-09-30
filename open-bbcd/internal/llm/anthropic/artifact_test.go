@@ -28,6 +28,7 @@ type stubFetcher struct {
 }
 
 func (f *stubFetcher) PreferredDelivery() int { return f.delivery }
+func (f *stubFetcher) Stat(context.Context, string) (bool, error) { return true, nil }
 func (f *stubFetcher) Get(ctx context.Context, uri string) (io.ReadCloser, error) {
 	f.getCalls++
 	if f.getErr != nil {

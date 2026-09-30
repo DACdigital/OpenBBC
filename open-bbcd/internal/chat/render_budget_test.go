@@ -267,3 +267,30 @@ func TestRenderCache_PrunesKeysNotPlacedNatively(t *testing.T) {
 		t.Fatal("B should be cached after pass 2")
 	}
 }
+
+func TestRender_MissingBlobBecomesSurrogate(t *testing.T) {
+	f := &countingFetcher{getErr: errors.New("403 AccessDenied"), exists: false}
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/gone", 10)}}}
+	out := render(t, budgetLLM{}, f, msgs)
+	if _, ok := out[0].Content[0].(llm.TextBlock); !ok {
+		t.Fatalf("missing blob must render as surrogate, got %#v", out[0].Content[0])
+	}
+}
+
+func TestRender_TransientFetchErrorFailsWhenBlobExists(t *testing.T) {
+	f := &countingFetcher{getErr: errors.New("connection reset"), exists: true}
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/x", 10)}}}
+	_, err := renderArtifactsForLLM(context.Background(), msgs, budgetLLM{}, func(string) llm.ArtifactFetcher { return f }, newRenderCache(), slog.Default())
+	if err == nil {
+		t.Fatal("transient error on an existing blob must fail the render")
+	}
+}
+
+func TestRender_StatErrorFails(t *testing.T) {
+	f := &countingFetcher{getErr: errors.New("timeout"), statErr: errors.New("timeout")}
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/x", 10)}}}
+	_, err := renderArtifactsForLLM(context.Background(), msgs, budgetLLM{}, func(string) llm.ArtifactFetcher { return f }, newRenderCache(), slog.Default())
+	if err == nil {
+		t.Fatal("Stat error must fail the render")
+	}
+}

@@ -48,8 +48,8 @@ func base64Len(n int64) int64 { return ((n + 2) / 3) * 4 }
 //   - otherwise the ref is rendered (from the per-turn cache or by
 //     fetching). ErrUnsupported downgrades it to an uncharged surrogate.
 //     A rendered InlineMediaBlock is charged at the larger of its declared
-//     and actual size; if that actual cost would exceed the remaining MaxBytes the budget is
-//     exhausted and the ref becomes a surrogate.
+//     and actual size; if that actual cost would exceed the remaining
+//     MaxBytes the budget is exhausted and the ref becomes a surrogate.
 //
 // On return the cache holds only the keys placed natively in this pass.
 func renderArtifactsForLLM(
@@ -144,7 +144,7 @@ func renderOne(
 	cache renderCache,
 	key renderKey,
 	ref llm.ArtifactRefBlock,
-	logger *slog.Logger, // logger is used by the Stat fallback (Task 8).
+	logger *slog.Logger,
 ) (llm.Block, error) {
 	if b, ok := cache[key]; ok {
 		return b, nil
@@ -154,7 +154,20 @@ func renderOne(
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err // refined in Task 8 (Stat fallback)
+		// Tell a permanently missing blob (surrogate; failing would brick
+		// every later turn of the session) from a transient failure (fail
+		// the turn; the next one retries). Stat, not the fetch's HTTP
+		// status: S3 answers 403 for a missing key without ListBucket.
+		exists, serr := fetcher.Stat(ctx, ref.URI)
+		if serr == nil && !exists {
+			// Never log filename (PII).
+			logger.Warn("artifact blob missing; rendering text surrogate",
+				slog.String("store_id", ref.StoreID),
+				slog.String("uri", ref.URI),
+				slog.String("mime", ref.MIME))
+			return nil, nil
+		}
+		return nil, err
 	}
 	cache[key] = b
 	return b, nil

@@ -67,6 +67,7 @@ func (f stubFetcher) Sign(ctx context.Context, uri string, ttl time.Duration) (s
 	return "", errors.New("not implemented")
 }
 func (f stubFetcher) PreferredDelivery() int { return 0 }
+func (f stubFetcher) Stat(context.Context, string) (bool, error) { return true, nil }
 
 // bytesReader shim for the tests only.
 func bytesReader(b []byte) io.Reader {

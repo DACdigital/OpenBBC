@@ -30,6 +30,13 @@ func (s artifactFetcherShim) Sign(ctx context.Context, uri string, ttl time.Dura
 func (s artifactFetcherShim) PreferredDelivery() int {
 	return int(s.store.PreferredDelivery())
 }
+func (s artifactFetcherShim) Stat(ctx context.Context, uri string) (bool, error) {
+	st, err := s.store.Stat(ctx, uri)
+	if err != nil {
+		return false, err
+	}
+	return st.Exists, nil
+}
 
 // artifactResolverFrom builds a chat.ArtifactFetcherResolver over the
 // registry. Returns nil resolver when the registry is nil (feature off).

@@ -137,6 +137,9 @@ type ArtifactFetcher interface {
 	Get(ctx context.Context, uri string) (io.ReadCloser, error)
 	Sign(ctx context.Context, uri string, ttl time.Duration) (string, error)
 	PreferredDelivery() int
+	// Stat reports whether the blob exists. Used to tell a permanently
+	// missing blob (render as surrogate) from a transient fetch failure.
+	Stat(ctx context.Context, uri string) (exists bool, err error)
 }
 
 // ErrUnsupported is returned by MultimodalRenderer.RenderArtifactAsBlock
