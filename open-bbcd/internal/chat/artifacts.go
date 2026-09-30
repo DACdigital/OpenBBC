@@ -15,17 +15,42 @@ import (
 // renderKey identifies one rendered artifact within a turn.
 type renderKey struct{ storeID, uri, mime string }
 
-// renderCache holds provider-native blocks rendered earlier in the same
-// turn, so each blob is fetched at most once per turn however many tool
-// rounds re-send it. It never holds refs, only rendered output, and is
-// discarded when the turn ends. After every render pass it is pruned to
-// the keys placed natively in that pass: history is append-only, so a ref
-// that fell out of the native window never re-enters it. A ref whose
-// actual bytes exceed the remaining budget is not cached and may be
-// re-fetched in a later round (only when a store under-reports size_bytes).
-type renderCache map[renderKey]llm.Block
+// renderCache holds per-turn render outcomes, so each blob is fetched at
+// most once per turn however many tool rounds re-send it. It never holds
+// refs, and is discarded when the turn ends.
+//
+//   - rendered holds provider-native blocks. After every render pass it is
+//     pruned to the keys placed natively in that pass: history is
+//     append-only, so a ref that fell out of the native window never
+//     re-enters it.
+//   - notNative records keys whose fetch showed they cannot be placed
+//     natively this turn, so later passes decide without fetching again:
+//     notNativeSurrogate for a render that returned ErrUnsupported or a
+//     blob that Stat reports missing (uncharged surrogate), and
+//     notNativeOverBudget for a ref whose actual bytes overflowed the
+//     remaining MaxBytes. The latter exhausts the budget again in later
+//     passes: newer refs are charged first and history only grows, so the
+//     budget left at that ref can only shrink. These keys are never pruned
+//     (they are few). Transient failures are never recorded — they fail
+//     the turn.
+type renderCache struct {
+	rendered  map[renderKey]llm.Block
+	notNative map[renderKey]notNativeReason
+}
 
-func newRenderCache() renderCache { return renderCache{} }
+type notNativeReason int
+
+const (
+	notNativeSurrogate notNativeReason = iota + 1
+	notNativeOverBudget
+)
+
+func newRenderCache() *renderCache {
+	return &renderCache{
+		rendered:  map[renderKey]llm.Block{},
+		notNative: map[renderKey]notNativeReason{},
+	}
+}
 
 // base64Len is the base64-encoded length of n raw bytes.
 func base64Len(n int64) int64 { return ((n + 2) / 3) * 4 }
@@ -50,14 +75,17 @@ func base64Len(n int64) int64 { return ((n + 2) / 3) * 4 }
 //     A rendered InlineMediaBlock is charged at the larger of its declared
 //     and actual size; if that actual cost would exceed the remaining
 //     MaxBytes the budget is exhausted and the ref becomes a surrogate.
+//   - a ref the cache already knows is not native this turn is decided
+//     from the cache without fetching (see renderCache).
 //
-// On return the cache holds only the keys placed natively in this pass.
+// On return the cache's rendered map holds only the keys placed natively
+// in this pass.
 func renderArtifactsForLLM(
 	ctx context.Context,
 	in []llm.Message,
 	provider llm.LLM,
 	resolver ArtifactFetcherResolver,
-	cache renderCache,
+	cache *renderCache,
 	logger *slog.Logger,
 ) ([]llm.Message, error) {
 	out := make([]llm.Message, len(in))
@@ -104,6 +132,12 @@ func renderArtifactsForLLM(
 				continue
 			}
 			key := renderKey{ref.StoreID, ref.URI, ref.MIME}
+			if reason, ok := cache.notNative[key]; ok {
+				if reason == notNativeOverBudget {
+					exhausted = true
+				}
+				continue
+			}
 			rendered, err := renderOne(ctx, renderer, fetcher, cache, key, ref, logger)
 			if err != nil {
 				return nil, err
@@ -118,6 +152,8 @@ func renderArtifactsForLLM(
 			cost := base64Len(size)
 			if overBytes(usedBytes, cost) {
 				exhausted = true
+				delete(cache.rendered, key)
+				cache.notNative[key] = notNativeOverBudget
 				continue
 			}
 			usedBlocks++
@@ -127,30 +163,32 @@ func renderArtifactsForLLM(
 		}
 	}
 
-	for k := range cache {
+	for k := range cache.rendered {
 		if !placed[k] {
-			delete(cache, k)
+			delete(cache.rendered, k)
 		}
 	}
 	return out, nil
 }
 
 // renderOne renders a single ref, using and filling the per-turn cache.
-// Returns (nil, nil) when the ref should become a surrogate.
+// Returns (nil, nil) when the ref should become a surrogate; that outcome
+// is recorded in cache.notNative so the ref is not fetched again this turn.
 func renderOne(
 	ctx context.Context,
 	renderer llm.MultimodalRenderer,
 	fetcher llm.ArtifactFetcher,
-	cache renderCache,
+	cache *renderCache,
 	key renderKey,
 	ref llm.ArtifactRefBlock,
 	logger *slog.Logger,
 ) (llm.Block, error) {
-	if b, ok := cache[key]; ok {
+	if b, ok := cache.rendered[key]; ok {
 		return b, nil
 	}
 	b, err := renderer.RenderArtifactAsBlock(ctx, ref, fetcher)
 	if errors.Is(err, llm.ErrUnsupported) {
+		cache.notNative[key] = notNativeSurrogate
 		return nil, nil
 	}
 	if err != nil {
@@ -165,11 +203,12 @@ func renderOne(
 				slog.String("store_id", ref.StoreID),
 				slog.String("uri", ref.URI),
 				slog.String("mime", ref.MIME))
+			cache.notNative[key] = notNativeSurrogate
 			return nil, nil
 		}
 		return nil, err
 	}
-	cache[key] = b
+	cache.rendered[key] = b
 	return b, nil
 }
 

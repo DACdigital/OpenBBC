@@ -252,7 +252,7 @@ func TestRenderCache_PrunesKeysNotPlacedNatively(t *testing.T) {
 	if _, err := renderArtifactsForLLM(context.Background(), pass1, l, resolver, cache, slog.Default()); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cache[keyA]; !ok {
+	if _, ok := cache.rendered[keyA]; !ok {
 		t.Fatal("A should be cached after pass 1")
 	}
 
@@ -260,10 +260,10 @@ func TestRenderCache_PrunesKeysNotPlacedNatively(t *testing.T) {
 	if _, err := renderArtifactsForLLM(context.Background(), pass2, l, resolver, cache, slog.Default()); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cache[keyA]; ok {
+	if _, ok := cache.rendered[keyA]; ok {
 		t.Fatal("A fell out of the native window and must be pruned from the cache")
 	}
-	if _, ok := cache[keyB]; !ok {
+	if _, ok := cache.rendered[keyB]; !ok {
 		t.Fatal("B should be cached after pass 2")
 	}
 }
@@ -292,5 +292,102 @@ func TestRender_StatErrorFails(t *testing.T) {
 	_, err := renderArtifactsForLLM(context.Background(), msgs, budgetLLM{}, func(string) llm.ArtifactFetcher { return f }, newRenderCache(), slog.Default())
 	if err == nil {
 		t.Fatal("Stat error must fail the render")
+	}
+}
+
+// renderTwice runs two render passes over msgs with one shared cache
+// (two tool rounds of the same turn) and returns the second pass.
+func renderTwice(t *testing.T, l llm.LLM, f llm.ArtifactFetcher, msgs []llm.Message) []llm.Message {
+	t.Helper()
+	cache := newRenderCache()
+	var out []llm.Message
+	for i := 0; i < 2; i++ {
+		var err error
+		out, err = renderArtifactsForLLM(context.Background(), msgs, l, func(string) llm.ArtifactFetcher { return f }, cache, slog.Default())
+		if err != nil {
+			t.Fatalf("pass %d: %v", i, err)
+		}
+	}
+	return out
+}
+
+func TestRenderCache_MissingBlobFetchedOnceAcrossPasses(t *testing.T) {
+	f := &countingFetcher{getErr: errors.New("403 AccessDenied"), exists: false}
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/gone", 10)}}}
+	out := renderTwice(t, budgetLLM{}, f, msgs)
+	if isInline(out[0].Content[0]) {
+		t.Fatal("missing blob must stay a surrogate")
+	}
+	if f.gets != 1 {
+		t.Fatalf("gets = %d, want 1 across two passes", f.gets)
+	}
+}
+
+func TestRenderCache_ActualBytesOverBudgetFetchedOnceAcrossPasses(t *testing.T) {
+	// SizeBytes claims 1 byte, but the blob is 600 bytes (800 base64) > 500.
+	f := &countingFetcher{data: make([]byte, 600)}
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/liar", 1)}}}
+	out := renderTwice(t, budgetLLM{budget: llm.RenderBudget{MaxBytes: 500}}, f, msgs)
+	if isInline(out[0].Content[0]) {
+		t.Fatal("over-budget ref must stay a surrogate")
+	}
+	if f.gets != 1 {
+		t.Fatalf("gets = %d, want 1 across two passes", f.gets)
+	}
+}
+
+func TestRenderCache_ActualBytesOverBudgetStillExhaustsInLaterPass(t *testing.T) {
+	// The liar (newer) exhausted the budget in pass 1, so the older ref
+	// was never fetched; pass 2 must reach the same decision.
+	f := &countingFetcher{data: make([]byte, 600)}
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/older", 1)}},
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/liar", 1)}},
+	}
+	out := renderTwice(t, budgetLLM{budget: llm.RenderBudget{MaxBytes: 500}}, f, msgs)
+	if isInline(out[0].Content[0]) || isInline(out[1].Content[0]) {
+		t.Fatalf("both refs must be surrogates; got %#v", out)
+	}
+	if f.gets != 1 {
+		t.Fatalf("gets = %d, want 1 (only the liar, once)", f.gets)
+	}
+}
+
+// unsupportedAfterFetchLLM fetches the blob and then declines it, like a
+// provider enforcing a per-block limit on the actual bytes.
+type unsupportedAfterFetchLLM struct{ budgetLLM }
+
+func (unsupportedAfterFetchLLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBlock, fetch llm.ArtifactFetcher) (llm.Block, error) {
+	rc, err := fetch.Get(ctx, ref.URI)
+	if err != nil {
+		return nil, err
+	}
+	rc.Close()
+	return nil, llm.ErrUnsupported
+}
+
+func TestRenderCache_UnsupportedAfterFetchFetchedOnceAcrossPasses(t *testing.T) {
+	f := &countingFetcher{}
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/huge", 10)}}}
+	out := renderTwice(t, unsupportedAfterFetchLLM{}, f, msgs)
+	if isInline(out[0].Content[0]) {
+		t.Fatal("unsupported ref must stay a surrogate")
+	}
+	if f.gets != 1 {
+		t.Fatalf("gets = %d, want 1 across two passes", f.gets)
+	}
+}
+
+func TestRenderCache_TransientErrorIsNotCached(t *testing.T) {
+	f := &countingFetcher{getErr: errors.New("connection reset"), exists: true}
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/x", 10)}}}
+	cache := newRenderCache()
+	for i := 0; i < 2; i++ {
+		if _, err := renderArtifactsForLLM(context.Background(), msgs, budgetLLM{}, func(string) llm.ArtifactFetcher { return f }, cache, slog.Default()); err == nil {
+			t.Fatalf("pass %d: transient error must fail the render", i)
+		}
+	}
+	if f.gets != 2 {
+		t.Fatalf("gets = %d, want 2 (transient failures are not cached)", f.gets)
 	}
 }
