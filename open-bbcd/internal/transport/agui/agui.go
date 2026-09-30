@@ -144,6 +144,21 @@ func (s *sink) translate(ev transport.Event) (events.Event, error) {
 		// turn. We use the toolCallID as a proxy — it uniquely identifies the call.
 		return events.NewToolCallResultEvent(e.ToolCallID, e.ToolCallID, string(payload)), nil
 
+	case transport.ArtifactRefEvent:
+		var filename any // null when unknown
+		if e.Filename != "" {
+			filename = e.Filename
+		}
+		return events.NewCustomEvent("ARTIFACT_REF", events.WithValue(map[string]any{
+			"toolCallId": e.ToolCallID,
+			"storeId":    e.StoreID,
+			"uri":        e.URI,
+			"mime":       e.MIME,
+			"sizeBytes":  e.SizeBytes,
+			"sha256":     e.Sha256,
+			"filename":   filename,
+		})), nil
+
 	case transport.TurnEndEvent:
 		return events.NewRunFinishedEvent(s.threadID, s.runID), nil
 

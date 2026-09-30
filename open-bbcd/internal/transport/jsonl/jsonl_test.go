@@ -70,3 +70,26 @@ func TestJSONL_FactoryContentType(t *testing.T) {
 		t.Fatalf("ContentType: got %q", ct)
 	}
 }
+
+func TestJSONL_ArtifactRef(t *testing.T) {
+	var buf bytes.Buffer
+	sink, _ := NewFactory().NewWriterSink(&buf)
+	_ = sink.Send(context.Background(), transport.ArtifactRefEvent{
+		ToolCallID: "tc_1", StoreID: "MAIN", URI: "sha256/abc", MIME: "image/png", SizeBytes: 1234, Sha256: "abc", Filename: "chart.png",
+	})
+	out := buf.String()
+	for _, want := range []string{`"type":"artifact_ref"`, `"tool_call_id":"tc_1"`, `"store_id":"MAIN"`, `"size_bytes":1234`, `"filename":"chart.png"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %s in %q", want, out)
+		}
+	}
+}
+
+func TestJSONL_ArtifactRefEmptyFilenameIsNull(t *testing.T) {
+	var buf bytes.Buffer
+	sink, _ := NewFactory().NewWriterSink(&buf)
+	_ = sink.Send(context.Background(), transport.ArtifactRefEvent{ToolCallID: "tc_1", StoreID: "MAIN", URI: "sha256/abc"})
+	if out := buf.String(); !strings.Contains(out, `"filename":null`) {
+		t.Fatalf("missing null filename in %q", out)
+	}
+}

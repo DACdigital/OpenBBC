@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -72,8 +73,9 @@ func NewArtifactHandler(
 }
 
 // ArtifactUploadResponse is the JSON body the client receives on a
-// successful upload. The client embeds this into the outgoing turn body
-// as an artifact_ref content block on the user-role message.
+// successful upload. Note: the turn endpoint ignores client-supplied
+// artifact_ref input blocks, so an uploaded file cannot currently be
+// attached to a BO turn (staged uploads replace this flow).
 type ArtifactUploadResponse struct {
 	StoreID   string `json:"store_id"`
 	URI       string `json:"uri"`
@@ -142,8 +144,9 @@ func (h *ArtifactHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	// Content-Type from the multipart header, falling back to a generic
-	// value if the client didn't send one. Deployers can post-process
-	// with a stricter allowlist if they want; framework accepts anything.
+	// value if the client didn't send one. This is only a hint:
+	// artifacts.ResolveMIME decides the stored label below (native-render
+	// types are verified against the bytes). The framework accepts anything.
 	mime := header.Header.Get("Content-Type")
 	if mime == "" {
 		mime = "application/octet-stream"
@@ -162,7 +165,7 @@ func (h *ArtifactHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// Buffer the upload while hashing it. Uploading a 10-30MB media file
 	// into memory is acceptable at the ARTIFACT_MAX_UPLOAD_MB scale spec
 	// commits to; larger caps warrant temp-file spilling in a follow-on.
-	buf, sum, size, err := hashAndBuffer(file, maxBytes)
+	data, sum, err := hashAndBuffer(file, maxBytes)
 	if err != nil {
 		if errors.Is(err, errMaxSizeExceeded) {
 			http.Error(w, "upload exceeds ARTIFACT_MAX_UPLOAD_MB", http.StatusRequestEntityTooLarge)
@@ -171,6 +174,9 @@ func (h *ArtifactHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
+	size := int64(len(data))
+	buf := bytes.NewReader(data)
+	mime = artifacts.ResolveMIME(mime, data)
 	uri := "sha256/" + hex.EncodeToString(sum)
 
 	// Dedup: if this exact content is already in the store, skip the
@@ -221,26 +227,18 @@ func respondUploadJSON(w http.ResponseWriter, resp ArtifactUploadResponse) {
 
 var errMaxSizeExceeded = errors.New("upload exceeds ARTIFACT_MAX_UPLOAD_MB")
 
-// hashAndBuffer streams the reader into an in-memory buffer while
-// computing sha256. Aborts with errMaxSizeExceeded if the stream would
-// grow past the cap. On success, returns a fresh reader positioned at
-// the start of the buffered bytes (for the Put call), the raw hash
-// digest bytes, and the total size.
-type readerWithLen struct {
-	*strings.Reader
-}
-
-func hashAndBuffer(r io.Reader, maxBytes int64) (buffered io.Reader, sum []byte, size int64, err error) {
+// hashAndBuffer reads r fully into memory while computing sha256. Aborts
+// with errMaxSizeExceeded if the stream would grow past maxBytes.
+func hashAndBuffer(r io.Reader, maxBytes int64) (data []byte, sum []byte, err error) {
 	h := sha256.New()
-	var b strings.Builder
+	var b bytes.Buffer
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := r.Read(buf)
 		if n > 0 {
-			if size+int64(n) > maxBytes {
-				return nil, nil, 0, errMaxSizeExceeded
+			if int64(b.Len())+int64(n) > maxBytes {
+				return nil, nil, errMaxSizeExceeded
 			}
-			size += int64(n)
 			_, _ = h.Write(buf[:n])
 			_, _ = b.Write(buf[:n])
 		}
@@ -248,10 +246,10 @@ func hashAndBuffer(r io.Reader, maxBytes int64) (buffered io.Reader, sum []byte,
 			break
 		}
 		if readErr != nil {
-			return nil, nil, 0, readErr
+			return nil, nil, readErr
 		}
 	}
-	return strings.NewReader(b.String()), h.Sum(nil), size, nil
+	return b.Bytes(), h.Sum(nil), nil
 }
 
 // isMaxBytesError checks the error returned by ParseMultipartForm for
@@ -357,6 +355,9 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "upstream store error", http.StatusBadGateway)
 			return
 		}
+		// Content-Type / Content-Disposition for signed-URL delivery are
+		// set by the store via presign response overrides, which arrive
+		// with Sign's SignOptions parameter.
 		w.Header().Set("Location", url)
 		w.WriteHeader(http.StatusFound) // 302
 		return
@@ -377,9 +378,23 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		defer rc.Close()
-		if mime != "" {
-			w.Header().Set("Content-Type", mime)
+		// Artifact bytes are user- or tool-supplied: never let a client
+		// sniff them into something renderable, and only render inline
+		// the native-render set. Content-Length is omitted: neither the
+		// session-scope check nor Get reports a size here. Filename is
+		// likewise unknown at this point, so Content-Disposition carries
+		// no filename parameter.
+		//
+		// Non-native types are served as octet-stream: a tool can label
+		// bytes text/javascript or text/css, which a browser would run
+		// via <script src>/<link> despite Content-Disposition: attachment.
+		ct := "application/octet-stream"
+		if artifacts.IsNativeRenderMIME(mime) {
+			ct = mime
 		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", artifactContentDisposition(mime, ""))
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.Copy(w, rc)
 		return
@@ -391,4 +406,37 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 		)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
+}
+
+// artifactContentDisposition returns the Content-Disposition value for a
+// proxied artifact: "inline" for the native-render MIME set, "attachment"
+// otherwise, with an RFC 5987 filename* parameter when filename is known.
+func artifactContentDisposition(mime, filename string) string {
+	d := "attachment"
+	if artifacts.IsNativeRenderMIME(mime) {
+		d = "inline"
+	}
+	if filename != "" {
+		d += "; filename*=UTF-8''" + rfc5987Escape(filename)
+	}
+	return d
+}
+
+// rfc5987Escape percent-encodes every byte of s outside RFC 5987
+// attr-char (ALPHA / DIGIT / "!#$&+-.^_`|~").
+func rfc5987Escape(s string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') ||
+			strings.IndexByte("!#$&+-.^_`|~", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0x0f])
+	}
+	return b.String()
 }

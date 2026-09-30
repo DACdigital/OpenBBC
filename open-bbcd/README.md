@@ -129,8 +129,8 @@ the docs repo for the wire contract.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/agent_versions/{v}/chat/{s}/artifacts` | Upload one file (multipart with `file` field). Returns `{store_id, uri, mime, size_bytes, sha256, filename}` — client embeds into the outgoing turn body as an `artifact_ref` content block. Errors: 400 malformed / 404 session / 409 locked / 413 oversize / 502 upstream store. |
-| GET | `/agent_versions/{v}/chat/{s}/artifacts/{path}` | Session-scoped retrieval. `{path}` is `<store_id>/<uri>` joined with `/`. Delivery mode is adapter-dependent — `s3_compatible` returns `302` with a presigned URL; other adapters may proxy bytes with `Content-Type` set from the stored ref's mime. |
+| POST | `/agent_versions/{v}/chat/{s}/artifacts` | Upload one file (multipart with `file` field). Returns `{store_id, uri, mime, size_bytes, sha256, filename}` — note: the turn endpoint ignores `artifact_ref` input blocks, so uploads cannot currently be attached to a turn. Errors: 400 malformed / 404 session / 409 locked / 413 oversize / 502 upstream store. |
+| GET | `/agent_versions/{v}/chat/{s}/artifacts/{path}` | Session-scoped retrieval. `{path}` is `<store_id>/<uri>` joined with `/`. Delivery mode is adapter-dependent — `s3_compatible` returns `302` with a presigned URL; other adapters may proxy bytes. Proxied bytes carry `X-Content-Type-Options: nosniff`; only images and PDF (the native-render set) keep their MIME and are served `Content-Disposition: inline`, everything else is served as `application/octet-stream` with `Content-Disposition: attachment`. |
 
 ### Health
 

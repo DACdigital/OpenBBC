@@ -210,3 +210,33 @@ func TestBuildMessageViews_MergesAssistantTurns(t *testing.T) {
 		}
 	}
 }
+
+// A BO turn body carrying an artifact_ref input block must not get that
+// block into the persisted user message: the orchestrator (which persists
+// the user message verbatim from its input) only sees the text block.
+// Client-supplied refs are ignored, not rejected.
+func TestChatHandler_Turn_IgnoresArtifactRefInputBlocks(t *testing.T) {
+	runner := &stubTurnRunner{}
+	h := newTestChatHandler(t, runner)
+
+	body := `{"input":[` +
+		`{"type":"text","text":"look at this"},` +
+		`{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/abc","mime":"image/png","size_bytes":7,"sha256":"abc","filename":"x.png"}` +
+		`]}`
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader(body))
+	r.SetPathValue("version_id", "v")
+	r.SetPathValue("session_id", "s")
+	w := httptest.NewRecorder()
+
+	h.Turn(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d (artifact_ref must be ignored, not rejected)", w.Code, http.StatusOK)
+	}
+	if len(runner.capturedInput) != 1 {
+		t.Fatalf("expected 1 input block (text only), got %d: %+v", len(runner.capturedInput), runner.capturedInput)
+	}
+	if tb, ok := runner.capturedInput[0].(llm.TextBlock); !ok || tb.Text != "look at this" {
+		t.Fatalf("input block: got %+v", runner.capturedInput[0])
+	}
+}

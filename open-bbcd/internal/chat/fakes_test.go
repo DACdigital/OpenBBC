@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 	"sync"
 
@@ -34,6 +35,7 @@ type fakeChatRepo struct {
 	ensured  map[string]string
 	messages []types.ChatMessage
 	nextSeq  int
+	failRole types.ChatRole
 }
 
 func (f *fakeChatRepo) EnsureSession(ctx context.Context, sessionID, scopeID string) error {
@@ -66,6 +68,11 @@ func (f *fakeChatRepo) AppendMessages(ctx context.Context, agentVersionID string
 	_ = agentVersionID
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	for _, m := range msgs {
+		if f.failRole != "" && m.Role == f.failRole {
+			return errors.New("fake: append failed")
+		}
+	}
 	f.messages = append(f.messages, msgs...)
 	return nil
 }
@@ -78,16 +85,19 @@ func (f *fakeChatRepo) NextSeq(ctx context.Context, sessionID string) (int, erro
 }
 
 // fakeLLM emits a scripted event sequence. Each call to Generate consumes
-// the next slice from `script` and yields its events.
+// the next slice from `script` and yields its events. Every request is
+// recorded in `requests` so tests can assert what the model was sent.
 type fakeLLM struct {
-	name   string
-	script [][]llm.Event
-	calls  int
+	name     string
+	script   [][]llm.Event
+	calls    int
+	requests []llm.Request
 }
 
 func (f *fakeLLM) Name() string { return f.name }
 
 func (f *fakeLLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event, error] {
+	f.requests = append(f.requests, req)
 	return func(yield func(llm.Event, error) bool) {
 		if f.calls >= len(f.script) {
 			return
@@ -147,3 +157,18 @@ func (r *recordingSink) Send(_ context.Context, e transport.Event) error {
 }
 
 func (r *recordingSink) Close() error { return nil }
+
+// mmFakeLLM is a scripted fakeLLM that also renders image/png natively
+// with a configurable budget.
+type mmFakeLLM struct {
+	*fakeLLM
+	budget llm.RenderBudget
+}
+
+func (m *mmFakeLLM) NativeRenderBudget() llm.RenderBudget { return m.budget }
+func (m *mmFakeLLM) SupportsNative(ref llm.ArtifactRefBlock) bool {
+	return budgetLLM{}.SupportsNative(ref)
+}
+func (m *mmFakeLLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBlock, fetch llm.ArtifactFetcher) (llm.Block, error) {
+	return budgetLLM{}.RenderArtifactAsBlock(ctx, ref, fetch)
+}

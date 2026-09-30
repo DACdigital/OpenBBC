@@ -68,6 +68,20 @@ func serialize(ev transport.Event) (string, any) {
 		return "tool_call_end", e
 	case transport.ToolResultEvent:
 		return "tool_call_result", e
+	case transport.ArtifactRefEvent:
+		var filename any
+		if e.Filename != "" {
+			filename = e.Filename
+		}
+		return "artifact_ref", map[string]any{
+			"tool_call_id": e.ToolCallID,
+			"store_id":     e.StoreID,
+			"uri":          e.URI,
+			"mime":         e.MIME,
+			"size_bytes":   e.SizeBytes,
+			"sha256":       e.Sha256,
+			"filename":     filename,
+		}
 	case transport.TurnEndEvent:
 		return "run_finished", e
 	case transport.ErrorEvent:

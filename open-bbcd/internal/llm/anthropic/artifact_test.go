@@ -3,6 +3,7 @@ package anthropic
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -18,16 +19,17 @@ import (
 // stubFetcher is a hand-rolled llm.ArtifactFetcher for tests. Controls
 // PreferredDelivery + returns canned bytes on Get / canned URL on Sign.
 type stubFetcher struct {
-	delivery   int
-	bytes      []byte
-	signedURL  string
-	getErr     error
-	signErr    error
-	getCalls   int
-	signCalls  int
+	delivery  int
+	bytes     []byte
+	signedURL string
+	getErr    error
+	signErr   error
+	getCalls  int
+	signCalls int
 }
 
-func (f *stubFetcher) PreferredDelivery() int { return f.delivery }
+func (f *stubFetcher) PreferredDelivery() int                     { return f.delivery }
+func (f *stubFetcher) Stat(context.Context, string) (bool, error) { return true, nil }
 func (f *stubFetcher) Get(ctx context.Context, uri string) (io.ReadCloser, error) {
 	f.getCalls++
 	if f.getErr != nil {
@@ -180,5 +182,104 @@ func TestRenderArtifactAsBlock_BytesModeError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "network timeout") {
 		t.Errorf("error should propagate underlying, got: %v", err)
+	}
+}
+
+func TestRenderArtifactAsBlock_ImageOverPerBlockLimitIsUnsupported(t *testing.T) {
+	l := New(config.AnthropicConfig{APIKey: "test"})
+	f := &stubFetcher{delivery: 0, bytes: []byte("x")}
+	// 3,750,001 raw bytes → 5,000,004 base64 bytes > 5,000,000.
+	_, err := l.RenderArtifactAsBlock(context.Background(), llm.ArtifactRefBlock{
+		StoreID: "MAIN", URI: "sha256/big", MIME: "image/png", SizeBytes: 3_750_001,
+	}, f)
+	if !errors.Is(err, llm.ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrUnsupported", err)
+	}
+	if f.getCalls != 0 {
+		t.Fatal("over-limit ref must not be fetched")
+	}
+}
+
+func TestSupportsNative_Limits(t *testing.T) {
+	l := New(config.AnthropicConfig{APIKey: "test"})
+	cases := []struct {
+		name string
+		ref  llm.ArtifactRefBlock
+		want bool
+	}{
+		{"png within limit", llm.ArtifactRefBlock{MIME: "image/png", SizeBytes: 1_000_000}, true},
+		{"png over limit", llm.ArtifactRefBlock{MIME: "image/png", SizeBytes: 3_750_001}, false},
+		{"png exact boundary", llm.ArtifactRefBlock{MIME: "image/png", SizeBytes: 3_750_000}, true},
+		{"pdf exact boundary", llm.ArtifactRefBlock{MIME: "application/pdf", SizeBytes: 18_874_368}, true},
+		{"pdf just over boundary", llm.ArtifactRefBlock{MIME: "application/pdf", SizeBytes: 18_874_369}, false},
+		{"pdf within budget", llm.ArtifactRefBlock{MIME: "application/pdf", SizeBytes: 10 << 20}, true},
+		{"pdf over budget", llm.ArtifactRefBlock{MIME: "application/pdf", SizeBytes: 19 << 20}, false},
+		{"zip", llm.ArtifactRefBlock{MIME: "application/zip", SizeBytes: 10}, false},
+	}
+	for _, c := range cases {
+		if got := l.SupportsNative(c.ref); got != c.want {
+			t.Errorf("%s: SupportsNative = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestNativeRenderBudget_Pinned(t *testing.T) {
+	b := New(config.AnthropicConfig{APIKey: "test"}).NativeRenderBudget()
+	if b.MaxBlocks != 20 || b.MaxBytes != 24<<20 {
+		t.Fatalf("budget = %+v, want {MaxBytes: 24 MiB, MaxBlocks: 20}", b)
+	}
+}
+
+func TestConvertMessage_ToolRole_ToolResultsFirst(t *testing.T) {
+	msg := convertMessage(llm.Message{Role: llm.RoleTool, Content: []llm.Block{
+		llm.ToolResultBlock{ToolUseID: "tu1", Result: []byte(`{"content":[]}`)},
+		llm.ToolResultBlock{ToolUseID: "tu2", Result: []byte(`{}`)},
+		llm.InlineMediaBlock{MIME: "image/png", Data: []byte{0x89, 'P', 'N', 'G'}},
+	}})
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Role    string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, c := range got.Content {
+		kinds = append(kinds, c.Type)
+	}
+	want := []string{"tool_result", "tool_result", "image"}
+	if got.Role != "user" || strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("role=%s blocks=%v, want user %v", got.Role, kinds, want)
+	}
+}
+
+func TestRenderArtifactAsBlock_ActualBytesOverLimitIsUnsupported(t *testing.T) {
+	l := New(config.AnthropicConfig{APIKey: "test"})
+	f := &stubFetcher{delivery: 0, bytes: make([]byte, 3_750_001)}
+	_, err := l.RenderArtifactAsBlock(context.Background(), llm.ArtifactRefBlock{
+		StoreID: "MAIN", URI: "sha256/lie", MIME: "image/png", SizeBytes: 0,
+	}, f)
+	if !errors.Is(err, llm.ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrUnsupported", err)
+	}
+}
+
+func TestRenderArtifactAsBlock_PDFOverLimitIsUnsupported(t *testing.T) {
+	l := New(config.AnthropicConfig{APIKey: "test"})
+	f := &stubFetcher{delivery: 0, bytes: []byte("x")}
+	_, err := l.RenderArtifactAsBlock(context.Background(), llm.ArtifactRefBlock{
+		StoreID: "MAIN", URI: "sha256/pdf", MIME: "application/pdf", SizeBytes: 18_874_369,
+	}, f)
+	if !errors.Is(err, llm.ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrUnsupported", err)
+	}
+	if f.getCalls != 0 {
+		t.Fatal("over-limit ref must not be fetched")
 	}
 }

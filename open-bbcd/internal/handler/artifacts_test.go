@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -507,5 +508,31 @@ func TestRetrieve_ResolverError500(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestUpload_ResolvesMIMEFromBytes(t *testing.T) {
+	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
+	reg := buildRegistry(t, store)
+	sessions := &fakeSessionStore{sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}}}
+	h := NewArtifactHandler(sessions, &fakeRefResolver{}, reg, 10, nil)
+
+	png, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC")
+	body, ct := newMultipartBody(t, "shot.bin", "application/octet-stream", png)
+	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
+	req.Header.Set("Content-Type", ct)
+	req.SetPathValue("version_id", "v1")
+	req.SetPathValue("session_id", "s1")
+	rec := httptest.NewRecorder()
+
+	h.HandleUpload(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var got ArtifactUploadResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if got.MIME != "image/png" {
+		t.Fatalf("MIME = %q, want image/png (resolved from bytes)", got.MIME)
 	}
 }

@@ -65,6 +65,20 @@ type ToolResultEvent struct {
 	IsError    bool
 }
 
+// ArtifactRefEvent: a tool result produced an artifact. Sent after the
+// round's tool-role message (and its artifact rows) are persisted, so the
+// ref is resolvable as soon as the client receives it. Never sent for user
+// uploads. The payload only ever changes additively.
+type ArtifactRefEvent struct {
+	ToolCallID string
+	StoreID    string
+	URI        string
+	MIME       string
+	SizeBytes  int64
+	Sha256     string
+	Filename   string // empty when unknown
+}
+
 // TurnEndEvent: the turn is complete. StopReason matches the LLM adapter's
 // emitted reason ("end_turn", "tool_use", "max_tokens", etc.).
 type TurnEndEvent struct {
@@ -90,6 +104,7 @@ func (ToolCallStartEvent) isEvent() {}
 func (ToolCallArgsEvent) isEvent()  {}
 func (ToolCallEndEvent) isEvent()   {}
 func (ToolResultEvent) isEvent()    {}
+func (ArtifactRefEvent) isEvent()   {}
 func (TurnEndEvent) isEvent()       {}
 func (ErrorEvent) isEvent()         {}
 

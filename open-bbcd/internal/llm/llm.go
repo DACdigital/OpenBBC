@@ -117,6 +117,16 @@ type MultimodalRenderer interface {
 	// ref's MIME natively — the caller substitutes a text surrogate.
 	// Return any other error to abort the completion setup entirely.
 	RenderArtifactAsBlock(ctx context.Context, ref ArtifactRefBlock, fetch ArtifactFetcher) (Block, error)
+
+	// SupportsNative reports whether RenderArtifactAsBlock would try to
+	// render ref natively (MIME supported and within per-block limits).
+	// It must not fetch: the caller uses it to decide, before any I/O,
+	// whether a ref is charged against the RenderBudget.
+	SupportsNative(ref ArtifactRefBlock) bool
+
+	// NativeRenderBudget returns the provider's per-request media caps,
+	// pinned below its hard request limits.
+	NativeRenderBudget() RenderBudget
 }
 
 // ArtifactFetcher is the narrow slice of artifacts.ArtifactStore that
@@ -127,6 +137,9 @@ type ArtifactFetcher interface {
 	Get(ctx context.Context, uri string) (io.ReadCloser, error)
 	Sign(ctx context.Context, uri string, ttl time.Duration) (string, error)
 	PreferredDelivery() int
+	// Stat reports whether the blob exists. Used to tell a permanently
+	// missing blob (render as surrogate) from a transient fetch failure.
+	Stat(ctx context.Context, uri string) (exists bool, err error)
 }
 
 // ErrUnsupported is returned by MultimodalRenderer.RenderArtifactAsBlock
@@ -134,6 +147,14 @@ type ArtifactFetcher interface {
 // substitute a text-surrogate block (TextSurrogate) in place of the
 // artifact_ref.
 var ErrUnsupported = errors.New("llm: provider does not support this MIME natively")
+
+// RenderBudget caps natively rendered media in one LLM request. Refs are
+// charged newest first; once the next ref would exceed a cap, it and every
+// older ref render as text surrogates. A value <= 0 means "no cap" on that axis.
+type RenderBudget struct {
+	MaxBytes  int64 // base64-expanded bytes, ceil(size/3)*4 per ref
+	MaxBlocks int
+}
 
 // TextSurrogate produces a human-readable text block that stands in
 // for an artifact_ref when the provider cannot render the ref natively.
@@ -161,13 +182,13 @@ func TextSurrogate(ref ArtifactRefBlock) TextBlock {
 			label = ref.URI
 		}
 	}
-	return TextBlock{Text: "[Attachment: " + label + " (" + ref.MIME + ", " + humanBytes(ref.SizeBytes) + ")]"}
+	return TextBlock{Text: "[Attachment: " + label + " (" + ref.MIME + ", " + HumanBytes(ref.SizeBytes) + ")]"}
 }
 
-// humanBytes renders a byte count in a compact human-readable form:
+// HumanBytes renders a byte count in a compact human-readable form:
 // bytes, KB, MB, GB. Deliberately small and dependency-free — pulling
 // in github.com/dustin/go-humanize just for one call would be overkill.
-func humanBytes(n int64) string {
+func HumanBytes(n int64) string {
 	const (
 		kb = int64(1) << 10
 		mb = int64(1) << 20

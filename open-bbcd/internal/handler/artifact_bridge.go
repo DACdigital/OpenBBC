@@ -30,6 +30,13 @@ func (s artifactFetcherShim) Sign(ctx context.Context, uri string, ttl time.Dura
 func (s artifactFetcherShim) PreferredDelivery() int {
 	return int(s.store.PreferredDelivery())
 }
+func (s artifactFetcherShim) Stat(ctx context.Context, uri string) (bool, error) {
+	st, err := s.store.Stat(ctx, uri)
+	if err != nil {
+		return false, err
+	}
+	return st.Exists, nil
+}
 
 // artifactResolverFrom builds a chat.ArtifactFetcherResolver over the
 // registry. Returns nil resolver when the registry is nil (feature off).
@@ -60,6 +67,7 @@ func (u artifactUploader) Upload(ctx context.Context, mime string, data []byte) 
 	if store == nil {
 		return llm.ArtifactRefBlock{}, errors.New("artifact uploader: registry has no default store")
 	}
+	mime = artifacts.ResolveMIME(mime, data)
 	sum := sha256.Sum256(data)
 	sumHex := hex.EncodeToString(sum[:])
 	uri := "sha256/" + sumHex

@@ -310,6 +310,50 @@ var supportedImageMIMEs = map[string]bool{
 	"image/webp": true,
 }
 
+// Media limits, pinned 2026-09-30 from the Anthropic vision and PDF docs.
+// Chosen to be safe on every platform the adapter may target:
+//   - per image: 5 MB base64 (Bedrock/Vertex cap; the direct API allows 10 MB);
+//   - per request: 32 MB total; native media budget 24 MiB base64 leaves
+//     headroom for text and tool payloads;
+//   - >20 image blocks trigger a stricter per-image pixel limit, so cap at 20.
+//
+// PDF page count (600) is not checked — accepted residual risk in the spec.
+const (
+	maxImageBase64Bytes   = 5_000_000
+	maxRequestMediaBytes  = 24 << 20
+	maxRequestMediaBlocks = 20
+)
+
+func base64Len(n int64) int64 { return ((n + 2) / 3) * 4 }
+
+// nativeRenderable reports whether ref has a natively supported MIME and
+// fits the per-block limits. Shared by SupportsNative and
+// RenderArtifactAsBlock; never fetches.
+func nativeRenderable(ref llm.ArtifactRefBlock) bool {
+	limit := base64Limit(ref.MIME)
+	return limit > 0 && base64Len(ref.SizeBytes) <= limit
+}
+
+// base64Limit returns the per-block base64 byte limit for a natively
+// supported MIME, or 0 when the MIME is unsupported.
+func base64Limit(mime string) int64 {
+	switch {
+	case supportedImageMIMEs[mime]:
+		return maxImageBase64Bytes
+	case mime == "application/pdf":
+		return maxRequestMediaBytes
+	}
+	return 0
+}
+
+// SupportsNative implements llm.MultimodalRenderer. Must not fetch.
+func (l *LLM) SupportsNative(ref llm.ArtifactRefBlock) bool { return nativeRenderable(ref) }
+
+// NativeRenderBudget implements llm.MultimodalRenderer.
+func (l *LLM) NativeRenderBudget() llm.RenderBudget {
+	return llm.RenderBudget{MaxBytes: maxRequestMediaBytes, MaxBlocks: maxRequestMediaBlocks}
+}
+
 // RenderArtifactAsBlock implements llm.MultimodalRenderer for the Anthropic
 // provider. Materialises the artifact_ref's bytes into an InlineMediaBlock
 // when the MIME is natively supported (image/{png,jpeg,gif,webp} or
@@ -322,13 +366,17 @@ var supportedImageMIMEs = map[string]bool{
 // there is no image-by-URL block for user messages in the Messages API
 // (only Anthropic's Files API supports that, out of phase 1 scope).
 func (l *LLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBlock, fetch llm.ArtifactFetcher) (llm.Block, error) {
-	if !supportedImageMIMEs[ref.MIME] && ref.MIME != "application/pdf" {
+	if !nativeRenderable(ref) {
 		return nil, llm.ErrUnsupported
 	}
 
 	bytes, err := fetchBytes(ctx, ref.URI, fetch)
 	if err != nil {
 		return nil, err
+	}
+	// Re-check on actual bytes: the declared SizeBytes may be wrong.
+	if base64Len(int64(len(bytes))) > base64Limit(ref.MIME) {
+		return nil, llm.ErrUnsupported
 	}
 	return llm.InlineMediaBlock{MIME: ref.MIME, Data: bytes}, nil
 }

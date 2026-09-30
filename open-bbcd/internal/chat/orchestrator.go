@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -55,6 +56,11 @@ type ChatStore interface {
 // surrogate. This keeps the code path compiled even in artifact-free
 // deployments.
 type ArtifactFetcherResolver func(storeID string) llm.ArtifactFetcher
+
+// ErrInlineMediaNotPersistable is returned by blocksToJSON when a message
+// carries renderer-produced bytes. Rendered media exists only inside one
+// LLM request; persisting it would put artifact bytes in Postgres.
+var ErrInlineMediaNotPersistable = errors.New("chat: inline media blocks must never be persisted")
 
 type Orchestrator struct {
 	agents            AgentReader
@@ -220,11 +226,13 @@ func (o *Orchestrator) Turn(
 	// assistant message, optionally executes tools + persists the tool message,
 	// then loops. Exits when stop_reason != "tool_use" or MaxToolRounds is hit.
 	//
-	// Before every LLM call we render any llm.ArtifactRefBlock content
-	// blocks into provider-native inline media (via MultimodalRenderer)
-	// or the text surrogate fallback. Refs on newly-appended tool-role
-	// messages (see Phase 5 normalisation) are re-rendered by the same
-	// call at the top of the loop.
+	// Before every LLM call a fresh rendered copy of req.Messages is
+	// built (see renderArtifactsForLLM); req.Messages itself keeps
+	// artifact_ref blocks.
+	//
+	// Per-turn cache of rendered artifacts: each blob is fetched at most
+	// once per turn however many tool rounds re-send it.
+	renderCache := newRenderCache()
 	req := llm.Request{
 		Model:     o.Model,
 		System:    promptsHead.MainPrompt,
@@ -245,20 +253,21 @@ func (o *Orchestrator) Turn(
 			stopReasonThisRound string
 		)
 
-		// Render any artifact_ref blocks in the current message list
-		// into provider-native inline media (or text surrogates). Runs
-		// each iteration to also cover tool-role messages appended in
-		// the previous round.
-		rendered, renderErr := renderArtifactsForLLM(ctx, req.Messages, o.llm, o.artifactResolver)
+		// req.Messages always holds the ref form. Every LLM call renders a
+		// fresh copy, so the native-render budget applies to the whole
+		// request on every round and rendered bytes never enter anything
+		// that could be persisted.
+		rendered, renderErr := renderArtifactsForLLM(ctx, req.Messages, o.llm, o.artifactResolver, renderCache, o.logger)
 		if renderErr != nil {
 			return failTurn("artifact_render", "render_artifacts", renderErr)
 		}
-		req.Messages = rendered
+		callReq := req
+		callReq.Messages = rendered
 
 		assistantMsgID := uuid.NewString()
 		_ = sink.Send(ctx, transport.TextStartEvent{MessageID: assistantMsgID})
 
-		for ev, err := range o.llm.Generate(ctx, req) {
+		for ev, err := range o.llm.Generate(ctx, callReq) {
 			if err != nil {
 				return failTurn("llm_error", "llm_generate", err)
 			}
@@ -346,8 +355,14 @@ func (o *Orchestrator) Turn(
 			break
 		}
 
-		// Execute the pending tools and build a tool-role message.
-		toolBlocks := make([]llm.Block, 0, len(pendingToolUses))
+		// Execute the pending tools and build the tool-role message.
+		// Block order matters: every tool_result comes first (tool-call
+		// order), then every artifact_ref (tool-call order, then item
+		// order). Anthropic rejects a user message answering tool_use
+		// whose content does not start with the tool_result blocks.
+		toolResults := make([]llm.Block, 0, len(pendingToolUses))
+		var toolRefs []llm.Block
+		var refEvents []transport.ArtifactRefEvent
 		for _, tu := range pendingToolUses {
 			res, err := toolHandler.Call(ctx, agent.Architecture, tools.Call{
 				ID:    tu.ID,
@@ -359,46 +374,39 @@ func (o *Orchestrator) Turn(
 				errMsg, _ := json.Marshal(map[string]string{"error": err.Error()})
 				res = tools.Result{ToolUseID: tu.ID, Output: errMsg, IsError: true}
 			}
+			if o.artifactUploader != nil {
+				// Error-flagged results are normalised too: an MCP isError
+				// result may carry a screenshot of the failed state.
+				nr := normaliseToolResult(ctx, res.Output, o.artifactUploader, o.logger, tu.Name)
+				res.Output = nr.Output
+				if nr.ForceError {
+					res.IsError = true
+				}
+				for _, r := range nr.Refs {
+					toolRefs = append(toolRefs, r)
+					refEvents = append(refEvents, transport.ArtifactRefEvent{
+						ToolCallID: tu.ID,
+						StoreID:    r.StoreID,
+						URI:        r.URI,
+						MIME:       r.MIME,
+						SizeBytes:  r.SizeBytes,
+						Sha256:     r.Sha256,
+						Filename:   r.Filename,
+					})
+				}
+			}
 			_ = sink.Send(ctx, transport.ToolResultEvent{
 				ToolCallID: tu.ID,
 				Result:     res.Output,
 				IsError:    res.IsError,
 			})
-			// Normalise MCP-shaped inline media in the tool result into
-			// ArtifactRefBlocks that precede the ToolResultBlock. The
-			// LLM sees both the artifact refs (rendered via
-			// MultimodalRenderer on the next round) and the original
-			// tool_result content. Uploader is optional — when nil,
-			// tool results pass through unchanged (feature-off path).
-			if o.artifactUploader != nil && !res.IsError {
-				refs, remaining, nerr := normaliseToolResult(ctx, res.Output, o.artifactUploader)
-				if nerr == nil {
-					for _, r := range refs {
-						toolBlocks = append(toolBlocks, r)
-					}
-					// If normalisation consumed EVERYTHING, still emit
-					// an empty tool_result so the model knows the tool
-					// returned (otherwise the assistant expects a
-					// tool_result matching this ID). Preserve the raw
-					// output shape when nothing was normalised.
-					if len(remaining) > 0 {
-						res.Output = remaining
-					}
-				} else {
-					// Log but continue with the raw output — a normaliser
-					// error must not fail the whole turn.
-					o.logger.Warn("tool result normalisation failed; passing through raw output",
-						slog.String("tool", tu.Name),
-						slog.Any("err", nerr),
-					)
-				}
-			}
-			toolBlocks = append(toolBlocks, llm.ToolResultBlock{
+			toolResults = append(toolResults, llm.ToolResultBlock{
 				ToolUseID: tu.ID,
 				Result:    res.Output,
 				IsError:   res.IsError,
 			})
 		}
+		toolBlocks := append(toolResults, toolRefs...)
 
 		// Persist the tool-role message.
 		toolMsgID := uuid.NewString()
@@ -418,6 +426,9 @@ func (o *Orchestrator) Turn(
 			Seq:       toolSeq,
 		}}); err != nil {
 			return failTurn("persist_tool_msg", "append_tool_msg", err)
+		}
+		for _, ev := range refEvents {
+			_ = sink.Send(ctx, ev)
 		}
 
 		// Extend the LLM request with both messages and loop.
@@ -491,6 +502,24 @@ func parseBlocks(raw []json.RawMessage) []llm.Block {
 			}
 			_ = json.Unmarshal(r, &b)
 			out = append(out, llm.ToolResultBlock{ToolUseID: b.ToolUseID, Result: b.Content, IsError: b.IsError})
+		case "artifact_ref":
+			var b struct {
+				StoreID   string `json:"store_id"`
+				URI       string `json:"uri"`
+				MIME      string `json:"mime"`
+				SizeBytes int64  `json:"size_bytes"`
+				Sha256    string `json:"sha256"`
+				Filename  string `json:"filename"`
+			}
+			_ = json.Unmarshal(r, &b)
+			out = append(out, llm.ArtifactRefBlock{
+				StoreID:   b.StoreID,
+				URI:       b.URI,
+				MIME:      b.MIME,
+				SizeBytes: b.SizeBytes,
+				Sha256:    b.Sha256,
+				Filename:  b.Filename,
+			})
 		}
 	}
 	return out
@@ -516,6 +545,21 @@ func blocksToJSON(blocks []llm.Block) (json.RawMessage, error) {
 				"content":     json.RawMessage(x.Result),
 				"is_error":    x.IsError,
 			})
+		case llm.ArtifactRefBlock:
+			m := map[string]any{
+				"type":       "artifact_ref",
+				"store_id":   x.StoreID,
+				"uri":        x.URI,
+				"mime":       x.MIME,
+				"size_bytes": x.SizeBytes,
+				"sha256":     x.Sha256,
+			}
+			if x.Filename != "" {
+				m["filename"] = x.Filename
+			}
+			out = append(out, m)
+		case llm.InlineMediaBlock:
+			return nil, ErrInlineMediaNotPersistable
 		}
 	}
 	return json.Marshal(out)

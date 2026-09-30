@@ -5,88 +5,205 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 )
 
-// renderArtifactsForLLM walks the message content lists, converting each
-// llm.ArtifactRefBlock into a provider-native inline media block via
-// MultimodalRenderer (when both the provider implements it AND the ref's
-// store resolves through the resolver), or into a text-surrogate block
-// via llm.TextSurrogate otherwise.
+// renderKey identifies one rendered artifact within a turn.
+type renderKey struct{ storeID, uri, mime string }
+
+// renderCache holds per-turn render outcomes, so each blob is fetched at
+// most once per turn however many tool rounds re-send it. It never holds
+// refs, and is discarded when the turn ends.
 //
-// The function returns a freshly-allocated []llm.Message so the caller
-// can substitute rendered content into the LLM request without mutating
-// history in-place. Refs whose store_id doesn't resolve — either because
-// the resolver is nil (feature disabled) or the store isn't in the
-// registry — fall through to text surrogate; the model still gets a
-// human-readable pointer even when the bytes can't be fetched.
+//   - rendered holds provider-native blocks. After every render pass it is
+//     pruned to the keys placed natively in that pass: history is
+//     append-only, so a ref that fell out of the native window never
+//     re-enters it.
+//   - notNative records keys whose fetch showed they can never be placed
+//     natively, whatever their position: a render that returned
+//     ErrUnsupported, or a blob that Stat reports missing. Later passes
+//     emit the uncharged surrogate without fetching. These keys are never
+//     pruned (they are few). Transient failures are never recorded — they
+//     fail the turn.
 //
-// Non-ErrUnsupported errors from RenderArtifactAsBlock abort the whole
-// operation; the caller fails the turn. This keeps a transient fetch
-// error from silently downgrading a native-image call into a surrogate.
+// A ref whose actual bytes overflow the remaining MaxBytes is not
+// recorded: overflow depends on the ref's position in the budget, not on
+// the blob (the same content-addressed blob can appear more than once,
+// and a later round may make it the newest ref). It is re-evaluated each
+// pass, so a blob whose store under-reports size_bytes may be re-fetched
+// in a later round.
+type renderCache struct {
+	rendered  map[renderKey]llm.Block
+	notNative map[renderKey]bool
+}
+
+func newRenderCache() *renderCache {
+	return &renderCache{
+		rendered:  map[renderKey]llm.Block{},
+		notNative: map[renderKey]bool{},
+	}
+}
+
+// base64Len is the base64-encoded length of n raw bytes.
+func base64Len(n int64) int64 { return ((n + 2) / 3) * 4 }
+
+// renderArtifactsForLLM returns a fresh copy of msgs in which every
+// ArtifactRefBlock is replaced by a provider-native block or its text
+// surrogate. The input is never mutated: callers keep the ref form and
+// render a new copy for every LLM call.
+//
+// Refs are visited in reverse (message, block) order — newest message
+// first, last block first — against the provider's RenderBudget:
+//
+//   - once the budget is exhausted, every remaining (older) ref is a
+//     surrogate and is never fetched;
+//   - a ref whose store does not resolve, or that the provider would not
+//     render natively (SupportsNative), is a surrogate, is not charged and
+//     is not fetched;
+//   - a ref whose declared size (base64-expanded) or block count would
+//     exceed a cap exhausts the budget before any fetch;
+//   - otherwise the ref is rendered (from the per-turn cache or by
+//     fetching). ErrUnsupported downgrades it to an uncharged surrogate.
+//     A rendered InlineMediaBlock is charged at the larger of its declared
+//     and actual size; if that actual cost would exceed the remaining
+//     MaxBytes the budget is exhausted and the ref becomes a surrogate.
+//   - a ref the cache already knows is not native this turn is decided
+//     from the cache without fetching (see renderCache).
+//
+// On return the cache's rendered map holds only the keys placed natively
+// in this pass.
 func renderArtifactsForLLM(
 	ctx context.Context,
 	in []llm.Message,
 	provider llm.LLM,
 	resolver ArtifactFetcherResolver,
+	cache *renderCache,
+	logger *slog.Logger,
 ) ([]llm.Message, error) {
-	// Fast path: if the LLM provider isn't a MultimodalRenderer OR the
-	// resolver is nil, every artifact_ref becomes a text surrogate.
-	renderer, providerSupports := provider.(llm.MultimodalRenderer)
-	if !providerSupports || resolver == nil {
-		return substituteAllWithSurrogate(in), nil
-	}
-
 	out := make([]llm.Message, len(in))
 	for i, m := range in {
-		newContent := make([]llm.Block, 0, len(m.Content))
-		for _, b := range m.Content {
-			ref, isRef := b.(llm.ArtifactRefBlock)
-			if !isRef {
-				newContent = append(newContent, b)
+		out[i] = llm.Message{Role: m.Role, Content: append([]llm.Block(nil), m.Content...)}
+	}
+
+	renderer, providerSupports := provider.(llm.MultimodalRenderer)
+	if !providerSupports || resolver == nil {
+		for i := range out {
+			for j, b := range out[i].Content {
+				if ref, ok := b.(llm.ArtifactRefBlock); ok {
+					out[i].Content[j] = llm.TextSurrogate(ref)
+				}
+			}
+		}
+		return out, nil
+	}
+
+	budget := renderer.NativeRenderBudget()
+	overBytes := func(used, cost int64) bool { return budget.MaxBytes > 0 && used+cost > budget.MaxBytes }
+	var usedBytes int64
+	usedBlocks := 0
+	exhausted := false
+	placed := map[renderKey]bool{}
+
+	for i := len(out) - 1; i >= 0; i-- {
+		for j := len(out[i].Content) - 1; j >= 0; j-- {
+			ref, ok := out[i].Content[j].(llm.ArtifactRefBlock)
+			if !ok {
+				continue
+			}
+			out[i].Content[j] = llm.TextSurrogate(ref)
+			if exhausted {
 				continue
 			}
 			fetcher := resolver(ref.StoreID)
-			if fetcher == nil {
-				// Store not in registry — the ref will still tell the
-				// model there was an attachment; the actual bytes are
-				// out of reach.
-				newContent = append(newContent, llm.TextSurrogate(ref))
+			if fetcher == nil || !renderer.SupportsNative(ref) {
 				continue
 			}
-			rendered, err := renderer.RenderArtifactAsBlock(ctx, ref, fetcher)
-			if errors.Is(err, llm.ErrUnsupported) {
-				newContent = append(newContent, llm.TextSurrogate(ref))
+			if (budget.MaxBlocks > 0 && usedBlocks+1 > budget.MaxBlocks) ||
+				overBytes(usedBytes, base64Len(ref.SizeBytes)) {
+				exhausted = true
 				continue
 			}
+			key := renderKey{ref.StoreID, ref.URI, ref.MIME}
+			if cache.notNative[key] {
+				continue
+			}
+			rendered, err := renderOne(ctx, renderer, fetcher, cache, key, ref, logger)
 			if err != nil {
 				return nil, err
 			}
-			newContent = append(newContent, rendered)
+			if rendered == nil {
+				continue
+			}
+			size := ref.SizeBytes
+			if inline, ok := rendered.(llm.InlineMediaBlock); ok {
+				size = max(size, int64(len(inline.Data)))
+			}
+			cost := base64Len(size)
+			if overBytes(usedBytes, cost) {
+				// Not cached as not-native: overflow is per position.
+				// Keep any rendered entry — another copy of this blob
+				// may already be placed in this pass.
+				exhausted = true
+				continue
+			}
+			usedBlocks++
+			usedBytes += cost
+			placed[key] = true
+			out[i].Content[j] = rendered
 		}
-		out[i] = llm.Message{Role: m.Role, Content: newContent}
+	}
+
+	for k := range cache.rendered {
+		if !placed[k] {
+			delete(cache.rendered, k)
+		}
 	}
 	return out, nil
 }
 
-// substituteAllWithSurrogate walks messages once and replaces every
-// ArtifactRefBlock with its TextSurrogate. Used on the fast path
-// (feature disabled or provider doesn't support multimodal at all).
-func substituteAllWithSurrogate(in []llm.Message) []llm.Message {
-	out := make([]llm.Message, len(in))
-	for i, m := range in {
-		newContent := make([]llm.Block, 0, len(m.Content))
-		for _, b := range m.Content {
-			if ref, ok := b.(llm.ArtifactRefBlock); ok {
-				newContent = append(newContent, llm.TextSurrogate(ref))
-				continue
-			}
-			newContent = append(newContent, b)
-		}
-		out[i] = llm.Message{Role: m.Role, Content: newContent}
+// renderOne renders a single ref, using and filling the per-turn cache.
+// Returns (nil, nil) when the ref should become a surrogate; that outcome
+// is recorded in cache.notNative so the ref is not fetched again this turn.
+func renderOne(
+	ctx context.Context,
+	renderer llm.MultimodalRenderer,
+	fetcher llm.ArtifactFetcher,
+	cache *renderCache,
+	key renderKey,
+	ref llm.ArtifactRefBlock,
+	logger *slog.Logger,
+) (llm.Block, error) {
+	if b, ok := cache.rendered[key]; ok {
+		return b, nil
 	}
-	return out
+	b, err := renderer.RenderArtifactAsBlock(ctx, ref, fetcher)
+	if errors.Is(err, llm.ErrUnsupported) {
+		cache.notNative[key] = true
+		return nil, nil
+	}
+	if err != nil {
+		// Tell a permanently missing blob (surrogate; failing would brick
+		// every later turn of the session) from a transient failure (fail
+		// the turn; the next one retries). Stat, not the fetch's HTTP
+		// status: S3 answers 403 for a missing key without ListBucket.
+		exists, serr := fetcher.Stat(ctx, ref.URI)
+		if serr == nil && !exists {
+			// Never log filename (PII).
+			logger.Warn("artifact blob missing; rendering text surrogate",
+				slog.String("store_id", ref.StoreID),
+				slog.String("uri", ref.URI),
+				slog.String("mime", ref.MIME))
+			cache.notNative[key] = true
+			return nil, nil
+		}
+		return nil, err
+	}
+	cache.rendered[key] = b
+	return b, nil
 }
 
 // mcpContentItem is the shape MCP tool results use for a single content
@@ -110,132 +227,216 @@ type mcpResourceObj struct {
 	Text     string `json:"text,omitempty"` // plain text
 }
 
-// normaliseToolResult walks a JSON tool-result payload looking for MCP-
-// shaped inline media (ImageContent, EmbeddedResource with `blob` or
-// `text`) and uploads the extracted bytes to the artifact store,
-// producing one ArtifactRefBlock per recognised item. Non-media items
-// (TextContent, URI-only EmbeddedResource) stay in the returned
-// `remaining` bytes so the model still sees them in the tool_result.
+// marshalJSON is json.Marshal, replaceable in tests to exercise the
+// re-serialisation failure branch.
+var marshalJSON = json.Marshal
+
+// unavailableToolResult replaces a tool result whose normalised remainder
+// could not be re-serialised. Never fall back to the raw payload: it may
+// carry base64 media.
+var unavailableToolResult = json.RawMessage(`{"content":[{"type":"text","text":"[tool result unavailable]"}]}`)
+
+// normaliseResult is the outcome of normalising one tool result.
+type normaliseResult struct {
+	// Refs are the artifacts uploaded from inline media, in item order.
+	Refs []llm.ArtifactRefBlock
+	// Output is what is streamed as the tool result and persisted in the
+	// tool_result block: the payload with inline media removed (or
+	// replaced by a text note when its upload failed).
+	Output json.RawMessage
+	// ForceError is set when Output is unavailableToolResult; the caller
+	// marks the tool result is_error.
+	ForceError bool
+}
+
+// normaliseToolResult walks an MCP-shaped tool result and moves inline
+// media (ImageContent, EmbeddedResource with blob/text) into the artifact
+// store, one ref per item. Per item:
+//   - upload succeeds → the item is removed from the remainder and a ref returned;
+//   - base64 does not decode or is empty, or upload fails → the item is replaced by
+//     {"type":"text","text":"[artifact unavailable: <mime>, <size>]"} and a
+//     warn is logged (tool, mime and err only — never a filename).
 //
-// If the payload is not a JSON object with a `content` array — the
-// canonical MCP wire shape — the function passes through: nil refs,
-// original bytes unchanged, no error. This keeps http_endpoint tool
-// results (which are arbitrary REST responses) untouched.
-//
-// Returns:
-//   - refs: newly-created ArtifactRefBlocks for each normalised item.
-//   - remaining: the tool result JSON with normalised items removed
-//     from the content array. Empty if every content item was
-//     normalised (caller may drop the ToolResultBlock in that case,
-//     though current code always keeps it for tool_use_id linkage).
-//   - err: only fatal errors (upload failures) propagate; malformed
-//     payloads pass through.
+// Non-MCP payloads (no top-level content array) pass through unchanged.
+// A re-serialisation failure yields unavailableToolResult with ForceError.
 func normaliseToolResult(
 	ctx context.Context,
 	payload json.RawMessage,
 	uploader ArtifactUploader,
-) (refs []llm.Block, remaining json.RawMessage, err error) {
-	// Attempt to parse as an MCP-shaped tool result. Failure is not an
-	// error — many tool backends return arbitrary JSON.
-	var parsed struct {
-		Content []json.RawMessage `json:"content"`
-		Other   map[string]json.RawMessage
-	}
+	logger *slog.Logger,
+	toolName string,
+) normaliseResult {
+	passThrough := normaliseResult{Output: payload}
 	if len(payload) == 0 {
-		return nil, payload, nil
+		return passThrough
 	}
-	if e := json.Unmarshal(payload, &parsed); e != nil {
-		return nil, payload, nil
-	}
-	if parsed.Content == nil {
-		return nil, payload, nil
-	}
-
-	// Rewind: parse into a map to preserve top-level fields other than
-	// "content" (some backends attach metadata alongside).
 	var top map[string]json.RawMessage
-	if e := json.Unmarshal(payload, &top); e != nil {
-		return nil, payload, nil
+	if err := json.Unmarshal(payload, &top); err != nil {
+		return passThrough
+	}
+	rawContent, ok := top["content"]
+	if !ok {
+		return passThrough
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(rawContent, &items); err != nil {
+		return passThrough
 	}
 
-	preserved := make([]json.RawMessage, 0, len(parsed.Content))
-	for _, raw := range parsed.Content {
+	var res normaliseResult
+	kept := make([]json.RawMessage, 0, len(items))
+	for _, raw := range items {
 		var item mcpContentItem
-		if e := json.Unmarshal(raw, &item); e != nil {
-			preserved = append(preserved, raw)
+		if err := json.Unmarshal(raw, &item); err != nil {
+			if looksLikeMedia(raw) {
+				logger.Warn("tool result media item malformed; replaced with note",
+					slog.String("tool", toolName))
+				kept = append(kept, unavailableNote("unknown", "unknown"))
+			} else {
+				kept = append(kept, raw)
+			}
 			continue
 		}
-		switch item.Type {
-		case "image":
-			bytes, decErr := base64.StdEncoding.DecodeString(item.Data)
-			if decErr != nil {
-				preserved = append(preserved, raw)
-				continue
+		declared, data, decoded, isMedia := inlineMedia(item)
+		if !isMedia {
+			if carriesInlineBytes(raw) {
+				logger.Warn("tool result item of unhandled type carries inline bytes; replaced with note",
+					slog.String("tool", toolName))
+				kept = append(kept, unavailableNote("unknown", "unknown"))
+			} else {
+				kept = append(kept, raw)
 			}
-			mime := item.MIMEType
-			if mime == "" {
-				mime = "application/octet-stream"
-			}
-			ref, upErr := uploader.Upload(ctx, mime, bytes)
-			if upErr != nil {
-				return nil, payload, upErr
-			}
-			refs = append(refs, ref)
-		case "resource":
-			if item.Resource == nil {
-				preserved = append(preserved, raw)
-				continue
-			}
-			r := item.Resource
-			mime := r.MIMEType
-			var b []byte
-			switch {
-			case r.Blob != "":
-				decoded, decErr := base64.StdEncoding.DecodeString(r.Blob)
-				if decErr != nil {
-					preserved = append(preserved, raw)
-					continue
-				}
-				b = decoded
-			case r.Text != "":
-				if mime == "" {
-					mime = "text/plain"
-				}
-				b = []byte(r.Text)
-			default:
-				// URI-only EmbeddedResource — preserved as opaque content;
-				// framework does not fetch external URIs (see spec § Scope).
-				preserved = append(preserved, raw)
-				continue
-			}
-			if mime == "" {
-				mime = "application/octet-stream"
-			}
-			ref, upErr := uploader.Upload(ctx, mime, b)
-			if upErr != nil {
-				return nil, payload, upErr
-			}
-			refs = append(refs, ref)
-		default:
-			// TextContent and unknown types: preserve verbatim.
-			preserved = append(preserved, raw)
+			continue
+		}
+		if !decoded {
+			logger.Warn("tool result media not decodable; replaced with note",
+				slog.String("tool", toolName), slog.String("mime", truncateMIME(declared)))
+			kept = append(kept, unavailableNote(declared, "unknown"))
+			continue
+		}
+		ref, err := uploader.Upload(ctx, declared, data)
+		if err != nil {
+			resolved := artifacts.ResolveMIME(declared, data)
+			logger.Warn("tool result media upload failed; replaced with note",
+				slog.String("tool", toolName), slog.String("mime", resolved), slog.Any("err", err))
+			kept = append(kept, unavailableNote(resolved, llm.HumanBytes(int64(len(data)))))
+			continue
+		}
+		res.Refs = append(res.Refs, ref)
+	}
+
+	keptJSON, err := marshalJSON(kept)
+	if err == nil {
+		top["content"] = keptJSON
+		var out []byte
+		if out, err = marshalJSON(top); err == nil {
+			res.Output = out
+			return res
 		}
 	}
-
-	// Reserialize the top-level object with the preserved content array
-	// (which may be empty if everything got normalised).
-	preservedContent, marshalErr := json.Marshal(preserved)
-	if marshalErr != nil {
-		return refs, payload, nil // fall back to raw output
-	}
-	top["content"] = preservedContent
-	newPayload, marshalErr := json.Marshal(top)
-	if marshalErr != nil {
-		return refs, payload, nil
-	}
-	return refs, newPayload, nil
+	logger.Warn("tool result re-serialisation failed; replaced with unavailable result",
+		slog.String("tool", toolName), slog.Any("err", err))
+	res.Output = unavailableToolResult
+	res.ForceError = true
+	return res
 }
 
-// unused: keep errors imported until normaliseToolResult grows a real
-// error case beyond the upload failure path.
-var _ = errors.New
+// inlineMedia extracts inline bytes from an MCP content item. isMedia is
+// false for text items, URI-only resources and unknown types (kept as-is).
+// decoded is false when the item is media but its base64 does not decode
+// or decodes to zero bytes (empty data is never uploaded).
+func inlineMedia(item mcpContentItem) (declared string, data []byte, decoded, isMedia bool) {
+	switch item.Type {
+	case "image", "audio":
+		declared = orDefault(item.MIMEType, "application/octet-stream")
+		b, err := base64.StdEncoding.DecodeString(item.Data)
+		return declared, b, err == nil && len(b) > 0, true
+	case "resource":
+		if item.Resource == nil {
+			return "", nil, false, false
+		}
+		r := item.Resource
+		switch {
+		case r.Blob != "":
+			declared = orDefault(r.MIMEType, "application/octet-stream")
+			b, err := base64.StdEncoding.DecodeString(r.Blob)
+			return declared, b, err == nil && len(b) > 0, true
+		case r.Text != "":
+			return orDefault(r.MIMEType, "text/plain"), []byte(r.Text), true, true
+		}
+	}
+	return "", nil, false, false
+}
+
+// truncateMIME caps a possibly tool-controlled mime string at 100 bytes.
+func truncateMIME(mime string) string {
+	if len(mime) > 100 {
+		return strings.ToValidUTF8(mime[:100], "")
+	}
+	return mime
+}
+
+// carriesInlineBytes reports whether a content item that inlineMedia did not
+// handle still holds inline bytes: a non-empty string "data" or "blob", or a
+// "resource" object with a non-empty "blob". Text and URI-only items do not.
+func carriesInlineBytes(raw json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false
+	}
+	nonEmpty := func(v json.RawMessage) bool {
+		var s string
+		return json.Unmarshal(v, &s) == nil && s != ""
+	}
+	for _, k := range []string{"data", "blob"} {
+		if v, ok := m[k]; ok && nonEmpty(v) {
+			return true
+		}
+	}
+	if v, ok := m["resource"]; ok {
+		var r map[string]json.RawMessage
+		if json.Unmarshal(v, &r) == nil {
+			if b, ok := r["blob"]; ok && nonEmpty(b) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// looksLikeMedia reports whether a content item that failed typed decoding
+// is a JSON object that may carry inline media.
+func looksLikeMedia(raw json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false
+	}
+	var typ string
+	_ = json.Unmarshal(m["type"], &typ)
+	switch typ {
+	case "image", "audio", "resource":
+		return true
+	}
+	for _, k := range []string{"data", "blob", "resource"} {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func unavailableNote(mime, size string) json.RawMessage {
+	mime = truncateMIME(mime)
+	b, _ := json.Marshal(map[string]string{
+		"type": "text",
+		"text": "[artifact unavailable: " + mime + ", " + size + "]",
+	})
+	return b
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
