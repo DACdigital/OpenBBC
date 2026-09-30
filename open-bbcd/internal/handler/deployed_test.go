@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +25,9 @@ type stubDeployedAgentReader struct {
 }
 
 func (s *stubDeployedAgentReader) CurrentDeployedID(ctx context.Context, agentID string) (string, error) {
+	if !validUUID(agentID) {
+		return "", errors.New(`pq: invalid input syntax for type uuid: "` + agentID + `"`)
+	}
 	return s.deployedID, s.err
 }
 
@@ -57,6 +61,9 @@ func (s *stubDeployedStore) CreateSession(ctx context.Context, agentID, userID, 
 	return sess, nil
 }
 func (s *stubDeployedStore) GetSession(ctx context.Context, sessionID, userID string) (*types.DeployedSession, error) {
+	if !validUUID(sessionID) {
+		return nil, errors.New("pq: invalid input syntax for type uuid")
+	}
 	sess, ok := s.sessions[sessionID]
 	if !ok || sess.UserID != userID {
 		return nil, types.ErrNotFound
@@ -76,6 +83,9 @@ func (s *stubDeployedStore) ListSessions(ctx context.Context, agentID, userID st
 	return out, nil
 }
 func (s *stubDeployedStore) UpdateSessionTitle(ctx context.Context, sessionID, userID, title string) error {
+	if !validUUID(sessionID) {
+		return errors.New("pq: invalid input syntax for type uuid")
+	}
 	sess, ok := s.sessions[sessionID]
 	if !ok || sess.UserID != userID {
 		return types.ErrNotFound
@@ -84,6 +94,9 @@ func (s *stubDeployedStore) UpdateSessionTitle(ctx context.Context, sessionID, u
 	return nil
 }
 func (s *stubDeployedStore) DeleteSession(ctx context.Context, sessionID, userID string) error {
+	if !validUUID(sessionID) {
+		return errors.New("pq: invalid input syntax for type uuid")
+	}
 	sess, ok := s.sessions[sessionID]
 	if !ok || sess.UserID != userID {
 		return types.ErrNotFound
@@ -306,6 +319,7 @@ func TestDeployedTurn_MalformedSessionID_404(t *testing.T) {
 	for _, path := range []string{
 		"/deployed/" + testAgentID + "/sessions/not-a-uuid/turn",
 		"/deployed/not-a-uuid/sessions/" + testSessionID + "/turn",
+		"/deployed/" + testAgentID + "/sessions/urn:uuid:" + testSessionID + "/turn",
 	} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest("POST", path, strings.NewReader(`{"user_id":"u1","input":[{"type":"text","text":"x"}]}`)))
@@ -317,5 +331,19 @@ func TestDeployedTurn_MalformedSessionID_404(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/deployed/"+testAgentID+"/sessions/not-a-uuid?user_id=u1", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("GetSession status %d", rec.Code)
+	}
+}
+
+func TestDeployedUpdateTitleDelete_MalformedSessionID_404(t *testing.T) {
+	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: "v1"}, newStubDeployedStore(), &stubTurnRunner{}, jsonl.NewFactory())
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("PATCH", "/deployed/"+testAgentID+"/sessions/not-a-uuid/title", strings.NewReader(`{"user_id":"u1","title":"t"}`)))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("UpdateTitle status %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("DELETE", "/deployed/"+testAgentID+"/sessions/not-a-uuid?user_id=u1", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("DeleteSession status %d", rec.Code)
 	}
 }

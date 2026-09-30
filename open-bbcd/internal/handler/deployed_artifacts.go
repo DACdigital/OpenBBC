@@ -53,8 +53,13 @@ func (h *DeployedArtifactHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}/pending-artifacts/{id}", h.guard(h.svc.deletePending))
 }
 
-// validUUID reports whether id parses as a UUID.
+// validUUID reports whether id is a canonical 36-char UUID. uuid.Parse also
+// accepts urn:uuid:, braced and bare-hex forms; require the canonical length
+// so only ids Postgres accepts pass (others would surface as a 500).
 func validUUID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
 	_, err := uuid.Parse(id)
 	return err == nil
 }

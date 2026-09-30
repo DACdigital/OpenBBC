@@ -97,6 +97,7 @@ func TestDeployedArtifacts_PreambleFailures(t *testing.T) {
 		{"not deployed", "", testAgentID, testSessionID, "?user_id=u1", http.StatusNotFound},
 		{"malformed agent id", "v1", "not-a-uuid", testSessionID, "?user_id=u1", http.StatusNotFound},
 		{"malformed session id", "v1", testAgentID, "not-a-uuid", "?user_id=u1", http.StatusNotFound},
+		{"urn-form session id", "v1", testAgentID, "urn:uuid:" + testSessionID, "?user_id=u1", http.StatusNotFound},
 		{"unknown session", "v1", testAgentID, "66666666-6666-4666-8666-666666666666", "?user_id=u1", http.StatusNotFound},
 	}
 	for _, c := range cases {

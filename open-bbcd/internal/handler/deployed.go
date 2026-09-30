@@ -169,6 +169,10 @@ func (h *DeployedHandler) UpdateTitle(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireDeployed(w, r, agentID); !ok {
 		return
 	}
+	if !validUUID(sessionID) {
+		Error(w, types.ErrNotFound)
+		return
+	}
 	var body struct {
 		UserID string `json:"user_id"`
 		Title  string `json:"title"`
@@ -193,6 +197,10 @@ func (h *DeployedHandler) DeleteSession(w http.ResponseWriter, r *http.Request) 
 	agentID := r.PathValue("agent_id")
 	sessionID := r.PathValue("session_id")
 	if _, ok := h.requireDeployed(w, r, agentID); !ok {
+		return
+	}
+	if !validUUID(sessionID) {
+		Error(w, types.ErrNotFound)
 		return
 	}
 	userID := r.URL.Query().Get("user_id")
