@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/jsonl"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -136,5 +138,23 @@ func TestDeployedArtifacts_FailingPreambleNeverReadsBody(t *testing.T) {
 	}
 	if spy.read {
 		t.Fatal("upload body was read despite failing preamble")
+	}
+}
+
+func TestDeployedArtifacts_RegistryDisabled_RoutesAbsent(t *testing.T) {
+	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: "v1"}, newStubDeployedStore(), &stubTurnRunner{}, jsonl.NewFactory())
+	base := "/deployed/" + testAgentID + "/sessions/" + testSessionID
+	for _, p := range []string{
+		base + "/pending-artifacts?user_id=u1",
+		base + "/artifacts/MAIN/sha256/aa?user_id=u1",
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404 (unregistered)", p, rec.Code)
+		}
+		if body := strings.TrimSpace(rec.Body.String()); body != "404 page not found" {
+			t.Errorf("GET %s body = %q, want mux default 404", p, body)
+		}
 	}
 }
