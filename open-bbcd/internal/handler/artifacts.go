@@ -355,6 +355,9 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "upstream store error", http.StatusBadGateway)
 			return
 		}
+		// Content-Type / Content-Disposition for signed-URL delivery are
+		// set by the store via presign response overrides, which arrive
+		// with Sign's SignOptions parameter.
 		w.Header().Set("Location", url)
 		w.WriteHeader(http.StatusFound) // 302
 		return
@@ -375,9 +378,19 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		defer rc.Close()
-		if mime != "" {
-			w.Header().Set("Content-Type", mime)
+		// Artifact bytes are user- or tool-supplied: never let a client
+		// sniff them into something renderable, and only render inline
+		// the native-render set. Content-Length is omitted: neither the
+		// session-scope check nor Get reports a size here. Filename is
+		// likewise unknown at this point, so Content-Disposition carries
+		// no filename parameter.
+		ct := mime
+		if ct == "" {
+			ct = "application/octet-stream"
 		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", artifactContentDisposition(mime, ""))
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.Copy(w, rc)
 		return
@@ -389,4 +402,37 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 		)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
+}
+
+// artifactContentDisposition returns the Content-Disposition value for a
+// proxied artifact: "inline" for the native-render MIME set, "attachment"
+// otherwise, with an RFC 5987 filename* parameter when filename is known.
+func artifactContentDisposition(mime, filename string) string {
+	d := "attachment"
+	if artifacts.IsNativeRenderMIME(mime) {
+		d = "inline"
+	}
+	if filename != "" {
+		d += "; filename*=UTF-8''" + rfc5987Escape(filename)
+	}
+	return d
+}
+
+// rfc5987Escape percent-encodes every byte of s outside RFC 5987
+// attr-char (ALPHA / DIGIT / "!#$&+-.^_`|~").
+func rfc5987Escape(s string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') ||
+			strings.IndexByte("!#$&+-.^_`|~", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0x0f])
+	}
+	return b.String()
 }
