@@ -310,13 +310,43 @@ var supportedImageMIMEs = map[string]bool{
 	"image/webp": true,
 }
 
-// SupportsNative implements llm.MultimodalRenderer. Must not fetch.
-func (l *LLM) SupportsNative(ref llm.ArtifactRefBlock) bool {
-	return supportedImageMIMEs[ref.MIME] || ref.MIME == "application/pdf"
+// Media limits, pinned 2026-09-30 from the Anthropic vision and PDF docs.
+// Chosen to be safe on every platform the adapter may target:
+//   - per image: 5 MB base64 (Bedrock/Vertex cap; the direct API allows 10 MB);
+//   - per request: 32 MB total; native media budget 24 MiB base64 leaves
+//     headroom for text and tool payloads;
+//   - >20 image blocks trigger a stricter per-image pixel limit, so cap at 20.
+//
+// PDF page count (600) is not checked — accepted residual risk in the spec.
+const (
+	maxImageBase64Bytes   = 5_000_000
+	maxRequestMediaBytes  = 24 << 20
+	maxRequestMediaBlocks = 20
+)
+
+func base64Len(n int64) int64 { return ((n + 2) / 3) * 4 }
+
+// nativeRenderable reports whether ref has a natively supported MIME and
+// fits the per-block limits. Shared by SupportsNative and
+// RenderArtifactAsBlock; never fetches.
+func nativeRenderable(ref llm.ArtifactRefBlock) bool {
+	size := base64Len(ref.SizeBytes)
+	switch {
+	case supportedImageMIMEs[ref.MIME]:
+		return size <= maxImageBase64Bytes
+	case ref.MIME == "application/pdf":
+		return size <= maxRequestMediaBytes
+	}
+	return false
 }
 
-// NativeRenderBudget implements llm.MultimodalRenderer. Values pinned in renderLimits.
-func (l *LLM) NativeRenderBudget() llm.RenderBudget { return llm.RenderBudget{} }
+// SupportsNative implements llm.MultimodalRenderer. Must not fetch.
+func (l *LLM) SupportsNative(ref llm.ArtifactRefBlock) bool { return nativeRenderable(ref) }
+
+// NativeRenderBudget implements llm.MultimodalRenderer.
+func (l *LLM) NativeRenderBudget() llm.RenderBudget {
+	return llm.RenderBudget{MaxBytes: maxRequestMediaBytes, MaxBlocks: maxRequestMediaBlocks}
+}
 
 // RenderArtifactAsBlock implements llm.MultimodalRenderer for the Anthropic
 // provider. Materialises the artifact_ref's bytes into an InlineMediaBlock
@@ -330,7 +360,7 @@ func (l *LLM) NativeRenderBudget() llm.RenderBudget { return llm.RenderBudget{} 
 // there is no image-by-URL block for user messages in the Messages API
 // (only Anthropic's Files API supports that, out of phase 1 scope).
 func (l *LLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBlock, fetch llm.ArtifactFetcher) (llm.Block, error) {
-	if !supportedImageMIMEs[ref.MIME] && ref.MIME != "application/pdf" {
+	if !nativeRenderable(ref) {
 		return nil, llm.ErrUnsupported
 	}
 
