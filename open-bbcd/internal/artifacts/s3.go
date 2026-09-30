@@ -130,11 +130,17 @@ func (s *s3Store) Get(ctx context.Context, uri string) (io.ReadCloser, error) {
 	return obj, nil
 }
 
-func (s *s3Store) Sign(ctx context.Context, uri string, ttl time.Duration) (string, error) {
+func (s *s3Store) Sign(ctx context.Context, uri string, ttl time.Duration, opts SignOptions) (string, error) {
 	if ttl <= 0 {
 		ttl = s.signTTL
 	}
 	reqParams := make(url.Values)
+	if opts.ContentType != "" {
+		reqParams.Set("response-content-type", opts.ContentType)
+	}
+	if opts.ContentDisposition != "" {
+		reqParams.Set("response-content-disposition", opts.ContentDisposition)
+	}
 	presigned, err := s.client.PresignedGetObject(ctx, s.bucket, uri, ttl, reqParams)
 	if err != nil {
 		return "", mapS3Err(err)
@@ -194,6 +200,18 @@ func (s *s3Store) Probe(ctx context.Context) error {
 	}
 	if err := s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{}); err != nil {
 		return fmt.Errorf("%w: delete failed: %v", ErrProbeFailed, err)
+	}
+	// A missing key must be reported as not-found. Without list permission
+	// S3 answers 403 for a missing key, and the render path's missing-blob
+	// fallback (and retrieval's 410) would then misread every missing blob
+	// as an auth failure.
+	missing := "_probe/missing-" + hex.EncodeToString(buf)
+	st, err := s.Stat(ctx, missing)
+	if err != nil {
+		return fmt.Errorf("%w: stat of a missing key did not report not-found (%v); the store credentials need list permission on bucket %q (s3:ListBucket)", ErrProbeFailed, err, s.bucket)
+	}
+	if st.Exists {
+		return fmt.Errorf("%w: stat of random missing key %q reported it exists", ErrProbeFailed, missing)
 	}
 	return nil
 }

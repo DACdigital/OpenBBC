@@ -25,7 +25,7 @@ func (s artifactFetcherShim) Get(ctx context.Context, uri string) (io.ReadCloser
 	return s.store.Get(ctx, uri)
 }
 func (s artifactFetcherShim) Sign(ctx context.Context, uri string, ttl time.Duration) (string, error) {
-	return s.store.Sign(ctx, uri, ttl)
+	return s.store.Sign(ctx, uri, ttl, artifacts.SignOptions{})
 }
 func (s artifactFetcherShim) PreferredDelivery() int {
 	return int(s.store.PreferredDelivery())

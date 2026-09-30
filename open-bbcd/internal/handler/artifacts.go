@@ -360,7 +360,7 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 
 	switch store.PreferredDelivery() {
 	case artifacts.DeliverySignedURL:
-		url, err := store.Sign(r.Context(), uri, 0) // 0 = adapter default TTL
+		url, err := store.Sign(r.Context(), uri, 0, artifacts.SignOptions{}) // 0 = adapter default TTL
 		if err != nil {
 			h.logger.Error("artifact retrieve: sign failed",
 				slog.String("store_id", storeID),

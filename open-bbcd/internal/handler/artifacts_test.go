@@ -60,6 +60,7 @@ type fakeArtifactStore struct {
 	putCalls  int
 	getCalls  int
 	signCalls int
+	lastSignOpts artifacts.SignOptions
 	getData   []byte
 	signedURL string
 	putErr    error
@@ -86,8 +87,9 @@ func (s *fakeArtifactStore) Get(ctx context.Context, uri string) (io.ReadCloser,
 	}
 	return io.NopCloser(bytes.NewReader(s.getData)), nil
 }
-func (s *fakeArtifactStore) Sign(ctx context.Context, uri string, ttl time.Duration) (string, error) {
+func (s *fakeArtifactStore) Sign(ctx context.Context, uri string, ttl time.Duration, opts artifacts.SignOptions) (string, error) {
 	s.signCalls++
+	s.lastSignOpts = opts
 	if s.signErr != nil {
 		return "", s.signErr
 	}

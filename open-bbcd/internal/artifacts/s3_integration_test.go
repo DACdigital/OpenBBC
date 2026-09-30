@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -85,12 +86,25 @@ func TestS3Compatible_Integration(t *testing.T) {
 
 	// Sign — for the s3_compatible adapter PreferredDelivery is
 	// SignedURL, so this is the primary read path.
-	url, err := store.Sign(ctx, uri, 60*time.Second)
+	url, err := store.Sign(ctx, uri, 60*time.Second, SignOptions{})
 	if err != nil {
 		t.Fatalf("Sign = %v", err)
 	}
 	if !strings.Contains(url, "X-Amz-Signature") {
 		t.Errorf("signed URL missing signature params: %s", url)
+	}
+
+	signed, err := store.Sign(ctx, uri, time.Minute, SignOptions{ContentType: "image/png", ContentDisposition: "inline; filename*=UTF-8''x.png"})
+	if err != nil {
+		t.Fatalf("Sign with options: %v", err)
+	}
+	resp, err := http.Get(signed)
+	if err != nil {
+		t.Fatalf("GET signed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.Header.Get("Content-Type") != "image/png" || resp.Header.Get("Content-Disposition") != "inline; filename*=UTF-8''x.png" {
+		t.Fatalf("signed GET headers: ct=%q cd=%q", resp.Header.Get("Content-Type"), resp.Header.Get("Content-Disposition"))
 	}
 
 	// Get — for symmetry, verify the bytes-proxy path works even

@@ -1,7 +1,9 @@
 package artifacts
 
 import (
+	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -164,5 +166,38 @@ func TestMapS3Err(t *testing.T) {
 	other := errors.New("some other error")
 	if got := mapS3Err(other); got != other {
 		t.Errorf("mapS3Err(other) = %v, want to pass through unchanged", got)
+	}
+}
+
+// Presigning is offline when REGION is set (no bucket-location lookup).
+func TestS3Sign_ResponseOverrides(t *testing.T) {
+	st, err := NewS3Compatible(map[string]string{
+		"ENDPOINT": "http://127.0.0.1:1", "BUCKET": "bkt", "ACCESS_KEY": "a", "SECRET_KEY": "s", "REGION": "us-east-1",
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := st.Sign(context.Background(), "sha256/abc", 0, SignOptions{
+		ContentType:        "image/png",
+		ContentDisposition: "inline; filename*=UTF-8''a.png",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	if q.Get("response-content-type") != "image/png" {
+		t.Errorf("response-content-type = %q", q.Get("response-content-type"))
+	}
+	if q.Get("response-content-disposition") != "inline; filename*=UTF-8''a.png" {
+		t.Errorf("response-content-disposition = %q", q.Get("response-content-disposition"))
+	}
+
+	plain, _ := st.Sign(context.Background(), "sha256/abc", 0, SignOptions{})
+	if pu, _ := url.Parse(plain); pu.Query().Has("response-content-type") {
+		t.Error("empty SignOptions must add no override")
 	}
 }
