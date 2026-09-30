@@ -134,7 +134,8 @@ func NewOrchestrator(agents AgentReader, chats ChatStore, l llm.LLM, b ToolHandl
 // Turn runs one chat turn end-to-end. Caller owns the Sink + HTTP
 // connection. Stream-level errors are emitted as ErrorEvent and don't
 // abort the function; only unrecoverable errors (bundle missing, session
-// mismatch, persistence failures) return non-nil error.
+// mismatch, persistence failures, an empty turn — types.ErrEmptyTurn)
+// return non-nil error.
 //
 // The inner loop runs the LLM, executes any tool calls it emits, and
 // re-runs the LLM with the results appended — up to MaxToolRounds times.
@@ -232,8 +233,9 @@ func (o *Orchestrator) Turn(
 		Seq:       userSeq,
 	})
 	if errors.Is(err, types.ErrEmptyTurn) {
-		// A pending artifact was removed between the handler's validity
-		// check and the claim.
+		// Handlers normally reject empty turns with 400 before the stream
+		// opens; reaching here means the pending queue emptied between
+		// their check and the claim (e.g. a racing DELETE).
 		return failTurn("empty_turn", "claim_pending_artifacts", err)
 	}
 	if err != nil {

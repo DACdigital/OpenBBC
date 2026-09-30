@@ -30,6 +30,12 @@ func (f *fakeAgentRepo) GetWithAgent(ctx context.Context, id string) (*types.Age
 	return f.version, agent, nil
 }
 
+// fakeToolRow is one origin='tool_result' row recorded by AppendToolMessage.
+type fakeToolRow struct {
+	MessageID string
+	Ref       llm.ArtifactRefBlock
+}
+
 type fakeChatRepo struct {
 	mu       sync.Mutex
 	ensured  map[string]string
@@ -39,8 +45,9 @@ type fakeChatRepo struct {
 	// pending: sessionID → pending uploads, in claim order. AppendUserTurn
 	// consumes them (unless it returns ErrEmptyTurn).
 	pending map[string][]llm.ArtifactRefBlock
-	// toolRows: refs recorded by AppendToolMessage, in call order.
-	toolRows []llm.ArtifactRefBlock
+	// toolRows: refs recorded by AppendToolMessage, in call order, with
+	// the id of the tool message they were recorded against.
+	toolRows []fakeToolRow
 	// beforeClaim runs at the start of AppendUserTurn, outside the lock;
 	// tests use it to simulate a DELETE racing the claim.
 	beforeClaim func()
@@ -127,7 +134,9 @@ func (f *fakeChatRepo) AppendToolMessage(ctx context.Context, agentVersionID str
 		return errors.New("fake: append failed")
 	}
 	f.messages = append(f.messages, msg)
-	f.toolRows = append(f.toolRows, refs...)
+	for _, r := range refs {
+		f.toolRows = append(f.toolRows, fakeToolRow{MessageID: msg.ID, Ref: r})
+	}
 	return nil
 }
 

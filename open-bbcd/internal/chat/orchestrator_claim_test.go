@@ -35,6 +35,11 @@ func TestOrchestrator_UserTurnClaimsPendingAfterText(t *testing.T) {
 	if last.Role != llm.RoleUser || len(last.Content) != 3 {
 		t.Fatalf("LLM user message = %+v", last)
 	}
+	for i, ref := range []llm.ArtifactRefBlock{refA, refB} {
+		if got, want := last.Content[i+1], llm.TextSurrogate(ref); got != want {
+			t.Fatalf("LLM user block %d = %#v, want surrogate %#v", i+1, got, want)
+		}
+	}
 	for _, ev := range sink.events {
 		if _, ok := ev.(transport.ArtifactRefEvent); ok {
 			t.Fatal("ARTIFACT_REF emitted for a claimed user upload")
@@ -51,6 +56,10 @@ func TestOrchestrator_InputArtifactRefIsNotPersisted(t *testing.T) {
 	user := messagesWithRole(chats, types.ChatRoleUser)[0]
 	if got := blockTypes(t, user.Content); len(got) != 1 || got[0] != "text" {
 		t.Fatalf("persisted user types = %v (input ref must be dropped)", got)
+	}
+	last := flm.requests[0].Messages[len(flm.requests[0].Messages)-1]
+	if last.Role != llm.RoleUser || len(last.Content) != 1 {
+		t.Fatalf("LLM user message = %+v, want the text block only", last)
 	}
 }
 
@@ -92,6 +101,11 @@ func TestOrchestrator_EmptyTurnRace_RunErrorAndNothingPersisted(t *testing.T) {
 	if !sawEmpty {
 		t.Fatalf("no RUN_ERROR empty_turn in %#v", sink.events)
 	}
+	for _, ev := range sink.events {
+		if _, ok := ev.(transport.SessionStartEvent); ok {
+			t.Fatal("SessionStartEvent sent for an empty turn")
+		}
+	}
 	if n := len(messagesWithRole(chats, types.ChatRoleUser)); n != 0 {
 		t.Fatalf("persisted %d user messages", n)
 	}
@@ -106,10 +120,13 @@ func TestOrchestrator_ToolResultRefsRecordedWithToolMessage(t *testing.T) {
 	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}); err != nil {
 		t.Fatal(err)
 	}
-	if len(chats.toolRows) != 1 || chats.toolRows[0].URI == "" {
+	if len(chats.toolRows) != 1 || chats.toolRows[0].Ref.URI == "" {
 		t.Fatalf("toolRows = %+v, want one ref", chats.toolRows)
 	}
 	tool := messagesWithRole(chats, types.ChatRoleTool)[0]
+	if chats.toolRows[0].MessageID != tool.ID {
+		t.Fatalf("tool row message id = %q, want persisted tool message %q", chats.toolRows[0].MessageID, tool.ID)
+	}
 	if got := blockTypes(t, tool.Content); len(got) != 2 || got[0] != "tool_result" || got[1] != "artifact_ref" {
 		t.Fatalf("tool message types = %v", got)
 	}
