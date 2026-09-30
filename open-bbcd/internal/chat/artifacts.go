@@ -259,7 +259,7 @@ type normaliseResult struct {
 // media (ImageContent, EmbeddedResource with blob/text) into the artifact
 // store, one ref per item. Per item:
 //   - upload succeeds → the item is removed from the remainder and a ref returned;
-//   - base64 does not decode, or upload fails → the item is replaced by
+//   - base64 does not decode or is empty, or upload fails → the item is replaced by
 //     {"type":"text","text":"[artifact unavailable: <mime>, <size>]"} and a
 //     warn is logged (tool, mime and err only — never a filename).
 //
@@ -349,13 +349,14 @@ func normaliseToolResult(
 
 // inlineMedia extracts inline bytes from an MCP content item. isMedia is
 // false for text items, URI-only resources and unknown types (kept as-is).
-// decoded is false when the item is media but its base64 does not decode.
+// decoded is false when the item is media but its base64 does not decode
+// or decodes to zero bytes (empty data is never uploaded).
 func inlineMedia(item mcpContentItem) (declared string, data []byte, decoded, isMedia bool) {
 	switch item.Type {
 	case "image", "audio":
 		declared = orDefault(item.MIMEType, "application/octet-stream")
 		b, err := base64.StdEncoding.DecodeString(item.Data)
-		return declared, b, err == nil, true
+		return declared, b, err == nil && len(b) > 0, true
 	case "resource":
 		if item.Resource == nil {
 			return "", nil, false, false
@@ -365,7 +366,7 @@ func inlineMedia(item mcpContentItem) (declared string, data []byte, decoded, is
 		case r.Blob != "":
 			declared = orDefault(r.MIMEType, "application/octet-stream")
 			b, err := base64.StdEncoding.DecodeString(r.Blob)
-			return declared, b, err == nil, true
+			return declared, b, err == nil && len(b) > 0, true
 		case r.Text != "":
 			return orDefault(r.MIMEType, "text/plain"), []byte(r.Text), true, true
 		}
