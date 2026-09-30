@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -162,7 +163,7 @@ func (h *ArtifactHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// Buffer the upload while hashing it. Uploading a 10-30MB media file
 	// into memory is acceptable at the ARTIFACT_MAX_UPLOAD_MB scale spec
 	// commits to; larger caps warrant temp-file spilling in a follow-on.
-	buf, sum, size, err := hashAndBuffer(file, maxBytes)
+	data, sum, err := hashAndBuffer(file, maxBytes)
 	if err != nil {
 		if errors.Is(err, errMaxSizeExceeded) {
 			http.Error(w, "upload exceeds ARTIFACT_MAX_UPLOAD_MB", http.StatusRequestEntityTooLarge)
@@ -171,6 +172,9 @@ func (h *ArtifactHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
+	size := int64(len(data))
+	buf := bytes.NewReader(data)
+	mime = artifacts.ResolveMIME(mime, data)
 	uri := "sha256/" + hex.EncodeToString(sum)
 
 	// Dedup: if this exact content is already in the store, skip the
@@ -221,26 +225,18 @@ func respondUploadJSON(w http.ResponseWriter, resp ArtifactUploadResponse) {
 
 var errMaxSizeExceeded = errors.New("upload exceeds ARTIFACT_MAX_UPLOAD_MB")
 
-// hashAndBuffer streams the reader into an in-memory buffer while
-// computing sha256. Aborts with errMaxSizeExceeded if the stream would
-// grow past the cap. On success, returns a fresh reader positioned at
-// the start of the buffered bytes (for the Put call), the raw hash
-// digest bytes, and the total size.
-type readerWithLen struct {
-	*strings.Reader
-}
-
-func hashAndBuffer(r io.Reader, maxBytes int64) (buffered io.Reader, sum []byte, size int64, err error) {
+// hashAndBuffer reads r fully into memory while computing sha256. Aborts
+// with errMaxSizeExceeded if the stream would grow past maxBytes.
+func hashAndBuffer(r io.Reader, maxBytes int64) (data []byte, sum []byte, err error) {
 	h := sha256.New()
-	var b strings.Builder
+	var b bytes.Buffer
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := r.Read(buf)
 		if n > 0 {
-			if size+int64(n) > maxBytes {
-				return nil, nil, 0, errMaxSizeExceeded
+			if int64(b.Len()+n) > maxBytes {
+				return nil, nil, errMaxSizeExceeded
 			}
-			size += int64(n)
 			_, _ = h.Write(buf[:n])
 			_, _ = b.Write(buf[:n])
 		}
@@ -248,10 +244,10 @@ func hashAndBuffer(r io.Reader, maxBytes int64) (buffered io.Reader, sum []byte,
 			break
 		}
 		if readErr != nil {
-			return nil, nil, 0, readErr
+			return nil, nil, readErr
 		}
 	}
-	return strings.NewReader(b.String()), h.Sum(nil), size, nil
+	return b.Bytes(), h.Sum(nil), nil
 }
 
 // isMaxBytesError checks the error returned by ParseMultipartForm for

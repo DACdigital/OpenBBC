@@ -60,6 +60,7 @@ func (u artifactUploader) Upload(ctx context.Context, mime string, data []byte) 
 	if store == nil {
 		return llm.ArtifactRefBlock{}, errors.New("artifact uploader: registry has no default store")
 	}
+	mime = artifacts.ResolveMIME(mime, data)
 	sum := sha256.Sum256(data)
 	sumHex := hex.EncodeToString(sum[:])
 	uri := "sha256/" + sumHex
