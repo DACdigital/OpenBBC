@@ -11,10 +11,14 @@ import (
 
 type DeployedRepository struct {
 	db *sql.DB
+	sessionArtifacts
 }
 
 func NewDeployedRepository(db *sql.DB) *DeployedRepository {
-	return &DeployedRepository{db: db}
+	return &DeployedRepository{db: db, sessionArtifacts: sessionArtifacts{
+		db: db, table: "deployed_session_artifacts", lockKey: deployedSessionArtifactsLockKey,
+		recheckSession: recheckDeployedSession,
+	}}
 }
 
 func scanDeployedSession(s scanner) (*types.DeployedSession, error) {

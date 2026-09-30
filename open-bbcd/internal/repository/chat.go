@@ -11,10 +11,14 @@ import (
 
 type ChatRepository struct {
 	db *sql.DB
+	sessionArtifacts
 }
 
 func NewChatRepository(db *sql.DB) *ChatRepository {
-	return &ChatRepository{db: db}
+	return &ChatRepository{db: db, sessionArtifacts: sessionArtifacts{
+		db: db, table: "chat_session_artifacts", lockKey: chatSessionArtifactsLockKey,
+		recheckSession: recheckChatSession,
+	}}
 }
 
 // EnsureSession inserts a chat_sessions row with the given id if it
@@ -260,46 +264,6 @@ func (r *ChatRepository) GetSessionHeaderOverrides(ctx context.Context, sessionI
 		return nil, err
 	}
 	return out, nil
-}
-
-// SessionReferences returns true when at least one chat_messages row in
-// sessionID carries an artifact_ref content-block with matching
-// (storeID, uri). mime is returned so the retrieval handler can set
-// Content-Type without another round-trip.
-//
-// The scan uses Postgres's jsonb_path_exists / jsonb_path_query_first
-// operators to walk the content array once per row. At BO chat scale
-// (dozens to low hundreds of messages per session) the row count is
-// small enough that a session-scoped scan is acceptable index-free.
-// A materialised reverse-index table would be a follow-on
-// (chat-artifacts-index spec) if this becomes hot.
-func (r *ChatRepository) SessionReferences(ctx context.Context, sessionID, storeID, uri string) (found bool, mime string, err error) {
-	const q = `
-		SELECT COALESCE(
-			(SELECT block->>'mime'
-			 FROM chat_messages,
-			      jsonb_array_elements(content) AS block
-			 WHERE session_id = $1::uuid
-			   AND block->>'type' = 'artifact_ref'
-			   AND block->>'store_id' = $2
-			   AND block->>'uri' = $3
-			 LIMIT 1),
-			''
-		) AS mime,
-		EXISTS (
-			SELECT 1
-			FROM chat_messages,
-			     jsonb_array_elements(content) AS block
-			WHERE session_id = $1::uuid
-			  AND block->>'type' = 'artifact_ref'
-			  AND block->>'store_id' = $2
-			  AND block->>'uri' = $3
-		)
-	`
-	if err := r.db.QueryRowContext(ctx, q, sessionID, storeID, uri).Scan(&mime, &found); err != nil {
-		return false, "", err
-	}
-	return found, mime, nil
 }
 
 // SetSessionHeaderOverrides replaces the per-backend header override map for a

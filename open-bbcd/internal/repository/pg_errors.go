@@ -15,3 +15,13 @@ func isUniqueViolation(err error) bool {
 	}
 	return false
 }
+
+// isForeignKeyViolation reports whether err is a Postgres foreign_key_violation
+// (SQLSTATE 23503).
+func isForeignKeyViolation(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23503"
+	}
+	return false
+}

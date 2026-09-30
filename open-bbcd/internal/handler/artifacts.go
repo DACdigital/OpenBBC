@@ -36,6 +36,25 @@ type ArtifactRefResolver interface {
 	SessionReferences(ctx context.Context, sessionID, storeID, uri string) (found bool, mime string, err error)
 }
 
+// rowRefResolver adapts the session-artifact table lookup to the legacy
+// ArtifactRefResolver shape. Removed in Task 9.
+type rowRefResolver struct {
+	rows interface {
+		LookupSessionArtifact(ctx context.Context, sessionID, storeID, uri string) (*types.SessionArtifact, error)
+	}
+}
+
+func (r rowRefResolver) SessionReferences(ctx context.Context, sessionID, storeID, uri string) (bool, string, error) {
+	a, err := r.rows.LookupSessionArtifact(ctx, sessionID, storeID, uri)
+	if errors.Is(err, types.ErrNotFound) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	return true, a.MIME, nil
+}
+
 // ArtifactHandler wires the two chat-artifacts routes:
 //   - POST /agent_versions/{version_id}/chat/{session_id}/artifacts
 //   - GET  /agent_versions/{version_id}/chat/{session_id}/artifacts/{path}

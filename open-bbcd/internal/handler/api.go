@@ -119,7 +119,7 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 				fatal("probe artifact store", probeErr)
 			}
 			cancel()
-			artifactHandler = NewArtifactHandler(chatRepo, chatRepo, reg, cfg.Artifacts.MaxUploadMB, logger)
+			artifactHandler = NewArtifactHandler(chatRepo, rowRefResolver{rows: chatRepo}, reg, cfg.Artifacts.MaxUploadMB, logger)
 			logger.Info("artifacts: registry hydrated",
 				slog.Int("stores", len(reg.IDs())),
 				slog.String("default", reg.DefaultID()),
