@@ -37,6 +37,20 @@ type ChatSessionStore interface {
 	ListSessions(ctx context.Context, versionID string, limit, offset int) ([]*types.ChatSession, int, error)
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error)
 	UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error
+	// HasPendingArtifacts is true when the session has >=1 pending artifact (empty-turn rule).
+	HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error)
+}
+
+// PendingArtifactLister lists a session's pending artifacts for the BO chat
+// view's chips. Set only when the artifact registry is enabled.
+type PendingArtifactLister interface {
+	ListPendingArtifacts(ctx context.Context, sessionID string) ([]*types.SessionArtifact, error)
+}
+
+// pendingChipView is one pending-artifact chip in the chat view.
+type pendingChipView struct {
+	ID    string
+	Label string
 }
 
 // HeaderOverridesStore is the narrow interface for reading and writing
@@ -81,6 +95,13 @@ type ChatHandler struct {
 	sessionsTmpl *template.Template
 	viewTmpl     *template.Template
 	headersTmpl  *template.Template
+	pending      PendingArtifactLister
+}
+
+// WithPendingArtifacts enables the pending-artifact chips in the chat view.
+func (h *ChatHandler) WithPendingArtifacts(l PendingArtifactLister) *ChatHandler {
+	h.pending = l
+	return h
 }
 
 func NewChatHandler(
@@ -251,6 +272,10 @@ type chatViewPageData struct {
 	HasFeedback bool
 	// Assignment is the session's current dataset membership, or nil if unassigned.
 	Assignment *repository.AssignmentView
+
+	// ArtifactsEnabled / PendingArtifacts drive the pending-artifact chips.
+	ArtifactsEnabled bool
+	PendingArtifacts []pendingChipView
 }
 
 // messageView is a UI-ready projection of a persisted ChatMessage. The raw
@@ -421,6 +446,22 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var chips []pendingChipView
+	if h.pending != nil {
+		// Best-effort, like feedback: the chat page renders without chips on error.
+		if rows, err := h.pending.ListPendingArtifacts(r.Context(), sessionID); err == nil {
+			for _, a := range rows {
+				label := a.Filename
+				if label == "" {
+					label = "file (" + a.MIME + ")"
+				}
+				chips = append(chips, pendingChipView{ID: a.ID, Label: label})
+			}
+		} else {
+			h.logger.Warn("chat view: list pending artifacts failed", slog.String("session_id", sessionID), slog.Any("err", err))
+		}
+	}
+
 	data := chatViewPageData{
 		Active:       "agents",
 		VersionID:    versionID,
@@ -435,6 +476,8 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		HasFeedback:  hasFeedback,
 		Assignment:   assignment,
 	}
+	data.ArtifactsEnabled = h.pending != nil
+	data.PendingArtifacts = chips
 	// Count unmapped endpoints so the view can show a warning banner.
 	// Best-effort: errors here don't block the chat page from rendering.
 	// Endpoints live on the agent (post-017); wiring is also agent-keyed.
@@ -554,6 +597,21 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	for _, b := range req.Input {
 		if b.Type == "text" && b.Text != "" {
 			input = append(input, llm.TextBlock{Text: b.Text})
+		}
+	}
+
+	// Empty-turn rule (spec § REST — turn): no non-empty text and nothing
+	// pending -> 400 before the stream opens. A DELETE racing this check is
+	// caught by AppendUserTurn (in-band RUN_ERROR empty_turn).
+	if len(input) == 0 {
+		has, err := h.chats.HasPendingArtifacts(r.Context(), sessionID)
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		if !has {
+			http.Error(w, types.ErrEmptyTurn.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 

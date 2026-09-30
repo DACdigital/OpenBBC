@@ -224,6 +224,9 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	if err != nil {
 		fatal("init chat handler", err)
 	}
+	if artifactHandler != nil {
+		chatHandler.WithPendingArtifacts(chatRepo)
+	}
 
 	deployedChatStore := chat.NewDeployedChatStore(deployedRepo)
 	deployedOrchestrator := chat.NewOrchestrator(versionRepo, deployedChatStore, llmClient, builder, logger)

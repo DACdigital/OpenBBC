@@ -103,6 +103,22 @@
   {{end}}
 </div>
 
+{{if .ArtifactsEnabled}}
+<div id="pending-artifacts" class="pending-artifacts" aria-label="Files attached to your next message">
+  {{range .PendingArtifacts}}
+  <span class="artifact-chip" id="pending-artifact-{{.ID}}">
+    <span class="artifact-chip-label">{{.Label}}</span>
+    {{if not $.Locked}}
+    <button type="button" class="artifact-chip-remove" aria-label="Remove {{.Label}}"
+            hx-delete="/agent_versions/{{$.VersionID}}/chat/{{$.SessionID}}/pending-artifacts/{{.ID}}"
+            hx-swap="none"
+            hx-on::after-request="if (event.detail.successful) this.closest('.artifact-chip').remove()">×</button>
+    {{end}}
+  </span>
+  {{end}}
+</div>
+{{end}}
+
 <form id="chat-form" class="chat-input" onsubmit="return false;">
   <textarea id="chat-input" rows="2"{{if or (not .HasBundle) .Locked}} disabled{{end}} placeholder="{{if .Locked}}Session is locked (part of a closed dataset version).{{else}}Type a message…  (Enter to send, Shift+Enter for newline){{end}}"></textarea>
   <button type="submit" id="chat-send" class="btn-primary"{{if or (not .HasBundle) .Locked}} disabled{{if .Locked}} title="Session is locked"{{else}} title="Agent has no bundle"{{end}}{{end}}>Send</button>

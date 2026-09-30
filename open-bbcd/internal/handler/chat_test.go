@@ -16,6 +16,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/jsonl"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/DACdigital/OpenBBC/open-bbcd/web"
 )
 
 // stubAgentRepo + stubChatStore + stubTurnRunner: minimal fakes for the
@@ -37,6 +38,8 @@ type stubChatStore struct {
 	sessions []*types.ChatSession
 	messages []*types.ChatMessage
 	err      error
+	// hasPending is returned by HasPendingArtifacts (empty-turn rule).
+	hasPending bool
 }
 
 func (s *stubChatStore) EnsureSession(ctx context.Context, sessionID, versionID string) error {
@@ -54,6 +57,10 @@ func (s *stubChatStore) LoadMessages(ctx context.Context, sessionID string) ([]*
 }
 func (s *stubChatStore) UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error {
 	return s.err
+}
+
+func (s *stubChatStore) HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error) {
+	return s.hasPending, nil
 }
 
 type stubTurnRunner struct {
@@ -86,19 +93,24 @@ func emptyTemplateFS() fs.FS {
 
 func newTestChatHandler(t *testing.T, runner *stubTurnRunner) *ChatHandler {
 	t.Helper()
+	return newTestChatHandlerWithStore(t, &stubChatStore{}, runner, emptyTemplateFS())
+}
+
+func newTestChatHandlerWithStore(t *testing.T, store *stubChatStore, runner *stubTurnRunner, tpl fs.FS) *ChatHandler {
+	t.Helper()
 	h, err := NewChatHandler(
 		&stubAgentRepo{
 			version: &types.AgentVersion{ID: "v", AgentID: "a", Prompts: []byte(`{}`)},
 			agent:   &types.Agent{ID: "a", Name: "test", Architecture: []byte(`{}`)},
 		},
-		&stubChatStore{},
+		store,
 		nil, // headerOvr — not exercised in basic turn tests
 		nil, // backends — not exercised in basic turn tests
 		runner,
 		jsonl.NewFactory(),
 		nil, // feedbackRepo — not exercised in basic turn tests
 		nil, // datasetRepo — not exercised in basic turn tests
-		emptyTemplateFS(),
+		tpl,
 		slog.Default(),
 	)
 	if err != nil {
@@ -238,5 +250,65 @@ func TestChatHandler_Turn_IgnoresArtifactRefInputBlocks(t *testing.T) {
 	}
 	if tb, ok := runner.capturedInput[0].(llm.TextBlock); !ok || tb.Text != "look at this" {
 		t.Fatalf("input block: got %+v", runner.capturedInput[0])
+	}
+}
+
+func TestChatTurn_EmptyTurnWithoutPending_400BeforeSSE(t *testing.T) {
+	runner := &stubTurnRunner{}
+	h := newTestChatHandlerWithStore(t, &stubChatStore{}, runner, emptyTemplateFS())
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader(`{"input":[{"type":"text","text":""}]}`))
+	r.SetPathValue("version_id", "v")
+	r.SetPathValue("session_id", "s")
+	w := httptest.NewRecorder()
+	h.Turn(w, r)
+	if w.Code != http.StatusBadRequest || strings.TrimSpace(w.Body.String()) != "empty turn: no text and no pending artifacts" {
+		t.Fatalf("status %d body %q", w.Code, w.Body.String())
+	}
+	if runner.capturedSessionID != "" {
+		t.Fatal("orchestrator ran for an empty turn")
+	}
+}
+
+func TestChatTurn_EmptyTextWithPending_Accepted(t *testing.T) {
+	runner := &stubTurnRunner{}
+	h := newTestChatHandlerWithStore(t, &stubChatStore{hasPending: true}, runner, emptyTemplateFS())
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader(`{"input":[]}`))
+	r.SetPathValue("version_id", "v")
+	r.SetPathValue("session_id", "s")
+	w := httptest.NewRecorder()
+	h.Turn(w, r)
+	if w.Code != http.StatusOK || runner.capturedSessionID != "s" {
+		t.Fatalf("status %d captured %q", w.Code, runner.capturedSessionID)
+	}
+}
+
+type stubPendingLister struct{ rows []*types.SessionArtifact }
+
+func (s stubPendingLister) ListPendingArtifacts(ctx context.Context, sessionID string) ([]*types.SessionArtifact, error) {
+	return s.rows, nil
+}
+
+func TestChatView_RendersPendingChipsWithRemoveControl(t *testing.T) {
+	// Real embedded templates: the chips live in web/templates/chat/view.html.
+	h := newTestChatHandlerWithStore(t, &stubChatStore{}, &stubTurnRunner{}, web.Assets)
+	h.WithPendingArtifacts(stubPendingLister{rows: []*types.SessionArtifact{
+		{ID: "11111111-1111-1111-1111-111111111111", Filename: "Q3 report.pdf", MIME: "application/pdf"},
+	}})
+	r := httptest.NewRequest("GET", "/agent_versions/v/chat/s", nil)
+	r.SetPathValue("version_id", "v")
+	r.SetPathValue("session_id", "s")
+	w := httptest.NewRecorder()
+	h.ChatView(w, r)
+	body := w.Body.String()
+	t.Logf("rendered chip block: %s", body[strings.Index(body, `id="pending-artifacts"`):][:700])
+	for _, want := range []string{
+		`id="pending-artifacts"`,
+		`Q3 report.pdf`,
+		`hx-delete="/agent_versions/v/chat/s/pending-artifacts/11111111-1111-1111-1111-111111111111"`,
+		`hx-on::after-request="if (event.detail.successful) this.closest('.artifact-chip').remove()"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("chat view missing %q", want)
+		}
 	}
 }
