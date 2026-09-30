@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/jsonl"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -24,6 +26,12 @@ type stubDeployedAgentReader struct {
 func (s *stubDeployedAgentReader) CurrentDeployedID(ctx context.Context, agentID string) (string, error) {
 	return s.deployedID, s.err
 }
+
+// Real UUID fixtures: end-user deployed routes reject non-UUID path ids.
+const (
+	testAgentID   = "11111111-1111-4111-8111-111111111111"
+	testSessionID = "22222222-2222-4222-8222-222222222222"
+)
 
 // stubDeployedStore is an in-memory DeployedStore.
 type stubDeployedStore struct {
@@ -43,7 +51,7 @@ func (s *stubDeployedStore) CreateSession(ctx context.Context, agentID, userID, 
 	if s.createErr != nil {
 		return nil, s.createErr
 	}
-	id := "sess-" + userID + "-" + agentID + "-" + title
+	id := uuid.NewString()
 	sess := &types.DeployedSession{ID: id, AgentID: agentID, UserID: userID, Title: title, CreatedAt: time.Now()}
 	s.sessions[id] = sess
 	return sess, nil
@@ -111,7 +119,7 @@ func TestDeployedHandler_CreateSession_RequiresUserID(t *testing.T) {
 		jsonl.NewFactory(),
 	)
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/chain-a/sessions", bytes.NewReader([]byte(`{}`))))
+	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/11111111-1111-4111-8111-111111111111/sessions", bytes.NewReader([]byte(`{}`))))
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("got %d body=%s", rr.Code, rr.Body.String())
 	}
@@ -126,7 +134,7 @@ func TestDeployedHandler_NotDeployed_404(t *testing.T) {
 	)
 	body, _ := json.Marshal(map[string]string{"user_id": "u"})
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/chain-x/sessions", bytes.NewReader(body)))
+	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/33333333-3333-4333-8333-333333333333/sessions", bytes.NewReader(body)))
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("got %d", rr.Code)
 	}
@@ -139,14 +147,14 @@ func TestDeployedHandler_ListSessions_ScopedByUser(t *testing.T) {
 	for i, u := range []string{"user-A", "user-A", "user-B"} {
 		body, _ := json.Marshal(map[string]string{"user_id": u, "title": u + "-t" + string(rune('1'+i))})
 		rr := httptest.NewRecorder()
-		mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/chain-a/sessions", bytes.NewReader(body)))
+		mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/11111111-1111-4111-8111-111111111111/sessions", bytes.NewReader(body)))
 		if rr.Code != http.StatusCreated {
 			t.Fatalf("create: %d body=%s", rr.Code, rr.Body.String())
 		}
 	}
 
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("GET", "/deployed/chain-a/sessions?user_id=user-A", nil))
+	mux.ServeHTTP(rr, httptest.NewRequest("GET", "/deployed/11111111-1111-4111-8111-111111111111/sessions?user_id=user-A", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("list: %d", rr.Code)
 	}
@@ -163,13 +171,13 @@ func TestDeployedHandler_GetSession_WrongUser_404(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"user_id": "user-A"})
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/chain-a/sessions", bytes.NewReader(body)))
+	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/11111111-1111-4111-8111-111111111111/sessions", bytes.NewReader(body)))
 	var sess types.DeployedSession
 	_ = json.NewDecoder(rr.Body).Decode(&sess)
 
 	rr2 := httptest.NewRecorder()
 	mux.ServeHTTP(rr2, httptest.NewRequest("GET",
-		"/deployed/chain-a/sessions/"+sess.ID+"?user_id=user-B", nil))
+		"/deployed/11111111-1111-4111-8111-111111111111/sessions/"+sess.ID+"?user_id=user-B", nil))
 	if rr2.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404", rr2.Code)
 	}
@@ -182,7 +190,7 @@ func TestDeployedHandler_Turn_HappyPath(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"user_id": "user-A"})
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/chain-a/sessions", bytes.NewReader(body)))
+	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/11111111-1111-4111-8111-111111111111/sessions", bytes.NewReader(body)))
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("create: %d", rr.Code)
 	}
@@ -195,7 +203,7 @@ func TestDeployedHandler_Turn_HappyPath(t *testing.T) {
 	})
 	rr2 := httptest.NewRecorder()
 	mux.ServeHTTP(rr2, httptest.NewRequest("POST",
-		"/deployed/chain-a/sessions/"+sess.ID+"/turn", bytes.NewReader(body2)))
+		"/deployed/11111111-1111-4111-8111-111111111111/sessions/"+sess.ID+"/turn", bytes.NewReader(body2)))
 
 	if rr2.Code != http.StatusOK {
 		t.Fatalf("got %d body=%s", rr2.Code, rr2.Body.String())
@@ -214,7 +222,7 @@ func TestDeployedHandler_Turn_WrongUser_404(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"user_id": "user-A"})
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/chain-a/sessions", bytes.NewReader(body)))
+	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/11111111-1111-4111-8111-111111111111/sessions", bytes.NewReader(body)))
 	var sess types.DeployedSession
 	_ = json.NewDecoder(rr.Body).Decode(&sess)
 
@@ -224,7 +232,7 @@ func TestDeployedHandler_Turn_WrongUser_404(t *testing.T) {
 	})
 	rr2 := httptest.NewRecorder()
 	mux.ServeHTTP(rr2, httptest.NewRequest("POST",
-		"/deployed/chain-a/sessions/"+sess.ID+"/turn", bytes.NewReader(body2)))
+		"/deployed/11111111-1111-4111-8111-111111111111/sessions/"+sess.ID+"/turn", bytes.NewReader(body2)))
 	if rr2.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404", rr2.Code)
 	}
@@ -233,12 +241,12 @@ func TestDeployedHandler_Turn_WrongUser_404(t *testing.T) {
 func TestDeployedHandler_Turn_NoDeployedVersion_404(t *testing.T) {
 	store := newStubDeployedStore()
 	// Pre-seed a session as if a deploy used to exist (so the session is real).
-	store.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "chain-a", UserID: "u"}
+	store.sessions["22222222-2222-4222-8222-222222222222"] = &types.DeployedSession{ID: "22222222-2222-4222-8222-222222222222", AgentID: "11111111-1111-4111-8111-111111111111", UserID: "u"}
 	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: ""}, store, &stubTurnRunner{}, jsonl.NewFactory())
 
 	body, _ := json.Marshal(map[string]any{"user_id": "u", "input": []map[string]string{{"type": "text", "text": "x"}}})
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/chain-a/sessions/s1/turn", bytes.NewReader(body)))
+	mux.ServeHTTP(rr, httptest.NewRequest("POST", "/deployed/11111111-1111-4111-8111-111111111111/sessions/22222222-2222-4222-8222-222222222222/turn", bytes.NewReader(body)))
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("got %d", rr.Code)
 	}
@@ -246,10 +254,10 @@ func TestDeployedHandler_Turn_NoDeployedVersion_404(t *testing.T) {
 
 func TestDeployedTurn_EmptyTurn_400(t *testing.T) {
 	store := newStubDeployedStore()
-	store.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "a1", UserID: "u1"}
+	store.sessions["22222222-2222-4222-8222-222222222222"] = &types.DeployedSession{ID: "22222222-2222-4222-8222-222222222222", AgentID: "11111111-1111-4111-8111-111111111111", UserID: "u1"}
 	runner := &stubTurnRunner{}
 	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: "v1"}, store, runner, jsonl.NewFactory())
-	req := httptest.NewRequest("POST", "/deployed/a1/sessions/s1/turn", strings.NewReader(`{"user_id":"u1","input":[]}`))
+	req := httptest.NewRequest("POST", "/deployed/11111111-1111-4111-8111-111111111111/sessions/22222222-2222-4222-8222-222222222222/turn", strings.NewReader(`{"user_id":"u1","input":[]}`))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != "empty turn: no text and no pending artifacts" {
@@ -262,14 +270,14 @@ func TestDeployedTurn_EmptyTurn_400(t *testing.T) {
 
 func TestDeployedTurn_ArtifactOnly_Accepted(t *testing.T) {
 	store := newStubDeployedStore()
-	store.sessions["s1"] = &types.DeployedSession{ID: "s1", AgentID: "a1", UserID: "u1"}
+	store.sessions["22222222-2222-4222-8222-222222222222"] = &types.DeployedSession{ID: "22222222-2222-4222-8222-222222222222", AgentID: "11111111-1111-4111-8111-111111111111", UserID: "u1"}
 	store.hasPending = true
 	runner := &stubTurnRunner{}
 	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: "v1"}, store, runner, jsonl.NewFactory())
-	req := httptest.NewRequest("POST", "/deployed/a1/sessions/s1/turn", strings.NewReader(`{"user_id":"u1","input":[{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/x"}]}`))
+	req := httptest.NewRequest("POST", "/deployed/11111111-1111-4111-8111-111111111111/sessions/22222222-2222-4222-8222-222222222222/turn", strings.NewReader(`{"user_id":"u1","input":[{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/x"}]}`))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || runner.capturedSessionID != "s1" || len(runner.capturedInput) != 0 {
+	if rec.Code != http.StatusOK || runner.capturedSessionID != "22222222-2222-4222-8222-222222222222" || len(runner.capturedInput) != 0 {
 		t.Fatalf("status %d input %+v", rec.Code, runner.capturedInput)
 	}
 }
@@ -290,4 +298,24 @@ func TestDeployedArtifactRoutes_NoPatternConflict(t *testing.T) {
 	sessions := newStubDeployedStore()
 	ah := NewDeployedArtifactHandler(&stubDeployedAgentReader{deployedID: "v1"}, sessions, d.rows, buildRegistry(t, d.store), 1, 10, nil)
 	ah.Register(mux) // panics on conflict
+}
+
+func TestDeployedTurn_MalformedSessionID_404(t *testing.T) {
+	store := newStubDeployedStore()
+	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: "v1"}, store, &stubTurnRunner{}, jsonl.NewFactory())
+	for _, path := range []string{
+		"/deployed/" + testAgentID + "/sessions/not-a-uuid/turn",
+		"/deployed/not-a-uuid/sessions/" + testSessionID + "/turn",
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("POST", path, strings.NewReader(`{"user_id":"u1","input":[{"type":"text","text":"x"}]}`)))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: status %d", path, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/deployed/"+testAgentID+"/sessions/not-a-uuid?user_id=u1", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GetSession status %d", rec.Code)
+	}
 }

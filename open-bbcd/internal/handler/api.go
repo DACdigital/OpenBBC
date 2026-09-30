@@ -110,6 +110,7 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	// misconfigured something and would silently ship without artifacts.
 	var artifactHandler *ArtifactHandler
 	var deployedArtifactHandler *DeployedArtifactHandler
+	var artifactRegistry *artifacts.Registry
 	{
 		reg, regErr := artifacts.Load(cfg.Artifacts)
 		switch {
@@ -120,6 +121,7 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 				fatal("probe artifact store", probeErr)
 			}
 			cancel()
+			artifactRegistry = reg
 			artifactHandler = NewArtifactHandler(chatRepo, chatRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
 			deployedArtifactHandler = NewDeployedArtifactHandler(versionRepo, deployedRepo, deployedRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
 			logger.Info("artifacts: registry hydrated",
@@ -177,10 +179,10 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	// Wire artifact-support hooks when the registry is enabled — resolver
 	// for user-uploaded refs rendered before each LLM call, uploader for
 	// MCP tool result normalisation.
-	if artifactHandler != nil {
+	if artifactRegistry != nil {
 		orchestrator.
-			WithArtifacts(artifactResolverFrom(artifactHandler.svc.registry)).
-			WithArtifactUploader(artifactUploader{registry: artifactHandler.svc.registry})
+			WithArtifacts(artifactResolverFrom(artifactRegistry)).
+			WithArtifactUploader(artifactUploader{registry: artifactRegistry})
 	}
 	orchestrator.Model = cfg.Anthropic.DefaultModel
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
@@ -237,10 +239,10 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 	// Deployed parity with BO: claimed refs render natively and MCP tool
 	// results are normalised into tool_result artifacts.
-	if artifactHandler != nil {
+	if artifactRegistry != nil {
 		deployedOrchestrator.
-			WithArtifacts(artifactResolverFrom(artifactHandler.svc.registry)).
-			WithArtifactUploader(artifactUploader{registry: artifactHandler.svc.registry})
+			WithArtifacts(artifactResolverFrom(artifactRegistry)).
+			WithArtifactUploader(artifactUploader{registry: artifactRegistry})
 	}
 
 	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger)

@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -51,6 +53,12 @@ func (h *DeployedArtifactHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}/pending-artifacts/{id}", h.guard(h.svc.deletePending))
 }
 
+// validUUID reports whether id parses as a UUID.
+func validUUID(id string) bool {
+	_, err := uuid.Parse(id)
+	return err == nil
+}
+
 // guard runs the deployed turn preamble — agent deployed, user_id present,
 // (session_id, user_id) exists, session belongs to agent_id — then calls
 // next with the session id. Every scope failure is 404 (no existence leak);
@@ -59,6 +67,12 @@ func (h *DeployedArtifactHandler) guard(next func(http.ResponseWriter, *http.Req
 	return func(w http.ResponseWriter, r *http.Request) {
 		agentID := r.PathValue("agent_id")
 		sessionID := r.PathValue("session_id")
+		// Malformed ids would reach Postgres as invalid uuid input (500 leaking
+		// driver text); treat them as not found.
+		if !validUUID(agentID) || !validUUID(sessionID) {
+			Error(w, types.ErrNotFound)
+			return
+		}
 		v, err := h.agents.CurrentDeployedID(r.Context(), agentID)
 		if err != nil {
 			Error(w, err)
