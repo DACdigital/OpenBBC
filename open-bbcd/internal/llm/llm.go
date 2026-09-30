@@ -118,6 +118,12 @@ type MultimodalRenderer interface {
 	// Return any other error to abort the completion setup entirely.
 	RenderArtifactAsBlock(ctx context.Context, ref ArtifactRefBlock, fetch ArtifactFetcher) (Block, error)
 
+	// SupportsNative reports whether RenderArtifactAsBlock would try to
+	// render ref natively (MIME supported and within per-block limits).
+	// It must not fetch: the caller uses it to decide, before any I/O,
+	// whether a ref is charged against the RenderBudget.
+	SupportsNative(ref ArtifactRefBlock) bool
+
 	// NativeRenderBudget returns the provider's per-request media caps,
 	// pinned below its hard request limits.
 	NativeRenderBudget() RenderBudget

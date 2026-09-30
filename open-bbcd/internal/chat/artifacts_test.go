@@ -25,7 +25,8 @@ func (mmLLM) Name() string { return "mm-fake" }
 func (mmLLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event, error] {
 	return func(yield func(llm.Event, error) bool) {}
 }
-func (mmLLM) NativeRenderBudget() llm.RenderBudget { return llm.RenderBudget{} }
+func (mmLLM) NativeRenderBudget() llm.RenderBudget         { return llm.RenderBudget{} }
+func (mmLLM) SupportsNative(ref llm.ArtifactRefBlock) bool { return ref.MIME == "image/png" }
 func (mmLLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBlock, fetch llm.ArtifactFetcher) (llm.Block, error) {
 	if ref.MIME != "image/png" {
 		return nil, llm.ErrUnsupported

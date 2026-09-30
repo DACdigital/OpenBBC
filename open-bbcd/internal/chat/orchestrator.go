@@ -226,7 +226,9 @@ func (o *Orchestrator) Turn(
 	// assistant message, optionally executes tools + persists the tool message,
 	// then loops. Exits when stop_reason != "tool_use" or MaxToolRounds is hit.
 	//
-	// Before every LLM call a fresh rendered copy of req.Messages is built (see renderArtifactsForLLM); req.Messages itself keeps artifact_ref blocks.
+	// Before every LLM call a fresh rendered copy of req.Messages is
+	// built (see renderArtifactsForLLM); req.Messages itself keeps
+	// artifact_ref blocks.
 	//
 	// Per-turn cache of rendered artifacts: each blob is fetched at most
 	// once per turn however many tool rounds re-send it.

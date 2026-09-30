@@ -166,6 +166,9 @@ type mmFakeLLM struct {
 }
 
 func (m *mmFakeLLM) NativeRenderBudget() llm.RenderBudget { return m.budget }
+func (m *mmFakeLLM) SupportsNative(ref llm.ArtifactRefBlock) bool {
+	return budgetLLM{}.SupportsNative(ref)
+}
 func (m *mmFakeLLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBlock, fetch llm.ArtifactFetcher) (llm.Block, error) {
 	return budgetLLM{}.RenderArtifactAsBlock(ctx, ref, fetch)
 }

@@ -236,7 +236,7 @@ func TestOrchestrator_BudgetHoldsAcrossToolRounds(t *testing.T) {
 		fakeLLM: &fakeLLM{script: [][]llm.Event{toolUseRound("t1"), toolUseRound("t2"), toolUseRound("t3"), endRound()}},
 		budget:  llm.RenderBudget{MaxBlocks: 2},
 	}
-	o, _, _ := newArtifactOrchestrator(t, flm, []tools.Result{
+	o, chats, _ := newArtifactOrchestrator(t, flm, []tools.Result{
 		{ToolUseID: "t1", Output: imageToolOutput()},
 		{ToolUseID: "t2", Output: imageToolOutput()},
 		{ToolUseID: "t3", Output: imageToolOutput()},
@@ -252,5 +252,33 @@ func TestOrchestrator_BudgetHoldsAcrossToolRounds(t *testing.T) {
 	}
 	if refs != 0 {
 		t.Fatalf("rendered request still carries %d raw refs", refs)
+	}
+
+	// The two native blocks must be the newest: one in each of the last
+	// two tool messages, none in the first.
+	var toolMsgs []llm.Message
+	for _, m := range final.Messages {
+		if m.Role == llm.RoleTool {
+			toolMsgs = append(toolMsgs, m)
+		}
+	}
+	if len(toolMsgs) != 3 {
+		t.Fatalf("final request has %d tool messages, want 3", len(toolMsgs))
+	}
+	for i, want := range []int{0, 1, 1} {
+		if got, _ := countInline(toolMsgs[i : i+1]); got != want {
+			t.Fatalf("tool message %d carries %d native blocks, want %d", i, got, want)
+		}
+	}
+
+	// Nothing rendered may reach persistence: every persisted block is one
+	// of the ref-form types.
+	allowed := map[string]bool{"text": true, "tool_use": true, "tool_result": true, "artifact_ref": true}
+	for _, m := range chats.messages {
+		for _, bt := range blockTypes(t, m.Content) {
+			if !allowed[bt] {
+				t.Fatalf("persisted %s message has unexpected block type %q", m.Role, bt)
+			}
+		}
 	}
 }

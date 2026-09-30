@@ -18,7 +18,9 @@ type renderKey struct{ storeID, uri, mime string }
 // renderCache holds provider-native blocks rendered earlier in the same
 // turn, so each blob is fetched at most once per turn however many tool
 // rounds re-send it. It never holds refs, only rendered output, and is
-// discarded when the turn ends.
+// discarded when the turn ends. After every render pass it is pruned to
+// the keys placed natively in that pass: history is append-only, so a ref
+// that fell out of the native window never re-enters it.
 type renderCache map[renderKey]llm.Block
 
 func newRenderCache() renderCache { return renderCache{} }
@@ -32,10 +34,22 @@ func base64Len(n int64) int64 { return ((n + 2) / 3) * 4 }
 // render a new copy for every LLM call.
 //
 // Refs are visited in reverse (message, block) order — newest message
-// first, last block first — and each ref rendered natively is charged
-// against the provider's RenderBudget. Once the next native ref would
-// exceed MaxBytes or MaxBlocks, it and every older ref become surrogates.
-// Refs downgraded to a surrogate for any other reason are not charged.
+// first, last block first — against the provider's RenderBudget:
+//
+//   - once the budget is exhausted, every remaining (older) ref is a
+//     surrogate and is never fetched;
+//   - a ref whose store does not resolve, or that the provider would not
+//     render natively (SupportsNative), is a surrogate, is not charged and
+//     is not fetched;
+//   - a ref whose declared size (base64-expanded) or block count would
+//     exceed a cap exhausts the budget before any fetch;
+//   - otherwise the ref is rendered (from the per-turn cache or by
+//     fetching). ErrUnsupported downgrades it to an uncharged surrogate.
+//     A rendered InlineMediaBlock is charged at the larger of its declared
+//     and actual size; if that actual cost exceeds MaxBytes the budget is
+//     exhausted and the ref becomes a surrogate.
+//
+// On return the cache holds only the keys placed natively in this pass.
 func renderArtifactsForLLM(
 	ctx context.Context,
 	in []llm.Message,
@@ -62,9 +76,11 @@ func renderArtifactsForLLM(
 	}
 
 	budget := renderer.NativeRenderBudget()
+	overBytes := func(used, cost int64) bool { return budget.MaxBytes > 0 && used+cost > budget.MaxBytes }
 	var usedBytes int64
 	usedBlocks := 0
 	exhausted := false
+	placed := map[renderKey]bool{}
 
 	for i := len(out) - 1; i >= 0; i-- {
 		for j := len(out[i].Content) - 1; j >= 0; j-- {
@@ -72,29 +88,46 @@ func renderArtifactsForLLM(
 			if !ok {
 				continue
 			}
-			surrogate := llm.TextSurrogate(ref)
+			out[i].Content[j] = llm.TextSurrogate(ref)
 			if exhausted {
-				out[i].Content[j] = surrogate
 				continue
 			}
-			rendered, err := renderOne(ctx, renderer, resolver, cache, ref, logger)
+			fetcher := resolver(ref.StoreID)
+			if fetcher == nil || !renderer.SupportsNative(ref) {
+				continue
+			}
+			if (budget.MaxBlocks > 0 && usedBlocks+1 > budget.MaxBlocks) ||
+				overBytes(usedBytes, base64Len(ref.SizeBytes)) {
+				exhausted = true
+				continue
+			}
+			key := renderKey{ref.StoreID, ref.URI, ref.MIME}
+			rendered, err := renderOne(ctx, renderer, fetcher, cache, key, ref, logger)
 			if err != nil {
 				return nil, err
 			}
 			if rendered == nil {
-				out[i].Content[j] = surrogate
 				continue
 			}
-			cost := base64Len(ref.SizeBytes)
-			if (budget.MaxBlocks > 0 && usedBlocks+1 > budget.MaxBlocks) ||
-				(budget.MaxBytes > 0 && usedBytes+cost > budget.MaxBytes) {
+			size := ref.SizeBytes
+			if inline, ok := rendered.(llm.InlineMediaBlock); ok {
+				size = max(size, int64(len(inline.Data)))
+			}
+			cost := base64Len(size)
+			if overBytes(usedBytes, cost) {
 				exhausted = true
-				out[i].Content[j] = surrogate
 				continue
 			}
 			usedBlocks++
 			usedBytes += cost
+			placed[key] = true
 			out[i].Content[j] = rendered
+		}
+	}
+
+	for k := range cache {
+		if !placed[k] {
+			delete(cache, k)
 		}
 	}
 	return out, nil
@@ -105,18 +138,14 @@ func renderArtifactsForLLM(
 func renderOne(
 	ctx context.Context,
 	renderer llm.MultimodalRenderer,
-	resolver ArtifactFetcherResolver,
+	fetcher llm.ArtifactFetcher,
 	cache renderCache,
+	key renderKey,
 	ref llm.ArtifactRefBlock,
-	logger *slog.Logger,
+	logger *slog.Logger, // logger is used by the Stat fallback (Task 8).
 ) (llm.Block, error) {
-	key := renderKey{ref.StoreID, ref.URI, ref.MIME}
 	if b, ok := cache[key]; ok {
 		return b, nil
-	}
-	fetcher := resolver(ref.StoreID)
-	if fetcher == nil {
-		return nil, nil
 	}
 	b, err := renderer.RenderArtifactAsBlock(ctx, ref, fetcher)
 	if errors.Is(err, llm.ErrUnsupported) {

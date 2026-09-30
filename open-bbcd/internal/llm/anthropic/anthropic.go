@@ -310,6 +310,11 @@ var supportedImageMIMEs = map[string]bool{
 	"image/webp": true,
 }
 
+// SupportsNative implements llm.MultimodalRenderer. Must not fetch.
+func (l *LLM) SupportsNative(ref llm.ArtifactRefBlock) bool {
+	return supportedImageMIMEs[ref.MIME] || ref.MIME == "application/pdf"
+}
+
 // NativeRenderBudget implements llm.MultimodalRenderer. Values pinned in renderLimits.
 func (l *LLM) NativeRenderBudget() llm.RenderBudget { return llm.RenderBudget{} }
 

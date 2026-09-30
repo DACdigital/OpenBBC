@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"io"
 	"iter"
 	"log/slog"
@@ -19,7 +20,8 @@ func (budgetLLM) Name() string { return "budget" }
 func (budgetLLM) Generate(context.Context, llm.Request) iter.Seq2[llm.Event, error] {
 	return func(func(llm.Event, error) bool) {}
 }
-func (b budgetLLM) NativeRenderBudget() llm.RenderBudget { return b.budget }
+func (b budgetLLM) NativeRenderBudget() llm.RenderBudget       { return b.budget }
+func (budgetLLM) SupportsNative(ref llm.ArtifactRefBlock) bool { return ref.MIME == "image/png" }
 func (budgetLLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBlock, fetch llm.ArtifactFetcher) (llm.Block, error) {
 	if ref.MIME != "image/png" {
 		return nil, llm.ErrUnsupported
@@ -33,20 +35,28 @@ func (budgetLLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefB
 	return llm.InlineMediaBlock{MIME: ref.MIME, Data: data}, nil
 }
 
-// countingFetcher counts Get calls; Stat reports `exists`.
+// countingFetcher counts Get calls; Stat reports `exists`. Get fails
+// with getErr for every URI (or only for failURI when set) and otherwise
+// returns data (a 4-byte PNG header when nil).
 type countingFetcher struct {
 	gets    int
 	getErr  error
+	failURI string
+	data    []byte
 	exists  bool
 	statErr error
 }
 
-func (f *countingFetcher) Get(context.Context, string) (io.ReadCloser, error) {
+func (f *countingFetcher) Get(_ context.Context, uri string) (io.ReadCloser, error) {
 	f.gets++
-	if f.getErr != nil {
+	if f.getErr != nil && (f.failURI == "" || f.failURI == uri) {
 		return nil, f.getErr
 	}
-	return io.NopCloser(bytesReader([]byte{0x89, 'P', 'N', 'G'})), nil
+	data := f.data
+	if data == nil {
+		data = []byte{0x89, 'P', 'N', 'G'}
+	}
+	return io.NopCloser(bytesReader(data)), nil
 }
 func (f *countingFetcher) Sign(context.Context, string, time.Duration) (string, error) {
 	return "", nil
@@ -119,5 +129,94 @@ func TestRender_DoesNotMutateInput(t *testing.T) {
 	_ = render(t, budgetLLM{}, &countingFetcher{}, msgs)
 	if _, ok := msgs[0].Content[0].(llm.ArtifactRefBlock); !ok {
 		t.Fatal("input message list was mutated")
+	}
+}
+
+func TestRenderBudget_OverBudgetRefsAreNotFetched(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/1", 10)}},
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/2", 10)}},
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/3", 10)}},
+	}
+	f := &countingFetcher{}
+	_ = render(t, budgetLLM{budget: llm.RenderBudget{MaxBlocks: 2}}, f, msgs)
+	if f.gets != 2 {
+		t.Fatalf("fetcher gets = %d, want 2 (the over-budget ref and older must not be fetched)", f.gets)
+	}
+}
+
+func TestRenderBudget_OversizedRefIsNotFetched(t *testing.T) {
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/big", 3000)}}}
+	f := &countingFetcher{}
+	out := render(t, budgetLLM{budget: llm.RenderBudget{MaxBytes: 1000}}, f, msgs)
+	if isInline(out[0].Content[0]) || f.gets != 0 {
+		t.Fatalf("oversized ref: inline=%v gets=%d, want surrogate and no fetch", isInline(out[0].Content[0]), f.gets)
+	}
+}
+
+func TestRenderBudget_ExactCapFits(t *testing.T) {
+	// 300 bytes → 400 base64 each; two exactly fill MaxBytes 800.
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/1", 300)}},
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/2", 300)}},
+	}
+	out := render(t, budgetLLM{budget: llm.RenderBudget{MaxBytes: 800}}, &countingFetcher{}, msgs)
+	if !isInline(out[0].Content[0]) || !isInline(out[1].Content[0]) {
+		t.Fatalf("both refs must be inline at the exact cap: %#v", out)
+	}
+}
+
+func TestRenderBudget_ChargesActualBytesWhenSizeUnderReported(t *testing.T) {
+	// SizeBytes claims 1 byte, but the blob is 600 bytes (800 base64).
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{png("sha256/liar", 1)}}}
+	f := &countingFetcher{data: make([]byte, 600)}
+	out := render(t, budgetLLM{budget: llm.RenderBudget{MaxBytes: 500}}, f, msgs)
+	if isInline(out[0].Content[0]) {
+		t.Fatalf("under-reported ref exceeding MaxBytes must be a surrogate, got %T", out[0].Content[0])
+	}
+}
+
+func TestRenderBudget_FailingFetchForOverBudgetRefDoesNotFail(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/broken", 10)}},
+		{Role: llm.RoleUser, Content: []llm.Block{png("sha256/ok", 10)}},
+	}
+	f := &countingFetcher{getErr: errors.New("boom"), failURI: "sha256/broken"}
+	out, err := renderArtifactsForLLM(context.Background(), msgs, budgetLLM{budget: llm.RenderBudget{MaxBlocks: 1}},
+		func(string) llm.ArtifactFetcher { return f }, newRenderCache(), slog.Default())
+	if err != nil {
+		t.Fatalf("over-budget ref with a failing fetcher must not fail the render: %v", err)
+	}
+	if isInline(out[0].Content[0]) || !isInline(out[1].Content[0]) {
+		t.Fatalf("want broken surrogate, ok inline; got %#v", out)
+	}
+}
+
+func TestRenderCache_PrunesKeysNotPlacedNatively(t *testing.T) {
+	l := budgetLLM{budget: llm.RenderBudget{MaxBlocks: 1}}
+	f := &countingFetcher{}
+	resolver := func(string) llm.ArtifactFetcher { return f }
+	cache := newRenderCache()
+	a, b := png("sha256/A", 10), png("sha256/B", 10)
+	keyA := renderKey{a.StoreID, a.URI, a.MIME}
+	keyB := renderKey{b.StoreID, b.URI, b.MIME}
+
+	pass1 := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{a}}}
+	if _, err := renderArtifactsForLLM(context.Background(), pass1, l, resolver, cache, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cache[keyA]; !ok {
+		t.Fatal("A should be cached after pass 1")
+	}
+
+	pass2 := append(pass1, llm.Message{Role: llm.RoleUser, Content: []llm.Block{b}})
+	if _, err := renderArtifactsForLLM(context.Background(), pass2, l, resolver, cache, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cache[keyA]; ok {
+		t.Fatal("A fell out of the native window and must be pruned from the cache")
+	}
+	if _, ok := cache[keyB]; !ok {
+		t.Fatal("B should be cached after pass 2")
 	}
 }
