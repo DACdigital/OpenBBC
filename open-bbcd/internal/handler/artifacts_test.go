@@ -58,7 +58,7 @@ func timeNow() time.Time { return time.Now() }
 
 // fakeArtifactStore — minimal ArtifactStore stub for the handler tests.
 // Records calls; can be programmed with canned Get/Sign/Stat/Put outcomes.
-// Safe for concurrent use: Put, Get, Sign and Stat hold mu.
+// Safe for concurrent use: Put, Get, Sign, Stat and Delete hold mu.
 type fakeArtifactStore struct {
 	mu           sync.Mutex
 	kind         string
@@ -69,6 +69,7 @@ type fakeArtifactStore struct {
 	statCalls    int
 	getCalls     int
 	signCalls    int
+	deleteCalls  int
 	lastSignOpts artifacts.SignOptions
 	getData      []byte
 	signedURL    string
@@ -119,8 +120,13 @@ func (s *fakeArtifactStore) Stat(ctx context.Context, uri string) (artifacts.Sta
 	}
 	return artifacts.StatResult{Exists: s.statHit, SizeBytes: s.statSize}, nil
 }
-func (s *fakeArtifactStore) Delete(ctx context.Context, uri string) error { return nil }
-func (s *fakeArtifactStore) Probe(ctx context.Context) error              { return nil }
+func (s *fakeArtifactStore) Delete(ctx context.Context, uri string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteCalls++
+	return nil
+}
+func (s *fakeArtifactStore) Probe(ctx context.Context) error { return nil }
 
 // buildRegistry constructs a real *artifacts.Registry populated with the
 // provided fake store keyed by "MAIN". Registers a fake adapter kind so

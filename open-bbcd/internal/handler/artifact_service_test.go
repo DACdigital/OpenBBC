@@ -381,6 +381,11 @@ func TestDeletePending_Statuses(t *testing.T) {
 	if code := del(b2.ID); code != http.StatusConflict {
 		t.Fatalf("delete on locked session: %d", code)
 	}
+	// Removing a pending artifact drops the row only; blobs are
+	// content-addressed and may back other rows.
+	if b.store.deleteCalls != 0 {
+		t.Fatalf("store Delete called %d times, want 0", b.store.deleteCalls)
+	}
 }
 
 func TestBOArtifactRoutes_SessionOfOtherVersion(t *testing.T) {
