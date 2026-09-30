@@ -185,12 +185,18 @@ func normaliseToolResult(
 		}
 		declared, data, decoded, isMedia := inlineMedia(item)
 		if !isMedia {
-			kept = append(kept, raw)
+			if carriesInlineBytes(raw) {
+				logger.Warn("tool result item of unhandled type carries inline bytes; replaced with note",
+					slog.String("tool", toolName))
+				kept = append(kept, unavailableNote("unknown", "unknown"))
+			} else {
+				kept = append(kept, raw)
+			}
 			continue
 		}
 		if !decoded {
 			logger.Warn("tool result media not decodable; replaced with note",
-				slog.String("tool", toolName), slog.String("mime", declared))
+				slog.String("tool", toolName), slog.String("mime", truncateMIME(declared)))
 			kept = append(kept, unavailableNote(declared, "unknown"))
 			continue
 		}
@@ -247,6 +253,42 @@ func inlineMedia(item mcpContentItem) (declared string, data []byte, decoded, is
 	return "", nil, false, false
 }
 
+// truncateMIME caps a possibly tool-controlled mime string at 100 bytes.
+func truncateMIME(mime string) string {
+	if len(mime) > 100 {
+		return strings.ToValidUTF8(mime[:100], "")
+	}
+	return mime
+}
+
+// carriesInlineBytes reports whether a content item that inlineMedia did not
+// handle still holds inline bytes: a non-empty string "data" or "blob", or a
+// "resource" object with a non-empty "blob". Text and URI-only items do not.
+func carriesInlineBytes(raw json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false
+	}
+	nonEmpty := func(v json.RawMessage) bool {
+		var s string
+		return json.Unmarshal(v, &s) == nil && s != ""
+	}
+	for _, k := range []string{"data", "blob"} {
+		if v, ok := m[k]; ok && nonEmpty(v) {
+			return true
+		}
+	}
+	if v, ok := m["resource"]; ok {
+		var r map[string]json.RawMessage
+		if json.Unmarshal(v, &r) == nil {
+			if b, ok := r["blob"]; ok && nonEmpty(b) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // looksLikeMedia reports whether a content item that failed typed decoding
 // is a JSON object that may carry inline media.
 func looksLikeMedia(raw json.RawMessage) bool {
@@ -269,9 +311,7 @@ func looksLikeMedia(raw json.RawMessage) bool {
 }
 
 func unavailableNote(mime, size string) json.RawMessage {
-	if len(mime) > 100 {
-		mime = strings.ToValidUTF8(mime[:100], "")
-	}
+	mime = truncateMIME(mime)
 	b, _ := json.Marshal(map[string]string{
 		"type": "text",
 		"text": "[artifact unavailable: " + mime + ", " + size + "]",

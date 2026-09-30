@@ -384,3 +384,23 @@ func TestUnavailableNote_CapsMIME(t *testing.T) {
 		t.Fatalf("mime not capped: %s", n)
 	}
 }
+
+func TestNormalise_UnknownTypeWithDataBecomesNote(t *testing.T) {
+	for _, item := range []string{
+		`{"type":"video","data":"aGVsbG8="}`,
+		`{"data":"aGVsbG8="}`,
+		`{"type":"resource","resource":{"uri":"file:///x","blob":"aGVsbG8="},"blob":""}`,
+	} {
+		up := &stubUploader{}
+		res := normaliseToolResult(context.Background(), []byte(`{"content":[`+item+`]}`), up, testLogger(), "Skill")
+		if strings.Contains(string(res.Output), "aGVsbG8=") {
+			t.Fatalf("base64 leaked for %s: %s", item, res.Output)
+		}
+	}
+	up := &stubUploader{}
+	res := normaliseToolResult(context.Background(), []byte(`{"content":[{"type":"video","data":"aGVsbG8="}]}`), up, testLogger(), "Skill")
+	c := remainingContent(t, res.Output)
+	if len(c) != 1 || c[0]["text"] != "[artifact unavailable: unknown, unknown]" {
+		t.Fatalf("remainder = %v", c)
+	}
+}
