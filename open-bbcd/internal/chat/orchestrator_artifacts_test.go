@@ -216,3 +216,41 @@ func TestOrchestrator_ArtifactRefOrder_ToolCallThenItem(t *testing.T) {
 		t.Fatalf("first ArtifactRefEvent (idx %d) before last ToolResultEvent (idx %d)", firstRef, lastResult)
 	}
 }
+
+func countInline(msgs []llm.Message) (inline, refs int) {
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			switch b.(type) {
+			case llm.InlineMediaBlock:
+				inline++
+			case llm.ArtifactRefBlock:
+				refs++
+			}
+		}
+	}
+	return
+}
+
+func TestOrchestrator_BudgetHoldsAcrossToolRounds(t *testing.T) {
+	flm := &mmFakeLLM{
+		fakeLLM: &fakeLLM{script: [][]llm.Event{toolUseRound("t1"), toolUseRound("t2"), toolUseRound("t3"), endRound()}},
+		budget:  llm.RenderBudget{MaxBlocks: 2},
+	}
+	o, _, _ := newArtifactOrchestrator(t, flm, []tools.Result{
+		{ToolUseID: "t1", Output: imageToolOutput()},
+		{ToolUseID: "t2", Output: imageToolOutput()},
+		{ToolUseID: "t3", Output: imageToolOutput()},
+	})
+	o.WithArtifacts(func(string) llm.ArtifactFetcher { return &countingFetcher{} })
+	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	final := flm.requests[len(flm.requests)-1]
+	inline, refs := countInline(final.Messages)
+	if inline != 2 {
+		t.Fatalf("final call carries %d native blocks, want 2", inline)
+	}
+	if refs != 0 {
+		t.Fatalf("rendered request still carries %d raw refs", refs)
+	}
+}

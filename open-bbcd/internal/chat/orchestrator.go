@@ -226,11 +226,11 @@ func (o *Orchestrator) Turn(
 	// assistant message, optionally executes tools + persists the tool message,
 	// then loops. Exits when stop_reason != "tool_use" or MaxToolRounds is hit.
 	//
-	// Before every LLM call we render any llm.ArtifactRefBlock content
-	// blocks into provider-native inline media (via MultimodalRenderer)
-	// or the text surrogate fallback. Refs on newly-appended tool-role
-	// messages (see Phase 5 normalisation) are re-rendered by the same
-	// call at the top of the loop.
+	// Before every LLM call a fresh rendered copy of req.Messages is built (see renderArtifactsForLLM); req.Messages itself keeps artifact_ref blocks.
+	//
+	// Per-turn cache of rendered artifacts: each blob is fetched at most
+	// once per turn however many tool rounds re-send it.
+	renderCache := newRenderCache()
 	req := llm.Request{
 		Model:     o.Model,
 		System:    promptsHead.MainPrompt,
@@ -251,20 +251,21 @@ func (o *Orchestrator) Turn(
 			stopReasonThisRound string
 		)
 
-		// Render any artifact_ref blocks in the current message list
-		// into provider-native inline media (or text surrogates). Runs
-		// each iteration to also cover tool-role messages appended in
-		// the previous round.
-		rendered, renderErr := renderArtifactsForLLM(ctx, req.Messages, o.llm, o.artifactResolver)
+		// req.Messages always holds the ref form. Every LLM call renders a
+		// fresh copy, so the native-render budget applies to the whole
+		// request on every round and rendered bytes never enter anything
+		// that could be persisted.
+		rendered, renderErr := renderArtifactsForLLM(ctx, req.Messages, o.llm, o.artifactResolver, renderCache, o.logger)
 		if renderErr != nil {
 			return failTurn("artifact_render", "render_artifacts", renderErr)
 		}
-		req.Messages = rendered
+		callReq := req
+		callReq.Messages = rendered
 
 		assistantMsgID := uuid.NewString()
 		_ = sink.Send(ctx, transport.TextStartEvent{MessageID: assistantMsgID})
 
-		for ev, err := range o.llm.Generate(ctx, req) {
+		for ev, err := range o.llm.Generate(ctx, callReq) {
 			if err != nil {
 				return failTurn("llm_error", "llm_generate", err)
 			}

@@ -25,6 +25,7 @@ func (mmLLM) Name() string { return "mm-fake" }
 func (mmLLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event, error] {
 	return func(yield func(llm.Event, error) bool) {}
 }
+func (mmLLM) NativeRenderBudget() llm.RenderBudget { return llm.RenderBudget{} }
 func (mmLLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBlock, fetch llm.ArtifactFetcher) (llm.Block, error) {
 	if ref.MIME != "image/png" {
 		return nil, llm.ErrUnsupported
@@ -95,7 +96,7 @@ func TestRenderArtifacts_NoResolverProducesSurrogates(t *testing.T) {
 			llm.ArtifactRefBlock{StoreID: "MAIN", URI: "sha256/abc", MIME: "image/png", Filename: "photo.png"},
 		},
 	}}
-	got, err := renderArtifactsForLLM(context.Background(), msgs, mmLLM{}, nil)
+	got, err := renderArtifactsForLLM(context.Background(), msgs, mmLLM{}, nil, newRenderCache(), slog.Default())
 	if err != nil {
 		t.Fatalf("err %v", err)
 	}
@@ -115,7 +116,7 @@ func TestRenderArtifacts_ProviderNotMultimodal_ProducesSurrogates(t *testing.T) 
 		},
 	}}
 	resolver := func(id string) llm.ArtifactFetcher { return stubFetcher{bytes: []byte{0x89}} }
-	got, err := renderArtifactsForLLM(context.Background(), msgs, plainLLM{}, resolver)
+	got, err := renderArtifactsForLLM(context.Background(), msgs, plainLLM{}, resolver, newRenderCache(), slog.Default())
 	if err != nil {
 		t.Fatalf("err %v", err)
 	}
@@ -139,7 +140,7 @@ func TestRenderArtifacts_SupportedMIMEProducesInlineMedia(t *testing.T) {
 		}
 		return nil
 	}
-	got, err := renderArtifactsForLLM(context.Background(), msgs, mmLLM{}, resolver)
+	got, err := renderArtifactsForLLM(context.Background(), msgs, mmLLM{}, resolver, newRenderCache(), slog.Default())
 	if err != nil {
 		t.Fatalf("err %v", err)
 	}
@@ -160,7 +161,7 @@ func TestRenderArtifacts_UnknownStoreProducesSurrogate(t *testing.T) {
 		},
 	}}
 	resolver := func(id string) llm.ArtifactFetcher { return nil } // always nil
-	got, err := renderArtifactsForLLM(context.Background(), msgs, mmLLM{}, resolver)
+	got, err := renderArtifactsForLLM(context.Background(), msgs, mmLLM{}, resolver, newRenderCache(), slog.Default())
 	if err != nil {
 		t.Fatalf("err %v", err)
 	}

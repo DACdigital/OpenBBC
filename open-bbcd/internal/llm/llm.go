@@ -117,6 +117,10 @@ type MultimodalRenderer interface {
 	// ref's MIME natively — the caller substitutes a text surrogate.
 	// Return any other error to abort the completion setup entirely.
 	RenderArtifactAsBlock(ctx context.Context, ref ArtifactRefBlock, fetch ArtifactFetcher) (Block, error)
+
+	// NativeRenderBudget returns the provider's per-request media caps,
+	// pinned below its hard request limits.
+	NativeRenderBudget() RenderBudget
 }
 
 // ArtifactFetcher is the narrow slice of artifacts.ArtifactStore that
@@ -134,6 +138,14 @@ type ArtifactFetcher interface {
 // substitute a text-surrogate block (TextSurrogate) in place of the
 // artifact_ref.
 var ErrUnsupported = errors.New("llm: provider does not support this MIME natively")
+
+// RenderBudget caps natively rendered media in one LLM request. Refs are
+// charged newest first; once the next ref would exceed a cap, it and every
+// older ref render as text surrogates. A value <= 0 means "no cap" on that axis.
+type RenderBudget struct {
+	MaxBytes  int64 // base64-expanded bytes, ceil(size/3)*4 per ref
+	MaxBlocks int
+}
 
 // TextSurrogate produces a human-readable text block that stands in
 // for an artifact_ref when the provider cannot render the ref natively.

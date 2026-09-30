@@ -310,6 +310,9 @@ var supportedImageMIMEs = map[string]bool{
 	"image/webp": true,
 }
 
+// NativeRenderBudget implements llm.MultimodalRenderer. Values pinned in renderLimits.
+func (l *LLM) NativeRenderBudget() llm.RenderBudget { return llm.RenderBudget{} }
+
 // RenderArtifactAsBlock implements llm.MultimodalRenderer for the Anthropic
 // provider. Materialises the artifact_ref's bytes into an InlineMediaBlock
 // when the MIME is natively supported (image/{png,jpeg,gif,webp} or

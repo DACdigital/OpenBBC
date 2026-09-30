@@ -12,84 +12,121 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 )
 
-// renderArtifactsForLLM walks the message content lists, converting each
-// llm.ArtifactRefBlock into a provider-native inline media block via
-// MultimodalRenderer (when both the provider implements it AND the ref's
-// store resolves through the resolver), or into a text-surrogate block
-// via llm.TextSurrogate otherwise.
+// renderKey identifies one rendered artifact within a turn.
+type renderKey struct{ storeID, uri, mime string }
+
+// renderCache holds provider-native blocks rendered earlier in the same
+// turn, so each blob is fetched at most once per turn however many tool
+// rounds re-send it. It never holds refs, only rendered output, and is
+// discarded when the turn ends.
+type renderCache map[renderKey]llm.Block
+
+func newRenderCache() renderCache { return renderCache{} }
+
+// base64Len is the base64-encoded length of n raw bytes.
+func base64Len(n int64) int64 { return ((n + 2) / 3) * 4 }
+
+// renderArtifactsForLLM returns a fresh copy of msgs in which every
+// ArtifactRefBlock is replaced by a provider-native block or its text
+// surrogate. The input is never mutated: callers keep the ref form and
+// render a new copy for every LLM call.
 //
-// The function returns a freshly-allocated []llm.Message so the caller
-// can substitute rendered content into the LLM request without mutating
-// history in-place. Refs whose store_id doesn't resolve — either because
-// the resolver is nil (feature disabled) or the store isn't in the
-// registry — fall through to text surrogate; the model still gets a
-// human-readable pointer even when the bytes can't be fetched.
-//
-// Non-ErrUnsupported errors from RenderArtifactAsBlock abort the whole
-// operation; the caller fails the turn. This keeps a transient fetch
-// error from silently downgrading a native-image call into a surrogate.
+// Refs are visited in reverse (message, block) order — newest message
+// first, last block first — and each ref rendered natively is charged
+// against the provider's RenderBudget. Once the next native ref would
+// exceed MaxBytes or MaxBlocks, it and every older ref become surrogates.
+// Refs downgraded to a surrogate for any other reason are not charged.
 func renderArtifactsForLLM(
 	ctx context.Context,
 	in []llm.Message,
 	provider llm.LLM,
 	resolver ArtifactFetcherResolver,
+	cache renderCache,
+	logger *slog.Logger,
 ) ([]llm.Message, error) {
-	// Fast path: if the LLM provider isn't a MultimodalRenderer OR the
-	// resolver is nil, every artifact_ref becomes a text surrogate.
-	renderer, providerSupports := provider.(llm.MultimodalRenderer)
-	if !providerSupports || resolver == nil {
-		return substituteAllWithSurrogate(in), nil
-	}
-
 	out := make([]llm.Message, len(in))
 	for i, m := range in {
-		newContent := make([]llm.Block, 0, len(m.Content))
-		for _, b := range m.Content {
-			ref, isRef := b.(llm.ArtifactRefBlock)
-			if !isRef {
-				newContent = append(newContent, b)
+		out[i] = llm.Message{Role: m.Role, Content: append([]llm.Block(nil), m.Content...)}
+	}
+
+	renderer, providerSupports := provider.(llm.MultimodalRenderer)
+	if !providerSupports || resolver == nil {
+		for i := range out {
+			for j, b := range out[i].Content {
+				if ref, ok := b.(llm.ArtifactRefBlock); ok {
+					out[i].Content[j] = llm.TextSurrogate(ref)
+				}
+			}
+		}
+		return out, nil
+	}
+
+	budget := renderer.NativeRenderBudget()
+	var usedBytes int64
+	usedBlocks := 0
+	exhausted := false
+
+	for i := len(out) - 1; i >= 0; i-- {
+		for j := len(out[i].Content) - 1; j >= 0; j-- {
+			ref, ok := out[i].Content[j].(llm.ArtifactRefBlock)
+			if !ok {
 				continue
 			}
-			fetcher := resolver(ref.StoreID)
-			if fetcher == nil {
-				// Store not in registry — the ref will still tell the
-				// model there was an attachment; the actual bytes are
-				// out of reach.
-				newContent = append(newContent, llm.TextSurrogate(ref))
+			surrogate := llm.TextSurrogate(ref)
+			if exhausted {
+				out[i].Content[j] = surrogate
 				continue
 			}
-			rendered, err := renderer.RenderArtifactAsBlock(ctx, ref, fetcher)
-			if errors.Is(err, llm.ErrUnsupported) {
-				newContent = append(newContent, llm.TextSurrogate(ref))
-				continue
-			}
+			rendered, err := renderOne(ctx, renderer, resolver, cache, ref, logger)
 			if err != nil {
 				return nil, err
 			}
-			newContent = append(newContent, rendered)
+			if rendered == nil {
+				out[i].Content[j] = surrogate
+				continue
+			}
+			cost := base64Len(ref.SizeBytes)
+			if (budget.MaxBlocks > 0 && usedBlocks+1 > budget.MaxBlocks) ||
+				(budget.MaxBytes > 0 && usedBytes+cost > budget.MaxBytes) {
+				exhausted = true
+				out[i].Content[j] = surrogate
+				continue
+			}
+			usedBlocks++
+			usedBytes += cost
+			out[i].Content[j] = rendered
 		}
-		out[i] = llm.Message{Role: m.Role, Content: newContent}
 	}
 	return out, nil
 }
 
-// substituteAllWithSurrogate walks messages once and replaces every
-// ArtifactRefBlock with its TextSurrogate. Used on the fast path
-// (feature disabled or provider doesn't support multimodal at all).
-func substituteAllWithSurrogate(in []llm.Message) []llm.Message {
-	out := make([]llm.Message, len(in))
-	for i, m := range in {
-		newContent := make([]llm.Block, 0, len(m.Content))
-		for _, b := range m.Content {
-			if ref, ok := b.(llm.ArtifactRefBlock); ok {
-				newContent = append(newContent, llm.TextSurrogate(ref))
-				continue
-			}
-			newContent = append(newContent, b)
-		}
-		out[i] = llm.Message{Role: m.Role, Content: newContent}
+// renderOne renders a single ref, using and filling the per-turn cache.
+// Returns (nil, nil) when the ref should become a surrogate.
+func renderOne(
+	ctx context.Context,
+	renderer llm.MultimodalRenderer,
+	resolver ArtifactFetcherResolver,
+	cache renderCache,
+	ref llm.ArtifactRefBlock,
+	logger *slog.Logger,
+) (llm.Block, error) {
+	key := renderKey{ref.StoreID, ref.URI, ref.MIME}
+	if b, ok := cache[key]; ok {
+		return b, nil
 	}
-	return out
+	fetcher := resolver(ref.StoreID)
+	if fetcher == nil {
+		return nil, nil
+	}
+	b, err := renderer.RenderArtifactAsBlock(ctx, ref, fetcher)
+	if errors.Is(err, llm.ErrUnsupported) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err // refined in Task 8 (Stat fallback)
+	}
+	cache[key] = b
+	return b, nil
 }
 
 // mcpContentItem is the shape MCP tool results use for a single content

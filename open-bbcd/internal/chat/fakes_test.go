@@ -157,3 +157,15 @@ func (r *recordingSink) Send(_ context.Context, e transport.Event) error {
 }
 
 func (r *recordingSink) Close() error { return nil }
+
+// mmFakeLLM is a scripted fakeLLM that also renders image/png natively
+// with a configurable budget.
+type mmFakeLLM struct {
+	*fakeLLM
+	budget llm.RenderBudget
+}
+
+func (m *mmFakeLLM) NativeRenderBudget() llm.RenderBudget { return m.budget }
+func (m *mmFakeLLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBlock, fetch llm.ArtifactFetcher) (llm.Block, error) {
+	return budgetLLM{}.RenderArtifactAsBlock(ctx, ref, fetch)
+}
