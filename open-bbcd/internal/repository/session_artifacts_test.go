@@ -263,3 +263,29 @@ func TestSessionArtifacts_DeleteAndLookup(t *testing.T) {
 		})
 	}
 }
+
+// Lookup must return the NEWEST row when a consumed and a pending row exist
+// for the same blob.
+func TestSessionArtifacts_LookupReturnsNewest(t *testing.T) {
+	for _, s := range saSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			old, err := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", "old.png"), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.Exec(`UPDATE `+s.table+` SET message_id = gen_random_uuid(),
+				created_at = now() - interval '1 minute' WHERE id=$1::uuid`, old.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", "new.png"), 10); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.store.LookupSessionArtifact(ctx, sid, "MAIN", "sha256/aa")
+			if err != nil || got.Filename != "new.png" {
+				t.Fatalf("lookup newest: %+v %v", got, err)
+			}
+		})
+	}
+}
