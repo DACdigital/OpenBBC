@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -140,7 +141,7 @@ type normaliseResult struct {
 //   - upload succeeds → the item is removed from the remainder and a ref returned;
 //   - base64 does not decode, or upload fails → the item is replaced by
 //     {"type":"text","text":"[artifact unavailable: <mime>, <size>]"} and a
-//     warn is logged (store_id/uri/mime/tool only — never a filename).
+//     warn is logged (tool, mime and err only — never a filename).
 //
 // Non-MCP payloads (no top-level content array) pass through unchanged.
 // A re-serialisation failure yields unavailableToolResult with ForceError.
@@ -173,7 +174,13 @@ func normaliseToolResult(
 	for _, raw := range items {
 		var item mcpContentItem
 		if err := json.Unmarshal(raw, &item); err != nil {
-			kept = append(kept, raw)
+			if looksLikeMedia(raw) {
+				logger.Warn("tool result media item malformed; replaced with note",
+					slog.String("tool", toolName))
+				kept = append(kept, unavailableNote("unknown", "unknown"))
+			} else {
+				kept = append(kept, raw)
+			}
 			continue
 		}
 		declared, data, decoded, isMedia := inlineMedia(item)
@@ -219,7 +226,7 @@ func normaliseToolResult(
 // decoded is false when the item is media but its base64 does not decode.
 func inlineMedia(item mcpContentItem) (declared string, data []byte, decoded, isMedia bool) {
 	switch item.Type {
-	case "image":
+	case "image", "audio":
 		declared = orDefault(item.MIMEType, "application/octet-stream")
 		b, err := base64.StdEncoding.DecodeString(item.Data)
 		return declared, b, err == nil, true
@@ -240,7 +247,31 @@ func inlineMedia(item mcpContentItem) (declared string, data []byte, decoded, is
 	return "", nil, false, false
 }
 
+// looksLikeMedia reports whether a content item that failed typed decoding
+// is a JSON object that may carry inline media.
+func looksLikeMedia(raw json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false
+	}
+	var typ string
+	_ = json.Unmarshal(m["type"], &typ)
+	switch typ {
+	case "image", "audio", "resource":
+		return true
+	}
+	for _, k := range []string{"data", "blob", "resource"} {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func unavailableNote(mime, size string) json.RawMessage {
+	if len(mime) > 100 {
+		mime = strings.ToValidUTF8(mime[:100], "")
+	}
 	b, _ := json.Marshal(map[string]string{
 		"type": "text",
 		"text": "[artifact unavailable: " + mime + ", " + size + "]",

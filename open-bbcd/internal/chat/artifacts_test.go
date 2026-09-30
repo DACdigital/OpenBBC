@@ -206,7 +206,7 @@ func remainingContent(t *testing.T, raw json.RawMessage) []map[string]any {
 func TestNormalise_ImageContentUploaded(t *testing.T) {
 	up := &stubUploader{}
 	payload := []byte(`{"content":[{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}]}`)
-	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
 	if len(res.Refs) != 1 || up.uploads != 1 {
 		t.Fatalf("refs=%d uploads=%d, want 1/1", len(res.Refs), up.uploads)
 	}
@@ -222,7 +222,7 @@ func TestNormalise_EmbeddedResourceWithBlob(t *testing.T) {
 	up := &stubUploader{}
 	inline := base64.StdEncoding.EncodeToString([]byte("PDF data"))
 	payload := []byte(`{"content":[{"type":"resource","resource":{"uri":"file:///x","mimeType":"application/pdf","blob":"` + inline + `"}}]}`)
-	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
 	if len(res.Refs) != 1 {
 		t.Errorf("len(refs) = %d, want 1", len(res.Refs))
 	}
@@ -231,7 +231,7 @@ func TestNormalise_EmbeddedResourceWithBlob(t *testing.T) {
 func TestNormalise_EmbeddedResourceWithText(t *testing.T) {
 	up := &stubUploader{}
 	payload := []byte(`{"content":[{"type":"resource","resource":{"uri":"file:///x","mimeType":"text/csv","text":"a,b\n1,2"}}]}`)
-	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
 	if len(res.Refs) != 1 || res.Refs[0].MIME != "text/csv" {
 		t.Fatalf("refs = %#v, want one text/csv ref", res.Refs)
 	}
@@ -240,7 +240,7 @@ func TestNormalise_EmbeddedResourceWithText(t *testing.T) {
 func TestNormalise_URIOnlyEmbeddedResource_PassesThrough(t *testing.T) {
 	up := &stubUploader{}
 	payload := []byte(`{"content":[{"type":"resource","resource":{"uri":"file:///x","mimeType":"application/pdf"}}]}`)
-	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
 	if len(res.Refs) != 0 || up.uploads != 0 {
 		t.Fatalf("URI-only resource must not be uploaded: refs=%v uploads=%d", res.Refs, up.uploads)
 	}
@@ -252,7 +252,7 @@ func TestNormalise_URIOnlyEmbeddedResource_PassesThrough(t *testing.T) {
 func TestNormalise_TextContentPreserved(t *testing.T) {
 	up := &stubUploader{}
 	payload := []byte(`{"content":[{"type":"text","text":"result summary"}]}`)
-	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
 	if len(res.Refs) != 0 || up.uploads != 0 {
 		t.Fatalf("text must not be normalised")
 	}
@@ -264,7 +264,7 @@ func TestNormalise_TextContentPreserved(t *testing.T) {
 func TestNormalise_NonMCPShape_PassesThrough(t *testing.T) {
 	up := &stubUploader{}
 	payload := []byte(`{"status":"ok","result":42}`)
-	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
 	if len(res.Refs) != 0 || string(res.Output) != string(payload) {
 		t.Fatalf("non-MCP payload must pass through verbatim; got %s", res.Output)
 	}
@@ -273,7 +273,7 @@ func TestNormalise_NonMCPShape_PassesThrough(t *testing.T) {
 func TestNormalise_UploadFailureBecomesTextNote(t *testing.T) {
 	up := &stubUploader{failCalls: map[int]bool{1: true}}
 	payload := []byte(`{"content":[{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}]}`)
-	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
 	if len(res.Refs) != 0 {
 		t.Fatalf("no ref may be produced for a failed upload")
 	}
@@ -294,7 +294,7 @@ func TestNormalise_UploadFailureBecomesTextNote(t *testing.T) {
 func TestNormalise_UndecodableBase64BecomesNoteWithUnknownSize(t *testing.T) {
 	up := &stubUploader{}
 	payload := []byte(`{"content":[{"type":"image","data":"%%%not-base64%%%","mimeType":"image/png"}]}`)
-	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
 	if up.uploads != 0 {
 		t.Fatalf("undecodable item must not be uploaded")
 	}
@@ -308,7 +308,7 @@ func TestNormalise_OnlyFailingItemIsReplaced(t *testing.T) {
 	up := &stubUploader{failCalls: map[int]bool{2: true}}
 	img := `{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}`
 	payload := []byte(`{"content":[` + img + `,` + img + `]}`)
-	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
 	if len(res.Refs) != 1 {
 		t.Fatalf("refs = %d, want 1", len(res.Refs))
 	}
@@ -325,7 +325,7 @@ func TestNormalise_MarshalFailureBecomesUnavailableError(t *testing.T) {
 
 	up := &stubUploader{}
 	payload := []byte(`{"content":[{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}]}`)
-	res := normaliseToolResult(context.Background(), payload, up, slog.Default(), "Skill")
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
 	if !res.ForceError {
 		t.Fatal("ForceError not set on re-marshal failure")
 	}
@@ -337,5 +337,50 @@ func TestNormalise_MarshalFailureBecomesUnavailableError(t *testing.T) {
 	}
 	if strings.Contains(string(res.Output), "aGVsbG8=") {
 		t.Fatal("raw payload returned")
+	}
+}
+
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestNormalise_MistypedMediaItemBecomesNote(t *testing.T) {
+	up := &stubUploader{}
+	payload := []byte(`{"content":[{"type":"image","data":"aGVsbG8=","mimeType":123}]}`)
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
+	if strings.Contains(string(res.Output), "aGVsbG8=") {
+		t.Fatalf("base64 leaked: %s", res.Output)
+	}
+	c := remainingContent(t, res.Output)
+	if len(c) != 1 || c[0]["text"] != "[artifact unavailable: unknown, unknown]" {
+		t.Fatalf("remainder = %v", c)
+	}
+}
+
+func TestNormalise_NonObjectItemStaysVerbatim(t *testing.T) {
+	up := &stubUploader{}
+	payload := []byte(`{"content":[42]}`)
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
+	if string(res.Output) != `{"content":[42]}` {
+		t.Fatalf("output = %s", res.Output)
+	}
+}
+
+func TestNormalise_AudioContentUploaded(t *testing.T) {
+	up := &stubUploader{}
+	payload := []byte(`{"content":[{"type":"audio","data":"aGVsbG8=","mimeType":"audio/wav"}]}`)
+	res := normaliseToolResult(context.Background(), payload, up, testLogger(), "Skill")
+	if len(res.Refs) != 1 || up.uploads != 1 {
+		t.Fatalf("refs=%d uploads=%d, want 1/1", len(res.Refs), up.uploads)
+	}
+	if c := remainingContent(t, res.Output); len(c) != 0 {
+		t.Errorf("remaining = %v, want empty", c)
+	}
+}
+
+func TestUnavailableNote_CapsMIME(t *testing.T) {
+	n := string(unavailableNote(strings.Repeat("a", 500), "5 B"))
+	if strings.Contains(n, strings.Repeat("a", 101)) {
+		t.Fatalf("mime not capped: %s", n)
 	}
 }
