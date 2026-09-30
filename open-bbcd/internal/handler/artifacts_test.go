@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,7 +57,9 @@ func timeNow() time.Time { return time.Now() }
 
 // fakeArtifactStore — minimal ArtifactStore stub for the handler tests.
 // Records calls; can be programmed with canned Get/Sign/Stat/Put outcomes.
+// Safe for concurrent use: Put, Get, Sign and Stat hold mu.
 type fakeArtifactStore struct {
+	mu           sync.Mutex
 	kind         string
 	delivery     artifacts.DeliveryMode
 	statHit      bool // if true, Stat reports existing blob (dedup path)
@@ -77,6 +80,8 @@ type fakeArtifactStore struct {
 func (s *fakeArtifactStore) Kind() string                             { return s.kind }
 func (s *fakeArtifactStore) PreferredDelivery() artifacts.DeliveryMode { return s.delivery }
 func (s *fakeArtifactStore) Put(ctx context.Context, uri, mime string, r io.Reader, size int64) (artifacts.PutResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.putCalls++
 	if s.putErr != nil {
 		return artifacts.PutResult{}, s.putErr
@@ -86,6 +91,8 @@ func (s *fakeArtifactStore) Put(ctx context.Context, uri, mime string, r io.Read
 	return artifacts.PutResult{URI: uri, SizeBytes: int64(len(drained))}, nil
 }
 func (s *fakeArtifactStore) Get(ctx context.Context, uri string) (io.ReadCloser, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.getCalls++
 	if s.getErr != nil {
 		return nil, s.getErr
@@ -93,6 +100,8 @@ func (s *fakeArtifactStore) Get(ctx context.Context, uri string) (io.ReadCloser,
 	return io.NopCloser(bytes.NewReader(s.getData)), nil
 }
 func (s *fakeArtifactStore) Sign(ctx context.Context, uri string, ttl time.Duration, opts artifacts.SignOptions) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.signCalls++
 	s.lastSignOpts = opts
 	if s.signErr != nil {
@@ -101,6 +110,8 @@ func (s *fakeArtifactStore) Sign(ctx context.Context, uri string, ttl time.Durat
 	return s.signedURL, nil
 }
 func (s *fakeArtifactStore) Stat(ctx context.Context, uri string) (artifacts.StatResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.statCalls++
 	if s.statErr != nil {
 		return artifacts.StatResult{}, s.statErr
@@ -139,17 +150,29 @@ func buildRegistry(t *testing.T, store *fakeArtifactStore) *artifacts.Registry {
 // a "test-fake" kind in the artifacts package's factory map. See
 // artifacts/registry_test.go for the corresponding helper pattern.
 func loadFakeRegistry(store *fakeArtifactStore) (*artifacts.Registry, error) {
+	return loadFakeRegistryStore(store)
+}
+
+// loadFakeRegistryStore is loadFakeRegistry for any ArtifactStore.
+func loadFakeRegistryStore(store artifacts.ArtifactStore) (*artifacts.Registry, error) {
 	artifacts.RegisterKindForTest("test-fake", func(opts map[string]string, ttl time.Duration) (artifacts.ArtifactStore, error) {
 		return store, nil
 	})
-	return artifacts.Load(config.ArtifactsConfig{
+	return artifacts.Load(fakeArtifactsConfig())
+}
+
+// fakeArtifactsConfig is the one-store ("MAIN", kind "test-fake") config
+// the fake registries load.
+func fakeArtifactsConfig() config.ArtifactsConfig {
+	return config.ArtifactsConfig{
 		Stores: map[string]config.ArtifactStoreConfig{
 			"MAIN": {ID: "MAIN", Kind: "test-fake"},
 		},
 		DefaultID:    "MAIN",
 		MaxUploadMB:  10,
+		MaxPending:   10,
 		SignedURLTTL: 300 * time.Second,
-	})
+	}
 }
 
 // --- helpers -----------------------------------------------------------
