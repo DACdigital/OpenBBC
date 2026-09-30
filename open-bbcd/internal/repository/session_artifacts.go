@@ -3,8 +3,12 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"sort"
+	"time"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/google/uuid"
 )
@@ -249,4 +253,145 @@ func recheckDeployedSession(ctx context.Context, tx *sql.Tx, sessionID string) e
 		return types.ErrNotFound
 	}
 	return err
+}
+
+// claimPending assigns every pending upload on the session to messageID
+// inside tx and returns their refs in (created_at, id) order. Concurrent
+// claims serialise on the row locks; the loser re-evaluates
+// message_id IS NULL and matches nothing, so each row is claimed once.
+func (t sessionArtifacts) claimPending(ctx context.Context, tx *sql.Tx, sessionID, messageID string) ([]llm.ArtifactRefBlock, error) {
+	rows, err := tx.QueryContext(ctx, `
+		UPDATE `+t.table+` SET message_id = $2::uuid, updated_at = now()
+		WHERE session_id = $1::uuid AND origin = 'upload' AND message_id IS NULL
+		RETURNING id::text, store_id, uri, mime, size_bytes, sha256, COALESCE(filename, ''), created_at`,
+		sessionID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type claimed struct {
+		id  string
+		at  time.Time
+		ref llm.ArtifactRefBlock
+	}
+	var cs []claimed
+	for rows.Next() {
+		var c claimed
+		if err := rows.Scan(&c.id, &c.ref.StoreID, &c.ref.URI, &c.ref.MIME, &c.ref.SizeBytes,
+			&c.ref.Sha256, &c.ref.Filename, &c.at); err != nil {
+			return nil, err
+		}
+		cs = append(cs, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(cs, func(i, j int) bool {
+		if !cs[i].at.Equal(cs[j].at) {
+			return cs[i].at.Before(cs[j].at)
+		}
+		return cs[i].id < cs[j].id // canonical uuid text sorts like Postgres uuid
+	})
+	out := make([]llm.ArtifactRefBlock, len(cs))
+	for i, c := range cs {
+		out[i] = c.ref
+	}
+	return out, nil
+}
+
+// insertToolResultRows records one origin='tool_result' row per ref for the
+// tool-role message messageID, inside tx.
+func (t sessionArtifacts) insertToolResultRows(ctx context.Context, tx *sql.Tx, sessionID, messageID string, refs []llm.ArtifactRefBlock) error {
+	for _, r := range refs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO `+t.table+` (session_id, origin, store_id, uri, mime, size_bytes, sha256, filename, message_id)
+			VALUES ($1::uuid, 'tool_result', $2, $3, $4, $5, $6, NULLIF($7, ''), $8::uuid)`,
+			sessionID, r.StoreID, r.URI, r.MIME, r.SizeBytes, r.Sha256, r.Filename, messageID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// appendUserTurn is the shared body of AppendUserTurn: claim, empty-turn
+// check, content assembly, then insertMsg(tx, content), all in one tx.
+func (t sessionArtifacts) appendUserTurn(ctx context.Context, sessionID, messageID string, content json.RawMessage,
+	insertMsg func(tx *sql.Tx, content json.RawMessage) error) ([]llm.ArtifactRefBlock, error) {
+	tx, err := t.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	refs, err := t.claimPending(ctx, tx, sessionID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	blocks, hasText, err := decodeUserContent(content)
+	if err != nil {
+		return nil, err
+	}
+	if len(refs) == 0 && !hasText {
+		return nil, types.ErrEmptyTurn
+	}
+	for _, r := range refs {
+		b, err := json.Marshal(types.ArtifactRefContent{
+			Type: "artifact_ref", StoreID: r.StoreID, URI: r.URI, MIME: r.MIME,
+			SizeBytes: r.SizeBytes, Sha256: r.Sha256, Filename: r.Filename,
+		})
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, b)
+	}
+	final, err := json.Marshal(blocks)
+	if err != nil {
+		return nil, err
+	}
+	if err := insertMsg(tx, final); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
+// appendToolMessage is the shared body of AppendToolMessage: message, then
+// its tool_result rows, in one tx.
+func (t sessionArtifacts) appendToolMessage(ctx context.Context, sessionID, messageID string, refs []llm.ArtifactRefBlock,
+	insertMsg func(tx *sql.Tx) error) error {
+	tx, err := t.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := insertMsg(tx); err != nil {
+		return err
+	}
+	if err := t.insertToolResultRows(ctx, tx, sessionID, messageID, refs); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// decodeUserContent splits a user message's block array and reports
+// whether it holds a non-empty text block. Empty/absent content is [].
+func decodeUserContent(content json.RawMessage) ([]json.RawMessage, bool, error) {
+	blocks := []json.RawMessage{}
+	if len(content) > 0 {
+		if err := json.Unmarshal(content, &blocks); err != nil {
+			return nil, false, err
+		}
+	}
+	hasText := false
+	for _, b := range blocks {
+		var head struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(b, &head) == nil && head.Type == "text" && head.Text != "" {
+			hasText = true
+		}
+	}
+	return blocks, hasText, nil
 }

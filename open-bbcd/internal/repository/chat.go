@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -283,4 +284,39 @@ func (r *ChatRepository) SetSessionHeaderOverrides(ctx context.Context, sessionI
 		return types.ErrNotFound
 	}
 	return nil
+}
+
+// AppendUserTurn persists the user message and claims every pending artifact
+// on the session in one transaction. Claimed refs are appended to
+// msg.Content after its existing blocks, in (created_at, id) order, and
+// returned. Returns types.ErrEmptyTurn (persisting nothing) if msg has no
+// non-empty text block and nothing was claimed. agentVersionID is ignored
+// (BO sessions are version-pinned), as in AppendMessages.
+func (r *ChatRepository) AppendUserTurn(ctx context.Context, agentVersionID string, msg types.ChatMessage) ([]llm.ArtifactRefBlock, error) {
+	_ = agentVersionID
+	return r.sessionArtifacts.appendUserTurn(ctx, msg.SessionID, msg.ID, msg.Content, func(tx *sql.Tx, content json.RawMessage) error {
+		return r.insertChatMessageTx(ctx, tx, msg, content)
+	})
+}
+
+// AppendToolMessage persists a tool-role message and one origin='tool_result'
+// row per ref (message_id = msg.ID) in one transaction. refs may be empty.
+func (r *ChatRepository) AppendToolMessage(ctx context.Context, agentVersionID string, msg types.ChatMessage, refs []llm.ArtifactRefBlock) error {
+	_ = agentVersionID
+	return r.sessionArtifacts.appendToolMessage(ctx, msg.SessionID, msg.ID, refs, func(tx *sql.Tx) error {
+		return r.insertChatMessageTx(ctx, tx, msg, msg.Content)
+	})
+}
+
+// insertChatMessageTx inserts one message and bumps the session's
+// updated_at, as AppendMessages does.
+func (r *ChatRepository) insertChatMessageTx(ctx context.Context, tx *sql.Tx, m types.ChatMessage, content json.RawMessage) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO chat_messages (id, session_id, role, content, seq)
+		VALUES ($1::uuid, $2::uuid, $3, $4, $5)
+	`, m.ID, m.SessionID, string(m.Role), []byte(content), m.Seq); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE chat_sessions SET updated_at = now() WHERE id = $1::uuid`, m.SessionID)
+	return err
 }

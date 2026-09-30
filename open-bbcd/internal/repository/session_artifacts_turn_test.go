@@ -1,0 +1,290 @@
+package repository
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"sync"
+	"testing"
+
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/google/uuid"
+)
+
+// turnSurface wires AppendUserTurn / AppendToolMessage / LoadMessages for BO
+// and deployed behind one ChatMessage-shaped API.
+type turnSurface struct {
+	saSurface
+	appendUser func(ctx context.Context, m types.ChatMessage) ([]llm.ArtifactRefBlock, error)
+	appendTool func(ctx context.Context, m types.ChatMessage, refs []llm.ArtifactRefBlock) error
+	load       func(ctx context.Context, sessionID string) ([]json.RawMessage, error) // content per message, seq order
+	msgTable   string
+}
+
+func turnSurfaces(t *testing.T) []turnSurface {
+	t.Helper()
+	ss := saSurfaces(t)
+	bo, depl := ss[0], ss[1]
+	chat := bo.store.(*ChatRepository)
+	dr := depl.store.(*DeployedRepository)
+	var deployedVersion string
+	if err := depl.db.QueryRow(`SELECT id::text FROM agent_versions WHERE status='DEPLOYED' LIMIT 1`).Scan(&deployedVersion); err != nil {
+		t.Fatal(err)
+	}
+	return []turnSurface{
+		{
+			saSurface: bo, msgTable: "chat_messages",
+			appendUser: func(ctx context.Context, m types.ChatMessage) ([]llm.ArtifactRefBlock, error) {
+				return chat.AppendUserTurn(ctx, "", m)
+			},
+			appendTool: func(ctx context.Context, m types.ChatMessage, refs []llm.ArtifactRefBlock) error {
+				return chat.AppendToolMessage(ctx, "", m, refs)
+			},
+			load: func(ctx context.Context, sid string) ([]json.RawMessage, error) {
+				ms, err := chat.LoadMessages(ctx, sid)
+				out := make([]json.RawMessage, len(ms))
+				for i, m := range ms {
+					out[i] = m.Content
+				}
+				return out, err
+			},
+		},
+		{
+			saSurface: depl, msgTable: "deployed_messages",
+			appendUser: func(ctx context.Context, m types.ChatMessage) ([]llm.ArtifactRefBlock, error) {
+				return dr.AppendUserTurn(ctx, types.DeployedMessage{ID: m.ID, SessionID: m.SessionID, AgentVersionID: deployedVersion, Role: m.Role, Content: m.Content, Seq: m.Seq})
+			},
+			appendTool: func(ctx context.Context, m types.ChatMessage, refs []llm.ArtifactRefBlock) error {
+				return dr.AppendToolMessage(ctx, types.DeployedMessage{ID: m.ID, SessionID: m.SessionID, AgentVersionID: deployedVersion, Role: m.Role, Content: m.Content, Seq: m.Seq}, refs)
+			},
+			load: func(ctx context.Context, sid string) ([]json.RawMessage, error) {
+				ms, err := dr.LoadMessages(ctx, sid)
+				out := make([]json.RawMessage, len(ms))
+				for i, m := range ms {
+					out[i] = m.Content
+				}
+				return out, err
+			},
+		},
+	}
+}
+
+func userMsg(sid string, seq int, text string) types.ChatMessage {
+	content := `[]`
+	if text != "" {
+		content = `[{"type":"text","text":` + string(mustJSON(text)) + `}]`
+	}
+	return types.ChatMessage{ID: uuid.NewString(), SessionID: sid, Role: types.ChatRoleUser, Content: json.RawMessage(content), Seq: seq}
+}
+
+func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
+
+func contentTypes(t *testing.T, raw json.RawMessage) []string {
+	t.Helper()
+	var bs []struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &bs); err != nil {
+		t.Fatalf("content %s: %v", raw, err)
+	}
+	out := make([]string, len(bs))
+	for i, b := range bs {
+		out[i] = b.Type
+	}
+	return out
+}
+
+func TestAppendUserTurn_ClaimsInOrder(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			a, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", "a.png"), 10)
+			b, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/bb", ""), 10)
+
+			msg := userMsg(sid, 1, "summarise")
+			refs, err := s.appendUser(ctx, msg)
+			if err != nil {
+				t.Fatalf("AppendUserTurn: %v", err)
+			}
+			if len(refs) != 2 || refs[0].URI != a.URI || refs[1].URI != b.URI || refs[0].Filename != "a.png" {
+				t.Fatalf("refs = %+v", refs)
+			}
+			if refs[0].MIME != a.MIME || refs[0].SizeBytes != a.SizeBytes || refs[0].Sha256 != a.Sha256 || refs[0].StoreID != "MAIN" {
+				t.Fatalf("ref fields differ from row: %+v vs %+v", refs[0], a)
+			}
+			contents, _ := s.load(ctx, sid)
+			if got := contentTypes(t, contents[0]); len(got) != 3 || got[0] != "text" || got[1] != "artifact_ref" || got[2] != "artifact_ref" {
+				t.Fatalf("persisted types = %v", got)
+			}
+			var n int
+			_ = s.db.QueryRow(`SELECT COUNT(*) FROM `+s.table+` WHERE session_id=$1::uuid AND message_id=$2::uuid`, sid, msg.ID).Scan(&n)
+			if n != 2 {
+				t.Fatalf("rows claimed by message = %d, want 2", n)
+			}
+			if list, _ := s.store.ListPendingArtifacts(ctx, sid); len(list) != 0 {
+				t.Fatalf("still pending: %+v", list)
+			}
+		})
+	}
+}
+
+func TestAppendUserTurn_NoPending_PersistsAsBefore(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			refs, err := s.appendUser(ctx, userMsg(sid, 1, "hi"))
+			if err != nil || len(refs) != 0 {
+				t.Fatalf("refs=%v err=%v", refs, err)
+			}
+			contents, _ := s.load(ctx, sid)
+			if got := contentTypes(t, contents[0]); len(got) != 1 || got[0] != "text" {
+				t.Fatalf("types = %v", got)
+			}
+		})
+	}
+}
+
+func TestAppendUserTurn_ArtifactOnly_Accepted(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			_, _ = s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			if _, err := s.appendUser(ctx, userMsg(sid, 1, "")); err != nil {
+				t.Fatalf("AppendUserTurn: %v", err)
+			}
+			contents, _ := s.load(ctx, sid)
+			if got := contentTypes(t, contents[0]); len(got) != 1 || got[0] != "artifact_ref" {
+				t.Fatalf("types = %v", got)
+			}
+		})
+	}
+}
+
+func TestAppendUserTurn_Empty_PersistsNothing(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			if _, err := s.appendUser(ctx, userMsg(sid, 1, "")); !errors.Is(err, types.ErrEmptyTurn) {
+				t.Fatalf("err=%v, want ErrEmptyTurn", err)
+			}
+			if contents, _ := s.load(ctx, sid); len(contents) != 0 {
+				t.Fatalf("persisted %d messages", len(contents))
+			}
+		})
+	}
+}
+
+func TestAppendUserTurn_ConcurrentTurnsClaimOnce(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			_, _ = s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			var wg sync.WaitGroup
+			total := make([]int, 2)
+			errs := make([]error, 2)
+			for i := 0; i < 2; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					refs, err := s.appendUser(ctx, userMsg(sid, i+1, "go"))
+					total[i], errs[i] = len(refs), err
+				}(i)
+			}
+			wg.Wait()
+			if errs[0] != nil || errs[1] != nil {
+				t.Fatalf("errs: %v", errs)
+			}
+			if total[0]+total[1] != 1 {
+				t.Fatalf("ref claimed %d times, want exactly 1", total[0]+total[1])
+			}
+			contents, _ := s.load(ctx, sid)
+			refBlocks := 0
+			for _, c := range contents {
+				for _, ty := range contentTypes(t, c) {
+					if ty == "artifact_ref" {
+						refBlocks++
+					}
+				}
+			}
+			if refBlocks != 1 {
+				t.Fatalf("artifact_ref blocks across messages = %d, want 1", refBlocks)
+			}
+		})
+	}
+}
+
+// DELETE racing a claim: either the delete wins (claim gets nothing) or the
+// claim wins (delete gets ErrArtifactConsumed). Never both, never neither.
+func TestDeleteVsClaim_ExactlyOneWins(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			for i := 0; i < 20; i++ {
+				sid := s.newSession(t)
+				a, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
+				var wg sync.WaitGroup
+				var delErr, turnErr error
+				var claimed int
+				wg.Add(2)
+				go func() { defer wg.Done(); delErr = s.store.DeletePendingArtifact(ctx, sid, a.ID) }()
+				go func() {
+					defer wg.Done()
+					refs, err := s.appendUser(ctx, userMsg(sid, 1, "go"))
+					claimed, turnErr = len(refs), err
+				}()
+				wg.Wait()
+				if turnErr != nil {
+					t.Fatalf("turn: %v", turnErr)
+				}
+				deleted := delErr == nil
+				if deleted == (claimed == 1) {
+					t.Fatalf("iteration %d: deleted=%v claimed=%d delErr=%v", i, deleted, claimed, delErr)
+				}
+				if !deleted && !errors.Is(delErr, types.ErrArtifactConsumed) {
+					t.Fatalf("delete lost with %v, want ErrArtifactConsumed", delErr)
+				}
+			}
+		})
+	}
+}
+
+func TestAppendToolMessage_WritesRowsAtomically(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			ref := llm.ArtifactRefBlock{StoreID: "MAIN", URI: "sha256/cc", MIME: "image/png", SizeBytes: 9, Sha256: "cc"}
+			msg := types.ChatMessage{ID: uuid.NewString(), SessionID: sid, Role: types.ChatRoleTool, Seq: 1,
+				Content: json.RawMessage(`[{"type":"tool_result","tool_use_id":"t1","content":{},"is_error":false},{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/cc","mime":"image/png","size_bytes":9,"sha256":"cc"}]`)}
+			if err := s.appendTool(ctx, msg, []llm.ArtifactRefBlock{ref, ref}); err != nil {
+				t.Fatalf("AppendToolMessage: %v", err)
+			}
+			var n int
+			_ = s.db.QueryRow(`SELECT COUNT(*) FROM `+s.table+` WHERE session_id=$1::uuid AND origin='tool_result' AND message_id=$2::uuid`, sid, msg.ID).Scan(&n)
+			if n != 2 {
+				t.Fatalf("tool_result rows = %d, want 2 (same ref twice = two records)", n)
+			}
+			if _, err := s.store.LookupSessionArtifact(ctx, sid, "MAIN", "sha256/cc"); err != nil {
+				t.Fatalf("tool-result ref not retrievable: %v", err)
+			}
+			// A failing row insert (NUL byte is invalid in Postgres text) rolls back the message.
+			bad := llm.ArtifactRefBlock{StoreID: "MAIN", URI: "sha256/\x00", MIME: "image/png", SizeBytes: 1, Sha256: "x"}
+			msg2 := msg
+			msg2.ID, msg2.Seq = uuid.NewString(), 2
+			if err := s.appendTool(ctx, msg2, []llm.ArtifactRefBlock{bad}); err == nil {
+				t.Fatal("expected row insert failure")
+			}
+			var m int
+			_ = s.db.QueryRow(`SELECT COUNT(*) FROM `+s.msgTable+` WHERE id=$1::uuid`, msg2.ID).Scan(&m)
+			if m != 0 {
+				t.Fatal("tool message persisted although its row insert failed")
+			}
+		})
+	}
+}
