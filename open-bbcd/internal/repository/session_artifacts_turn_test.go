@@ -288,3 +288,59 @@ func TestAppendToolMessage_WritesRowsAtomically(t *testing.T) {
 		})
 	}
 }
+
+// Claim order is (created_at, id), not heap/return order of the UPDATE.
+func TestAppendUserTurn_ClaimOrderIsCreatedAtNotHeap(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			a, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			b, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/bb", ""), 10)
+			// Make B older than A while heap order stays A, B.
+			if _, err := s.db.Exec(`UPDATE `+s.table+` SET created_at = now() - interval '1 minute' WHERE id = $1::uuid`, b.ID); err != nil {
+				t.Fatal(err)
+			}
+			refs, err := s.appendUser(ctx, userMsg(sid, 1, "go"))
+			if err != nil {
+				t.Fatalf("AppendUserTurn: %v", err)
+			}
+			if len(refs) != 2 || refs[0].URI != b.URI || refs[1].URI != a.URI {
+				t.Fatalf("refs = %+v, want [B, A]", refs)
+			}
+			contents, _ := s.load(ctx, sid)
+			var blocks []struct {
+				Type string `json:"type"`
+				URI  string `json:"uri"`
+			}
+			if err := json.Unmarshal(contents[0], &blocks); err != nil {
+				t.Fatal(err)
+			}
+			if len(blocks) != 3 || blocks[1].URI != b.URI || blocks[2].URI != a.URI {
+				t.Fatalf("persisted blocks = %+v, want text, B, A", blocks)
+			}
+		})
+	}
+}
+
+// A failing message insert (duplicate seq) must roll the claim back.
+func TestAppendUserTurn_MessageInsertFailureRollsBackClaim(t *testing.T) {
+	for _, s := range turnSurfaces(t) {
+		t.Run(s.name, func(t *testing.T) {
+			ctx := context.Background()
+			sid := s.newSession(t)
+			_, _ = s.store.CommitUpload(ctx, pendingRow(sid, "sha256/aa", ""), 10)
+			if _, err := s.appendUser(ctx, userMsg(sid, 1, "first")); err != nil {
+				t.Fatalf("first turn: %v", err)
+			}
+			b, _ := s.store.CommitUpload(ctx, pendingRow(sid, "sha256/bb", ""), 10)
+			if _, err := s.appendUser(ctx, userMsg(sid, 1, "dup seq")); err == nil {
+				t.Fatal("expected UNIQUE(session_id, seq) violation")
+			}
+			list, _ := s.store.ListPendingArtifacts(ctx, sid)
+			if len(list) != 1 || list[0].ID != b.ID || list[0].MessageID != "" {
+				t.Fatalf("pending after failed turn = %+v, want B still pending", list)
+			}
+		})
+	}
+}
