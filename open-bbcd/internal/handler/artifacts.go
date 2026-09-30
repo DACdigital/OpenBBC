@@ -143,8 +143,9 @@ func (h *ArtifactHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	// Content-Type from the multipart header, falling back to a generic
-	// value if the client didn't send one. Deployers can post-process
-	// with a stricter allowlist if they want; framework accepts anything.
+	// value if the client didn't send one. This is only a hint:
+	// artifacts.ResolveMIME decides the stored label below (native-render
+	// types are verified against the bytes). The framework accepts anything.
 	mime := header.Header.Get("Content-Type")
 	if mime == "" {
 		mime = "application/octet-stream"
@@ -234,7 +235,7 @@ func hashAndBuffer(r io.Reader, maxBytes int64) (data []byte, sum []byte, err er
 	for {
 		n, readErr := r.Read(buf)
 		if n > 0 {
-			if int64(b.Len()+n) > maxBytes {
+			if int64(b.Len())+int64(n) > maxBytes {
 				return nil, nil, errMaxSizeExceeded
 			}
 			_, _ = h.Write(buf[:n])

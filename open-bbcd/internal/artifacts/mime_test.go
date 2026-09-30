@@ -30,6 +30,7 @@ func TestResolveMIME(t *testing.T) {
 		{"text bytes declared png", "image/png", []byte("definitely not an image"), "application/octet-stream"},
 		{"truncated PNG", "image/png", png[:20], "application/octet-stream"},
 		{"pdf declared octet-stream", "application/octet-stream", []byte("%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"), "application/pdf"},
+		{"text bytes declared pdf", "application/pdf", []byte("not a pdf"), "application/octet-stream"},
 		{"docx keeps declared office mime", docx, []byte("PK\x03\x04\x14\x00\x06\x00"), docx},
 		{"declared params stripped and lower-cased", "Text/CSV; charset=utf-8", []byte("a,b\n1,2\n"), "text/csv"},
 		{"absent declared on text", "", []byte("hello"), "application/octet-stream"},

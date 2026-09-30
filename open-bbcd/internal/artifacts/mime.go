@@ -51,6 +51,7 @@ func ResolveMIME(declared string, data []byte) string {
 		return d
 	}
 	if strings.HasPrefix(mime, "image/") {
+		// Validates the image header only, not full decodability.
 		if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
 			return mimeOctetStream
 		}
