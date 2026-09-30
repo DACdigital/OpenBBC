@@ -503,14 +503,7 @@ func parseBlocks(raw []json.RawMessage) []llm.Block {
 			_ = json.Unmarshal(r, &b)
 			out = append(out, llm.ToolResultBlock{ToolUseID: b.ToolUseID, Result: b.Content, IsError: b.IsError})
 		case "artifact_ref":
-			var b struct {
-				StoreID   string `json:"store_id"`
-				URI       string `json:"uri"`
-				MIME      string `json:"mime"`
-				SizeBytes int64  `json:"size_bytes"`
-				Sha256    string `json:"sha256"`
-				Filename  string `json:"filename"`
-			}
+			var b types.ArtifactRefContent
 			_ = json.Unmarshal(r, &b)
 			out = append(out, llm.ArtifactRefBlock{
 				StoreID:   b.StoreID,
@@ -526,7 +519,7 @@ func parseBlocks(raw []json.RawMessage) []llm.Block {
 }
 
 func blocksToJSON(blocks []llm.Block) (json.RawMessage, error) {
-	out := make([]map[string]any, 0, len(blocks))
+	out := make([]any, 0, len(blocks))
 	for _, b := range blocks {
 		switch x := b.(type) {
 		case llm.TextBlock:
@@ -546,18 +539,15 @@ func blocksToJSON(blocks []llm.Block) (json.RawMessage, error) {
 				"is_error":    x.IsError,
 			})
 		case llm.ArtifactRefBlock:
-			m := map[string]any{
-				"type":       "artifact_ref",
-				"store_id":   x.StoreID,
-				"uri":        x.URI,
-				"mime":       x.MIME,
-				"size_bytes": x.SizeBytes,
-				"sha256":     x.Sha256,
-			}
-			if x.Filename != "" {
-				m["filename"] = x.Filename
-			}
-			out = append(out, m)
+			out = append(out, types.ArtifactRefContent{
+				Type:      "artifact_ref",
+				StoreID:   x.StoreID,
+				URI:       x.URI,
+				MIME:      x.MIME,
+				SizeBytes: x.SizeBytes,
+				Sha256:    x.Sha256,
+				Filename:  x.Filename,
+			})
 		case llm.InlineMediaBlock:
 			return nil, ErrInlineMediaNotPersistable
 		}
