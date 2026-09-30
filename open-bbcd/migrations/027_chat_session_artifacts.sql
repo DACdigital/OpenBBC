@@ -6,7 +6,11 @@
 -- message carrying the ref. message_id is deliberately not an FK: messages
 -- and rows are removed together by the session cascade.
 --
--- Additive only; no backfill (PR #53 never persisted refs).
+-- Additive, plus a backfill: PR #54 (Plan 1) already persisted artifact_ref
+-- blocks on BO tool-role chat_messages, and retrieval is now a row lookup, so
+-- without rows those refs would 404 after upgrade. Each such block becomes
+-- one origin='tool_result' row bound to its message. User-role refs were
+-- never persisted before this migration, so there is nothing else to fill.
 
 -- +goose Up
 CREATE TABLE chat_session_artifacts (
@@ -39,6 +43,27 @@ CREATE INDEX idx_chat_session_artifacts_pending
 -- Retrieval allow-list lookup.
 CREATE INDEX idx_chat_session_artifacts_lookup
     ON chat_session_artifacts (session_id, store_id, uri);
+
+-- Backfill (see header). Blocks without store_id/uri cannot be looked up and
+-- are skipped; missing metadata gets the same defaults a fresh row could
+-- carry. The markers let the repository test run this exact statement.
+-- backfill:begin
+INSERT INTO chat_session_artifacts
+    (session_id, origin, store_id, uri, mime, size_bytes, sha256, filename, message_id, created_at, updated_at)
+SELECT m.session_id, 'tool_result', b->>'store_id', b->>'uri',
+       COALESCE(b->>'mime', 'application/octet-stream'),
+       COALESCE((b->>'size_bytes')::bigint, 0),
+       COALESCE(b->>'sha256', ''),
+       NULLIF(b->>'filename', ''),
+       m.id, m.created_at, m.created_at
+FROM chat_messages m
+CROSS JOIN LATERAL jsonb_array_elements(
+    CASE WHEN jsonb_typeof(m.content) = 'array' THEN m.content ELSE '[]'::jsonb END) AS b
+WHERE m.role = 'tool'
+  AND b->>'type' = 'artifact_ref'
+  AND COALESCE(b->>'store_id', '') <> ''
+  AND COALESCE(b->>'uri', '') <> '';
+-- backfill:end
 
 -- +goose Down
 DROP TABLE chat_session_artifacts;

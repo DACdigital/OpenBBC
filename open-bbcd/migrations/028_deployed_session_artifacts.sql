@@ -6,7 +6,9 @@
 -- message carrying the ref. message_id is deliberately not an FK: messages
 -- and rows are removed together by the session cascade.
 --
--- Additive only; no backfill (PR #53 never persisted refs).
+-- Additive only; no backfill. Unlike BO (027), Plan 1 (PR #54) never wired
+-- the deployed orchestrator to the artifact registry, so no deployed_messages
+-- row can carry an artifact_ref block.
 
 -- +goose Up
 CREATE TABLE deployed_session_artifacts (
