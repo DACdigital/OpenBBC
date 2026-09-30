@@ -33,15 +33,21 @@ func retrieveBytes(t *testing.T, mime string, payload []byte) *httptest.Response
 }
 
 func TestRetrieve_BytesHeaders(t *testing.T) {
+	// Native-render types keep their MIME and render inline; everything
+	// else is served as octet-stream so a browser never executes it (e.g.
+	// text/javascript via <script src>, text/css via <link>).
 	cases := []struct {
 		mime        string
 		disposition string
+		contentType string
 	}{
-		{"image/png", "inline"},
-		{"application/pdf", "inline"},
-		{"application/zip", "attachment"},
-		{"text/html", "attachment"},
-		{"", "attachment"},
+		{"image/png", "inline", "image/png"},
+		{"application/pdf", "inline", "application/pdf"},
+		{"application/zip", "attachment", "application/octet-stream"},
+		{"text/html", "attachment", "application/octet-stream"},
+		{"text/javascript", "attachment", "application/octet-stream"},
+		{"text/css", "attachment", "application/octet-stream"},
+		{"", "attachment", "application/octet-stream"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.mime, func(t *testing.T) {
@@ -52,12 +58,8 @@ func TestRetrieve_BytesHeaders(t *testing.T) {
 			if got := rec.Header().Get("Content-Disposition"); got != tc.disposition {
 				t.Errorf("Content-Disposition = %q, want %q", got, tc.disposition)
 			}
-			wantCT := tc.mime
-			if wantCT == "" {
-				wantCT = "application/octet-stream"
-			}
-			if got := rec.Header().Get("Content-Type"); got != wantCT {
-				t.Errorf("Content-Type = %q, want %q", got, wantCT)
+			if got := rec.Header().Get("Content-Type"); got != tc.contentType {
+				t.Errorf("Content-Type = %q, want %q", got, tc.contentType)
 			}
 		})
 	}

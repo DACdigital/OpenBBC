@@ -384,9 +384,13 @@ func (h *ArtifactHandler) HandleRetrieve(w http.ResponseWriter, r *http.Request)
 		// session-scope check nor Get reports a size here. Filename is
 		// likewise unknown at this point, so Content-Disposition carries
 		// no filename parameter.
-		ct := mime
-		if ct == "" {
-			ct = "application/octet-stream"
+		//
+		// Non-native types are served as octet-stream: a tool can label
+		// bytes text/javascript or text/css, which a browser would run
+		// via <script src>/<link> despite Content-Disposition: attachment.
+		ct := "application/octet-stream"
+		if artifacts.IsNativeRenderMIME(mime) {
+			ct = mime
 		}
 		w.Header().Set("Content-Type", ct)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
