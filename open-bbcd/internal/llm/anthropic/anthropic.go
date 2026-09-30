@@ -330,14 +330,20 @@ func base64Len(n int64) int64 { return ((n + 2) / 3) * 4 }
 // fits the per-block limits. Shared by SupportsNative and
 // RenderArtifactAsBlock; never fetches.
 func nativeRenderable(ref llm.ArtifactRefBlock) bool {
-	size := base64Len(ref.SizeBytes)
+	limit := base64Limit(ref.MIME)
+	return limit > 0 && base64Len(ref.SizeBytes) <= limit
+}
+
+// base64Limit returns the per-block base64 byte limit for a natively
+// supported MIME, or 0 when the MIME is unsupported.
+func base64Limit(mime string) int64 {
 	switch {
-	case supportedImageMIMEs[ref.MIME]:
-		return size <= maxImageBase64Bytes
-	case ref.MIME == "application/pdf":
-		return size <= maxRequestMediaBytes
+	case supportedImageMIMEs[mime]:
+		return maxImageBase64Bytes
+	case mime == "application/pdf":
+		return maxRequestMediaBytes
 	}
-	return false
+	return 0
 }
 
 // SupportsNative implements llm.MultimodalRenderer. Must not fetch.
@@ -367,6 +373,10 @@ func (l *LLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBloc
 	bytes, err := fetchBytes(ctx, ref.URI, fetch)
 	if err != nil {
 		return nil, err
+	}
+	// Re-check on actual bytes: the declared SizeBytes may be wrong.
+	if base64Len(int64(len(bytes))) > base64Limit(ref.MIME) {
+		return nil, llm.ErrUnsupported
 	}
 	return llm.InlineMediaBlock{MIME: ref.MIME, Data: bytes}, nil
 }

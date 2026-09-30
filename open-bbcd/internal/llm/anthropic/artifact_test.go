@@ -209,6 +209,9 @@ func TestSupportsNative_Limits(t *testing.T) {
 	}{
 		{"png within limit", llm.ArtifactRefBlock{MIME: "image/png", SizeBytes: 1_000_000}, true},
 		{"png over limit", llm.ArtifactRefBlock{MIME: "image/png", SizeBytes: 3_750_001}, false},
+		{"png exact boundary", llm.ArtifactRefBlock{MIME: "image/png", SizeBytes: 3_750_000}, true},
+		{"pdf exact boundary", llm.ArtifactRefBlock{MIME: "application/pdf", SizeBytes: 18_874_368}, true},
+		{"pdf just over boundary", llm.ArtifactRefBlock{MIME: "application/pdf", SizeBytes: 18_874_369}, false},
 		{"pdf within budget", llm.ArtifactRefBlock{MIME: "application/pdf", SizeBytes: 10 << 20}, true},
 		{"pdf over budget", llm.ArtifactRefBlock{MIME: "application/pdf", SizeBytes: 19 << 20}, false},
 		{"zip", llm.ArtifactRefBlock{MIME: "application/zip", SizeBytes: 10}, false},
@@ -253,5 +256,30 @@ func TestConvertMessage_ToolRole_ToolResultsFirst(t *testing.T) {
 	want := []string{"tool_result", "tool_result", "image"}
 	if got.Role != "user" || strings.Join(kinds, ",") != strings.Join(want, ",") {
 		t.Fatalf("role=%s blocks=%v, want user %v", got.Role, kinds, want)
+	}
+}
+
+func TestRenderArtifactAsBlock_ActualBytesOverLimitIsUnsupported(t *testing.T) {
+	l := New(config.AnthropicConfig{APIKey: "test"})
+	f := &stubFetcher{delivery: 0, bytes: make([]byte, 3_750_001)}
+	_, err := l.RenderArtifactAsBlock(context.Background(), llm.ArtifactRefBlock{
+		StoreID: "MAIN", URI: "sha256/lie", MIME: "image/png", SizeBytes: 0,
+	}, f)
+	if !errors.Is(err, llm.ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrUnsupported", err)
+	}
+}
+
+func TestRenderArtifactAsBlock_PDFOverLimitIsUnsupported(t *testing.T) {
+	l := New(config.AnthropicConfig{APIKey: "test"})
+	f := &stubFetcher{delivery: 0, bytes: []byte("x")}
+	_, err := l.RenderArtifactAsBlock(context.Background(), llm.ArtifactRefBlock{
+		StoreID: "MAIN", URI: "sha256/pdf", MIME: "application/pdf", SizeBytes: 18_874_369,
+	}, f)
+	if !errors.Is(err, llm.ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrUnsupported", err)
+	}
+	if f.getCalls != 0 {
+		t.Fatal("over-limit ref must not be fetched")
 	}
 }
