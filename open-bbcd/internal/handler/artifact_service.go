@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -102,11 +103,13 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 		Error(w, err)
 		return
 	}
+	// ResolveMIME cleans the declared label (NUL/control/invalid UTF-8).
 	declared := header.Header.Get("Content-Type")
 	if declared == "" {
 		declared = "application/octet-stream"
 	}
 	mime := artifacts.ResolveMIME(declared, data)
+	filename := cleanFilename(header.Filename)
 	sha := hex.EncodeToString(sum)
 	uri := "sha256/" + sha
 
@@ -148,7 +151,7 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 		MIME:      mime,
 		SizeBytes: int64(len(data)),
 		Sha256:    sha,
-		Filename:  header.Filename,
+		Filename:  filename,
 	}, s.maxPending)
 	if err != nil {
 		s.fail(w, "commit upload", err, slog.String("session_id", sessionID),
@@ -156,6 +159,24 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 		return
 	}
 	JSON(w, http.StatusCreated, pendingArtifactFrom(row))
+}
+
+// maxFilenameBytes caps a stored upload filename.
+const maxFilenameBytes = 255
+
+// cleanFilename makes the multipart filename storable: Postgres TEXT rejects
+// NUL and invalid UTF-8, so those and other control characters are dropped,
+// and the result is capped at maxFilenameBytes on a rune boundary.
+func cleanFilename(name string) string {
+	name = artifacts.CleanText(name)
+	if len(name) <= maxFilenameBytes {
+		return name
+	}
+	cut := maxFilenameBytes
+	for cut > 0 && !utf8.RuneStart(name[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(name[:cut])
 }
 
 // listPending writes {"pending_artifacts":[…]} in claim order.

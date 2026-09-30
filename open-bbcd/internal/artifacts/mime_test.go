@@ -34,6 +34,9 @@ func TestResolveMIME(t *testing.T) {
 		{"docx keeps declared office mime", docx, []byte("PK\x03\x04\x14\x00\x06\x00"), docx},
 		{"declared params stripped and lower-cased", "Text/CSV; charset=utf-8", []byte("a,b\n1,2\n"), "text/csv"},
 		{"absent declared on text", "", []byte("hello"), "application/octet-stream"},
+		{"NUL and controls stripped from declared", "text/c\x00s\x01v", []byte("a,b\n"), "text/csv"},
+		{"invalid UTF-8 stripped from declared", "text/\xffcsv", []byte("a,b\n"), "text/csv"},
+		{"declared only NUL", "\x00", []byte("hello"), "application/octet-stream"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
@@ -572,5 +573,68 @@ func TestUpload_ResolvesMIMEFromBytes(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
 	if got.MIME != "image/png" {
 		t.Fatalf("MIME = %q, want image/png (resolved from bytes)", got.MIME)
+	}
+}
+
+// Postgres TEXT rejects NUL and invalid UTF-8 (22021); the upload must clean
+// the client-supplied filename and declared MIME before CommitUpload rather
+// than 500 after the Put. A raw NUL or control byte in a part header is
+// refused by the multipart parser, but RFC 2231 filename* percent-encoding
+// decodes to any byte, so the filename cases go through that.
+func TestUpload_SanitisesFilenameAndDeclaredMIME(t *testing.T) {
+	long := strings.Repeat("é", 200) + ".txt" // 404 bytes
+	cases := []struct {
+		name, disposition, declared, wantFilename, wantMIME string
+	}{
+		{"NUL in filename", `filename*=UTF-8''a%00b.png`, "text/plain", "ab.png", "text/plain"},
+		{"invalid UTF-8 in filename", `filename*=UTF-8''a%FFb.png`, "text/plain", "ab.png", "text/plain"},
+		{"control chars and padding", `filename*=UTF-8''%20a%01%7Fb%C2%85.txt%09`, "text/plain", "ab.txt", "text/plain"},
+		{"invalid UTF-8 in declared MIME", `filename="a.txt"`, "text/pl\xffain", "a.txt", "text/plain"},
+		{"over-long filename capped rune-safe", `filename="` + long + `"`, "text/plain", strings.Repeat("é", 127), "text/plain"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL}
+			reg := buildRegistry(t, store)
+			sessions := &fakeSessionStore{sessions: map[string]*types.ChatSession{"s1": {ID: "s1", AgentVersionID: "v1"}}}
+			rows := &memRows{}
+			h := NewArtifactHandler(sessions, rows, reg, 10, 10, nil)
+
+			var buf bytes.Buffer
+			mw := multipart.NewWriter(&buf)
+			fw, err := mw.CreatePart(map[string][]string{
+				"Content-Disposition": {`form-data; name="file"; ` + tc.disposition},
+				"Content-Type":        {tc.declared},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = fw.Write([]byte("hello world"))
+			_ = mw.Close()
+			req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", &buf)
+			req.Header.Set("Content-Type", mw.FormDataContentType())
+			req.SetPathValue("version_id", "v1")
+			req.SetPathValue("session_id", "s1")
+			rec := httptest.NewRecorder()
+
+			h.HandleUpload(rec, req)
+
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+			}
+			if len(rows.rows) != 1 {
+				t.Fatalf("committed %d rows, want 1", len(rows.rows))
+			}
+			got := rows.rows[0]
+			if got.Filename != tc.wantFilename {
+				t.Errorf("committed filename = %q, want %q", got.Filename, tc.wantFilename)
+			}
+			if got.MIME != tc.wantMIME {
+				t.Errorf("committed MIME = %q, want %q", got.MIME, tc.wantMIME)
+			}
+			if !utf8.ValidString(got.Filename) || len(got.Filename) > 255 {
+				t.Errorf("filename not valid/capped: %q (%d bytes)", got.Filename, len(got.Filename))
+			}
+		})
 	}
 }
