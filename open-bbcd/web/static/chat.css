@@ -409,8 +409,9 @@
 .artifact-chip-remove { border: 0; background: none; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0; }
 
 .artifact-link { display: inline-block; margin: 0.2rem 0.4rem 0.2rem 0; padding: 0.15rem 0.5rem; border: 1px solid var(--border, #ccc); border-radius: 6px; font-size: 0.85rem; text-decoration: none; max-width: 28rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.artifact-link, .artifact-link:visited { color: #58a6ff; }
 .artifact-link:hover { text-decoration: underline; }
-.artifact-link-disabled { opacity: 0.6; cursor: default; }
+.artifact-link-disabled, .artifact-link-disabled:visited { color: #8b949e; opacity: 0.8; cursor: default; }
 .artifact-link-disabled:hover { text-decoration: none; }
 .user-attachments { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
 .artifact-chip-sent { opacity: 0.85; }

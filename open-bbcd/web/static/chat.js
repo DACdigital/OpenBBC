@@ -177,8 +177,23 @@
     }
     el.setAttribute('title', label);
     el.textContent = `\u{1F4CE} ${label}`;
+    flushDisplayBuf();
     currentAssistantTurn.content.appendChild(el);
     scheduleScroll();
+  }
+
+  // Paint any text still waiting in the typewriter buffer right now, so a
+  // block appended next lands after it, not before.
+  function flushDisplayBuf() {
+    if (!currentAssistantTurn || displayBuf.length === 0) return;
+    const last = currentAssistantTurn.content.lastChild;
+    if (last !== currentAssistantTurn.stream) {
+      const seg = newStreamSegment();
+      currentAssistantTurn.content.appendChild(seg);
+      currentAssistantTurn.stream = seg;
+    }
+    currentAssistantTurn.stream.firstChild.data += displayBuf;
+    displayBuf = '';
   }
 
   // RUN_STARTED is emitted only after the user turn committed, so the pending
