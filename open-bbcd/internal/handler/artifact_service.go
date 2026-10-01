@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -68,12 +69,11 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 	ctx := r.Context()
 	maxBytes := int64(s.maxUploadMB) << 20
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	// Stream the parts: only the file part is read, straight into
-	// hashAndBuffer, so the request holds one copy of the file.
+	// Stream the parts: the file part is read straight into hashAndBuffer,
+	// so the request holds one copy of the file.
 	mr, err := r.MultipartReader()
 	if err != nil {
-		s.logger.Info("artifact upload: malformed multipart", slog.Bool("max_bytes", false))
-		http.Error(w, "malformed multipart body", http.StatusBadRequest)
+		s.rejectBody(w, err)
 		return
 	}
 	var part *multipart.Part
@@ -84,14 +84,7 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 			return
 		}
 		if err != nil {
-			if isMaxBytesError(err) {
-				http.Error(w, "upload exceeds ARTIFACT_MAX_UPLOAD_MB", http.StatusRequestEntityTooLarge)
-				return
-			}
-			// The parser error can echo the part's Content-Disposition line,
-			// which carries the filename: log a fixed message only.
-			s.logger.Info("artifact upload: malformed multipart", slog.Bool("max_bytes", false))
-			http.Error(w, "malformed multipart body", http.StatusBadRequest)
+			s.rejectBody(w, err)
 			return
 		}
 		// As FormFile did: a "file" part without a filename is a plain
@@ -113,17 +106,25 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 	storeID := s.registry.DefaultID()
 
 	// 1. Read: hash + buffer, resolve MIME. No DB access.
-	data, sum, err := hashAndBuffer(part, maxBytes)
+	// The request Content-Length (body plus multipart framing) bounds the
+	// file size, so it pre-sizes the buffer when it is within the cap.
+	data, sum, err := hashAndBuffer(part, maxBytes, r.ContentLength)
 	if err != nil {
-		if errors.Is(err, errMaxSizeExceeded) || isMaxBytesError(err) {
-			http.Error(w, "upload exceeds ARTIFACT_MAX_UPLOAD_MB", http.StatusRequestEntityTooLarge)
+		s.rejectBody(w, err)
+		return
+	}
+	// Read the rest of the body before any store or DB call, as
+	// ParseMultipartForm did: an over-cap or malformed tail fails the upload.
+	for {
+		p, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			s.rejectBody(w, err)
 			return
 		}
-		// Any other read error is the client body breaking off inside
-		// the part (the part reads straight from the request body).
-		s.logger.Info("artifact upload: malformed multipart", slog.Bool("max_bytes", false))
-		http.Error(w, "malformed multipart body", http.StatusBadRequest)
-		return
+		_ = p.Close()
 	}
 	// ResolveMIME cleans the declared label (NUL/control/invalid UTF-8).
 	declared := part.Header.Get("Content-Type")
@@ -181,6 +182,20 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 		return
 	}
 	JSON(w, http.StatusCreated, pendingArtifactFrom(row))
+}
+
+// rejectBody answers a request body that failed to read or parse: 413 when it
+// hit the upload cap, else 400. Multipart errors can echo the part's
+// Content-Disposition line (the filename), so only the error's type is logged.
+func (s *artifactService) rejectBody(w http.ResponseWriter, err error) {
+	if errors.Is(err, errMaxSizeExceeded) || isMaxBytesError(err) {
+		http.Error(w, "upload exceeds ARTIFACT_MAX_UPLOAD_MB", http.StatusRequestEntityTooLarge)
+		return
+	}
+	s.logger.Info("artifact upload: malformed multipart",
+		slog.Bool("unexpected_eof", errors.Is(err, io.ErrUnexpectedEOF)),
+		slog.String("err_type", fmt.Sprintf("%T", err)))
+	http.Error(w, "malformed multipart body", http.StatusBadRequest)
 }
 
 // maxFilenameBytes caps a stored upload filename.

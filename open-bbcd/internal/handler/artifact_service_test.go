@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -495,6 +497,81 @@ func TestUpload_TruncatedFilePart_400(t *testing.T) {
 	}
 }
 
+// fileThen returns a multipart body: the "file" part ("hello"), then tail
+// written raw after it (tail must supply its own boundaries).
+func fileThen(t *testing.T, tail func(w *bytes.Buffer, boundary string)) (*bytes.Buffer, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreatePart(multipartHeader("a.txt", "text/plain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fw.Write([]byte("hello"))
+	tail(&buf, mw.Boundary())
+	return &buf, mw.FormDataContentType()
+}
+
+func (b *boHarness) assertUntouched(t *testing.T) {
+	t.Helper()
+	if b.store.statCalls != 0 || b.store.putCalls != 0 || b.rows.commits != 0 {
+		t.Fatalf("store/DB touched: stat %d put %d commits %d", b.store.statCalls, b.store.putCalls, b.rows.commits)
+	}
+}
+
+// The whole body is read before the store or DB is called: a tail after the
+// file part that is over the cap or malformed fails the upload as before.
+func TestUpload_TailAfterFilePart(t *testing.T) {
+	cases := []struct {
+		name string
+		tail func(w *bytes.Buffer, boundary string)
+		want int
+	}{
+		{"over-cap text field", func(w *bytes.Buffer, bd string) {
+			w.WriteString("\r\n--" + bd + "\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\n")
+			w.WriteString(strings.Repeat("x", 2<<20))
+			w.WriteString("\r\n--" + bd + "--\r\n")
+		}, http.StatusRequestEntityTooLarge},
+		{"no closing boundary", func(w *bytes.Buffer, bd string) {
+			w.WriteString("\r\n--" + bd)
+		}, http.StatusBadRequest},
+		{"part with a bad header", func(w *bytes.Buffer, bd string) {
+			w.WriteString("\r\n--" + bd + "\r\nthis is not a header\r\n\r\nbody")
+			w.WriteString("\r\n--" + bd + "--\r\n")
+		}, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBOHarness(t, 10) // maxUploadMB = 1
+			body, mct := fileThen(t, tc.tail)
+			rec := b.postUpload(body, mct)
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.want, rec.Body.String())
+			}
+			b.assertUntouched(t)
+		})
+	}
+}
+
+// An over-cap field before the file part is refused by NextPart: 413.
+func TestUpload_OverCapFieldBeforeFile_413(t *testing.T) {
+	b := newBOHarness(t, 10) // maxUploadMB = 1
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("note", strings.Repeat("x", 2<<20))
+	fw, err := mw.CreatePart(multipartHeader("a.txt", "text/plain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fw.Write([]byte("hello"))
+	_ = mw.Close()
+	rec := b.postUpload(&buf, mw.FormDataContentType())
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	b.assertUntouched(t)
+}
+
 func TestUpload_NotMultipart_400(t *testing.T) {
 	b := newBOHarness(t, 10)
 	rec := b.postUpload(strings.NewReader("hello"), "text/plain")
@@ -506,14 +583,10 @@ func TestUpload_NotMultipart_400(t *testing.T) {
 	}
 }
 
-// raceAllocFactor is 2 under -race (race_enabled_test.go), else 1.
-var raceAllocFactor = 1.0
-
 // The upload keeps one copy of the file in memory. The old ParseMultipartForm
-// + hashAndBuffer path allocated about 5.3x the file size for 6 MiB; streaming
-// the part allocates about 2.7x, all of it hashAndBuffer's doubling growth
-// (1+2+4+8 MiB). The bound sits between the two. Under -race every figure
-// doubles (10.7x vs 5.3x), so the bound scales by raceAllocFactor.
+// + hashAndBuffer path allocated about 5.3x the file size for 6 MiB (10.7x
+// under -race); streaming the part into a buffer pre-sized from the request
+// Content-Length allocates about 1.01x in both modes.
 func TestUpload_SingleBuffer_AllocationBound(t *testing.T) {
 	const size = 6 << 20
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL, statHit: true}
@@ -545,7 +618,29 @@ func TestUpload_SingleBuffer_AllocationBound(t *testing.T) {
 	}
 	ratio := float64(after.TotalAlloc-before.TotalAlloc) / size
 	t.Logf("allocated %.2fx the file size", ratio)
-	if limit := 3 * raceAllocFactor; ratio >= limit {
-		t.Fatalf("allocated %.2fx the file size, want < %.0fx", ratio, limit)
+	if ratio >= 1.5 {
+		t.Fatalf("allocated %.2fx the file size, want < 1.5x", ratio)
+	}
+}
+
+// hashAndBuffer accepts exactly maxBytes and refuses maxBytes+1 whatever the
+// size hint (none, too small, exact, over the cap).
+func TestHashAndBuffer_CapBoundaryAndHints(t *testing.T) {
+	const max = 100 << 10
+	for _, hint := range []int64{-1, 0, 1, 4096, max, max + 1} {
+		for _, n := range []int{0, 1, max - 1, max, max + 1} {
+			data := bytes.Repeat([]byte{'z'}, n)
+			got, sum, err := hashAndBuffer(iotest.OneByteReader(bytes.NewReader(data)), max, hint)
+			if n > max {
+				if !errors.Is(err, errMaxSizeExceeded) {
+					t.Fatalf("hint %d n %d: err %v, want errMaxSizeExceeded", hint, n, err)
+				}
+				continue
+			}
+			want := sha256.Sum256(data)
+			if err != nil || !bytes.Equal(got, data) || !bytes.Equal(sum, want[:]) {
+				t.Fatalf("hint %d n %d: len %d err %v", hint, n, len(got), err)
+			}
+		}
 	}
 }
