@@ -386,3 +386,40 @@ func TestChat_MalformedSessionID_404(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildMessageViews_ArtifactRefBlocks(t *testing.T) {
+	msgs := []*types.ChatMessage{
+		{Role: types.ChatRoleUser, Content: []byte(`[{"type":"text","text":"see"},{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/ab","mime":"application/pdf","size_bytes":245678,"sha256":"ab","filename":"Q3 report.pdf"}]`)},
+		{Role: types.ChatRoleTool, Content: []byte(`[{"type":"tool_result","tool_use_id":"tu_1","content":{"ok":true}},{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/cd","mime":"image/png","size_bytes":10,"sha256":"cd"}]`)},
+	}
+	views := buildMessageViews(msgs)
+	if len(views) != 2 {
+		t.Fatalf("got %d bubbles, want 2", len(views))
+	}
+	u := views[0].Blocks[1]
+	if u.Kind != "artifact_ref" || u.ArtifactStoreID != "MAIN" || u.ArtifactURI != "sha256/ab" ||
+		u.ArtifactLabel != "Q3 report.pdf (application/pdf, 239.9 KB)" {
+		t.Errorf("user artifact block = %+v", u)
+	}
+	a := views[1].Blocks[1]
+	if a.Kind != "artifact_ref" || a.ArtifactLabel != "file (image/png, 10 B)" {
+		t.Errorf("assistant artifact block = %+v", a)
+	}
+}
+
+func TestChatView_RendersArtifactRefLinks(t *testing.T) {
+	store := &stubChatStore{messages: []*types.ChatMessage{
+		{ID: "m1", Role: types.ChatRoleUser, Content: []byte(`[{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/ab","mime":"application/pdf","size_bytes":245678,"sha256":"ab","filename":"<script>x</script>.pdf"}]`)},
+	}}
+	body := renderChatView(t, store, nil)
+	want := `<a class="artifact-link" href="/agent_versions/v/chat/` + testSID + `/artifacts/MAIN/sha256/ab" target="_blank" rel="noopener">`
+	if !strings.Contains(body, want) {
+		t.Errorf("missing link %q in:\n%s", want, body)
+	}
+	if strings.Contains(body, "<script>x</script>") {
+		t.Error("filename not escaped")
+	}
+	if !strings.Contains(body, "&lt;script&gt;x&lt;/script&gt;.pdf") {
+		t.Error("escaped filename missing")
+	}
+}

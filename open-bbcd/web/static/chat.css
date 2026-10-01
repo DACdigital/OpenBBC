@@ -405,3 +405,6 @@
 .artifact-chip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.5rem; border: 1px solid var(--border, #ccc); border-radius: 999px; font-size: 0.85rem; max-width: 20rem; }
 .artifact-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-chip-remove { border: 0; background: none; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0; }
+
+.artifact-link { display: inline-block; margin: 0.2rem 0.4rem 0.2rem 0; padding: 0.15rem 0.5rem; border: 1px solid var(--border, #ccc); border-radius: 6px; font-size: 0.85rem; text-decoration: none; max-width: 28rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.artifact-link:hover { text-decoration: underline; }

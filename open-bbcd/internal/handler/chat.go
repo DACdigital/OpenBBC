@@ -289,13 +289,18 @@ type messageView struct {
 }
 
 type blockView struct {
-	Kind         string // "text" | "tool_call" | "tool_result"
+	Kind         string // "text" | "tool_call" | "tool_result" | "artifact_ref"
 	Text         string
 	ToolName     string
 	ToolArgs     string
 	ToolResult   string
 	ToolIsError  bool
 	ToolIsMocked bool
+
+	// artifact_ref: retrieval path parts and display label.
+	ArtifactStoreID string
+	ArtifactURI     string
+	ArtifactLabel   string
 }
 
 // buildMessageViews turns persisted ChatMessage rows into UI bubbles. Each
@@ -374,6 +379,22 @@ func decodeBlocks(raw []json.RawMessage) []blockView {
 				ToolResult:   prettyJSON(b.Content),
 				ToolIsError:  b.IsError,
 				ToolIsMocked: strings.Contains(string(b.Content), `"_mocked":true`),
+			})
+		case "artifact_ref":
+			var b types.ArtifactRefContent
+			_ = json.Unmarshal(r, &b)
+			if b.StoreID == "" || b.URI == "" {
+				continue
+			}
+			name := b.Filename
+			if name == "" {
+				name = "file"
+			}
+			blocks = append(blocks, blockView{
+				Kind:            "artifact_ref",
+				ArtifactStoreID: b.StoreID,
+				ArtifactURI:     b.URI,
+				ArtifactLabel:   name + " (" + b.MIME + ", " + llm.HumanBytes(b.SizeBytes) + ")",
 			})
 		}
 	}

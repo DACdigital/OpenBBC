@@ -91,6 +91,8 @@
               <summary{{if .ToolIsMocked}} class="mocked"{{end}}>▸ result{{if .ToolIsMocked}} (mocked){{end}}</summary>
               <pre>{{.ToolResult}}</pre>
             </details>
+          {{else if eq .Kind "artifact_ref"}}
+            <a class="artifact-link" href="/agent_versions/{{$.VersionID}}/chat/{{$.SessionID}}/artifacts/{{.ArtifactStoreID}}/{{.ArtifactURI}}" target="_blank" rel="noopener">📎 {{.ArtifactLabel}}</a>
           {{end}}
         {{end}}
       </div>
