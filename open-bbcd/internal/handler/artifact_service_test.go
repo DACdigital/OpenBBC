@@ -1,12 +1,16 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -395,5 +399,153 @@ func TestBOArtifactRoutes_SessionOfOtherVersion(t *testing.T) {
 	// GetSession reports ErrSessionAgentMismatch → 403 (the BO mapping).
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("list on another version's session: %d, want 403", rec.Code)
+	}
+}
+
+// postUpload sends body with the given Content-Type to the BO upload route.
+func (b *boHarness) postUpload(body io.Reader, contentType string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
+	req.Header.Set("Content-Type", contentType)
+	req.SetPathValue("version_id", "v1")
+	req.SetPathValue("session_id", testSID)
+	rec := httptest.NewRecorder()
+	b.h.HandleUpload(rec, req)
+	return rec
+}
+
+func TestUpload_NonFileFieldBeforeFile_Uploads(t *testing.T) {
+	b := newBOHarness(t, 10)
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("note", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	fw, err := mw.CreatePart(multipartHeader("a.txt", "text/plain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fw.Write([]byte("hello"))
+	_ = mw.Close()
+	rec := b.postUpload(&buf, mw.FormDataContentType())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var got PendingArtifact
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Filename != "a.txt" || got.SizeBytes != 5 || got.MIME != "text/plain" {
+		t.Fatalf("response = %+v", got)
+	}
+}
+
+func TestUpload_OnlyNonFileField_400MissingFile(t *testing.T) {
+	b := newBOHarness(t, 10)
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("note", "hi")
+	_ = mw.Close()
+	rec := b.postUpload(&buf, mw.FormDataContentType())
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "missing 'file' field") {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if b.store.statCalls != 0 || b.store.putCalls != 0 || b.rows.commits != 0 {
+		t.Fatal("store/DB touched")
+	}
+}
+
+// A "file" part with no filename is a form value, not the upload (as with
+// FormFile): alone it is 400; a later "file" part with a filename uploads.
+func TestUpload_FileFieldWithoutFilename(t *testing.T) {
+	b := newBOHarness(t, 10)
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("file", "not a file")
+	_ = mw.Close()
+	if rec := b.postUpload(&buf, mw.FormDataContentType()); rec.Code != http.StatusBadRequest {
+		t.Fatalf("value-only: status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	buf.Reset()
+	mw = multipart.NewWriter(&buf)
+	_ = mw.WriteField("file", "not a file")
+	fw, err := mw.CreatePart(multipartHeader("a.txt", "text/plain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fw.Write([]byte("hello"))
+	_ = mw.Close()
+	if rec := b.postUpload(&buf, mw.FormDataContentType()); rec.Code != http.StatusCreated {
+		t.Fatalf("value then file: status %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A body cut off inside the file part is malformed (400), as it was when
+// ParseMultipartForm read it, not a 500 from the hash step.
+func TestUpload_TruncatedFilePart_400(t *testing.T) {
+	b := newBOHarness(t, 10)
+	body, mct := newMultipartBody(t, "a.txt", "text/plain", []byte(strings.Repeat("x", 4096)))
+	cut := body.Bytes()[:body.Len()/2]
+	rec := b.postUpload(bytes.NewReader(cut), mct)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if b.store.statCalls != 0 || b.store.putCalls != 0 || b.rows.commits != 0 {
+		t.Fatal("store/DB touched")
+	}
+}
+
+func TestUpload_NotMultipart_400(t *testing.T) {
+	b := newBOHarness(t, 10)
+	rec := b.postUpload(strings.NewReader("hello"), "text/plain")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if b.store.statCalls != 0 || b.store.putCalls != 0 || b.rows.commits != 0 {
+		t.Fatal("store/DB touched")
+	}
+}
+
+// raceAllocFactor is 2 under -race (race_enabled_test.go), else 1.
+var raceAllocFactor = 1.0
+
+// The upload keeps one copy of the file in memory. The old ParseMultipartForm
+// + hashAndBuffer path allocated about 5.3x the file size for 6 MiB; streaming
+// the part allocates about 2.7x, all of it hashAndBuffer's doubling growth
+// (1+2+4+8 MiB). The bound sits between the two. Under -race every figure
+// doubles (10.7x vs 5.3x), so the bound scales by raceAllocFactor.
+func TestUpload_SingleBuffer_AllocationBound(t *testing.T) {
+	const size = 6 << 20
+	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL, statHit: true}
+	sess := &fakeSessionStore{sessions: map[string]*types.ChatSession{testSID: {ID: testSID, AgentVersionID: "v1"}}}
+	rows := &memRows{}
+	b := &boHarness{
+		h:    NewArtifactHandler(sess, rows, buildRegistry(t, store), 8, 10, nil),
+		rows: rows, store: store, sess: sess,
+	}
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i * 7)
+	}
+	body, mct := newMultipartBody(t, "big.bin", "application/octet-stream", data)
+	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", body)
+	req.Header.Set("Content-Type", mct)
+	req.SetPathValue("version_id", "v1")
+	req.SetPathValue("session_id", testSID)
+	rec := httptest.NewRecorder()
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	b.h.HandleUpload(rec, req)
+	runtime.ReadMemStats(&after)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	ratio := float64(after.TotalAlloc-before.TotalAlloc) / size
+	t.Logf("allocated %.2fx the file size", ratio)
+	if limit := 3 * raceAllocFactor; ratio >= limit {
+		t.Fatalf("allocated %.2fx the file size, want < %.0fx", ratio, limit)
 	}
 }
