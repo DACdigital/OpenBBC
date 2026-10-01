@@ -37,6 +37,9 @@
   let uploadsInFlight = 0;
   let turnActive = false;
   let syncSeq = 0;
+  let chipGen = 0; // bumped per chip added; lets a sync keep chips newer than its request
+  let pendingLocked = false; // pending set frozen from send until the claim is decided
+  let runStarted = false;
   let displayBuf = '';
   let typingActive = false;
   let streamEnded = false;
@@ -70,6 +73,15 @@
 
   function updateSendEnabled() {
     sendBtn.disabled = uploadsInFlight > 0 || turnActive;
+    if (attachBtn) attachBtn.disabled = pendingLocked || uploadsInFlight > 0;
+  }
+
+  function setPendingLocked(on) {
+    pendingLocked = on;
+    if (pendingBox) {
+      pendingBox.querySelectorAll('.artifact-chip-remove').forEach((b) => { b.disabled = on; });
+    }
+    updateSendEnabled();
   }
 
   function addPendingChip(p) {
@@ -86,10 +98,11 @@
     rm.setAttribute('aria-label', `Remove ${chipLabel(p)}`);
     rm.dataset.deleteUrl = `${chatBase}/pending-artifacts/${p.id}`;
     rm.textContent = '×';
+    rm.disabled = pendingLocked;
+    chip.dataset.gen = String(++chipGen);
     chip.appendChild(label);
     chip.appendChild(rm);
     pendingBox.appendChild(chip);
-    syncSeq++; // an older in-flight sync must not drop this chip
   }
 
   function pendingLabels() {
@@ -100,13 +113,21 @@
   async function syncPendingChips() {
     if (!pendingBox) return;
     const seq = ++syncSeq;
+    const startGen = chipGen;
     try {
       const resp = await fetch(`${chatBase}/pending-artifacts`, { headers: { Accept: 'application/json' } });
       if (!resp.ok) return;
       const body = await resp.json();
       if (seq !== syncSeq) return; // stale response
-      pendingBox.replaceChildren();
-      (body.pending_artifacts || []).forEach(addPendingChip);
+      // Merge: keep chips the server lists, drop absent ones (unless added
+      // after this request started), add missing ones.
+      const list = body.pending_artifacts || [];
+      const ids = new Set(list.map((p) => `pending-artifact-${p.id}`));
+      pendingBox.querySelectorAll('.artifact-chip').forEach((chip) => {
+        if (!ids.has(chip.id) && Number(chip.dataset.gen) <= startGen) chip.remove();
+      });
+      list.forEach(addPendingChip);
+      if (!pendingBox.querySelector('.artifact-chip')) pendingBox.replaceChildren();
     } catch (err) {
       console.warn('[chat.js] pending-artifacts sync failed', err);
     }
@@ -175,8 +196,10 @@
       if (content) content.appendChild(wrap);
     }
     pendingAttachments = [];
+    runStarted = true;
     syncSeq++; // an older in-flight sync must not resurrect claimed chips
     if (pendingBox) pendingBox.replaceChildren();
+    setPendingLocked(false);
   }
 
   async function uploadFile(file) {
@@ -208,7 +231,7 @@
           updateSendEnabled();
         }
       }
-      attachBtn.disabled = false;
+      updateSendEnabled();
     });
   }
 
@@ -230,7 +253,7 @@
         if (!resp.ok) syncPendingChips();
         return;
       }
-      btn.disabled = false;
+      btn.disabled = pendingLocked;
       let detail = '';
       if (resp) {
         const t = errText(await resp.text().catch(() => ''));
@@ -266,7 +289,8 @@
     if (uploadsInFlight > 0 || turnActive) return;
     input.value = '';
     turnActive = true;
-    updateSendEnabled();
+    runStarted = false;
+    setPendingLocked(true);
     input.disabled = true;
 
     currentUserBubble = appendUserBubble(text);
@@ -308,8 +332,13 @@
       // mid-sentence visually.
       await waitForDrain();
       finalizeAssistantBubble();
+      // Artifact-only send that never started: drop the empty user bubble.
+      if (!runStarted && currentUserBubble && !currentUserBubble.querySelector('.md')) {
+        currentUserBubble.remove();
+      }
       currentUserBubble = null;
       pendingAttachments = [];
+      setPendingLocked(false);
       syncPendingChips();
       turnActive = false;
       updateSendEnabled();
