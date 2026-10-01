@@ -397,6 +397,11 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
 
+	if !validUUID(sessionID) {
+		Error(w, types.ErrNotFound)
+		return
+	}
+
 	version, agent, err := h.agents.GetWithAgent(r.Context(), versionID)
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
@@ -565,6 +570,11 @@ type TurnInputBlock struct {
 func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
+
+	if !validUUID(sessionID) {
+		Error(w, types.ErrNotFound)
+		return
+	}
 
 	var req TurnRequest
 	if err := DecodeJSON(r, &req); err != nil {

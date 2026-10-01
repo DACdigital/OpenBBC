@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -51,6 +52,9 @@ func (s *stubChatStore) EnsureSession(ctx context.Context, sessionID, versionID 
 	return s.err
 }
 func (s *stubChatStore) GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error) {
+	if !validUUID(sessionID) { // like Postgres: invalid uuid text is a plain error
+		return nil, errors.New("pq: invalid input syntax for type uuid")
+	}
 	sess := &types.ChatSession{ID: sessionID, AgentVersionID: versionID}
 	if s.locked {
 		now := time.Now()
@@ -62,6 +66,9 @@ func (s *stubChatStore) ListSessions(ctx context.Context, versionID string, limi
 	return s.sessions, len(s.sessions), s.err
 }
 func (s *stubChatStore) LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error) {
+	if !validUUID(sessionID) {
+		return nil, errors.New("pq: invalid input syntax for type uuid")
+	}
 	return s.messages, s.err
 }
 func (s *stubChatStore) UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error {
@@ -135,9 +142,9 @@ func TestChatHandler_Turn_HappyPath(t *testing.T) {
 	body, _ := json.Marshal(TurnRequest{
 		Input: []TurnInputBlock{{Type: "text", Text: "hi"}},
 	})
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", bytes.NewReader(body))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", bytes.NewReader(body))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 
 	h.Turn(w, r)
@@ -148,7 +155,7 @@ func TestChatHandler_Turn_HappyPath(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "text_delta") {
 		t.Fatalf("expected text_delta in body, got: %q", w.Body.String())
 	}
-	if runner.capturedAgentID != "v" || runner.capturedSessionID != "s" {
+	if runner.capturedAgentID != "v" || runner.capturedSessionID != testSID {
 		t.Fatalf("captured ids: %+v", runner)
 	}
 	if len(runner.capturedInput) != 1 {
@@ -162,9 +169,9 @@ func TestChatHandler_Turn_HappyPath(t *testing.T) {
 func TestChatHandler_Turn_MalformedJSON_Returns400(t *testing.T) {
 	h := newTestChatHandler(t, &stubTurnRunner{})
 
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader("{not json"))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", strings.NewReader("{not json"))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 
 	h.Turn(w, r)
@@ -184,9 +191,9 @@ func TestChatHandler_Turn_SetsSSEHeaders(t *testing.T) {
 	body, _ := json.Marshal(TurnRequest{
 		Input: []TurnInputBlock{{Type: "text", Text: "hi"}},
 	})
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", bytes.NewReader(body))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", bytes.NewReader(body))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 
 	h.Turn(w, r)
@@ -244,9 +251,9 @@ func TestChatHandler_Turn_IgnoresArtifactRefInputBlocks(t *testing.T) {
 		`{"type":"text","text":"look at this"},` +
 		`{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/abc","mime":"image/png","size_bytes":7,"sha256":"abc","filename":"x.png"}` +
 		`]}`
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader(body))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", strings.NewReader(body))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 
 	h.Turn(w, r)
@@ -265,9 +272,9 @@ func TestChatHandler_Turn_IgnoresArtifactRefInputBlocks(t *testing.T) {
 func TestChatTurn_EmptyTurnWithoutPending_400BeforeSSE(t *testing.T) {
 	runner := &stubTurnRunner{}
 	h := newTestChatHandlerWithStore(t, &stubChatStore{}, runner, emptyTemplateFS())
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader(`{"input":[{"type":"text","text":""}]}`))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", strings.NewReader(`{"input":[{"type":"text","text":""}]}`))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 	h.Turn(w, r)
 	if w.Code != http.StatusBadRequest || strings.TrimSpace(w.Body.String()) != "empty turn: no text and no pending artifacts" {
@@ -281,12 +288,12 @@ func TestChatTurn_EmptyTurnWithoutPending_400BeforeSSE(t *testing.T) {
 func TestChatTurn_EmptyTextWithPending_Accepted(t *testing.T) {
 	runner := &stubTurnRunner{}
 	h := newTestChatHandlerWithStore(t, &stubChatStore{hasPending: true}, runner, emptyTemplateFS())
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader(`{"input":[]}`))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", strings.NewReader(`{"input":[]}`))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 	h.Turn(w, r)
-	if w.Code != http.StatusOK || runner.capturedSessionID != "s" {
+	if w.Code != http.StatusOK || runner.capturedSessionID != testSID {
 		t.Fatalf("status %d captured %q", w.Code, runner.capturedSessionID)
 	}
 }
@@ -303,16 +310,16 @@ func TestChatView_RendersPendingChipsWithRemoveControl(t *testing.T) {
 	h.WithPendingArtifacts(stubPendingLister{rows: []*types.SessionArtifact{
 		{ID: "11111111-1111-1111-1111-111111111111", Filename: "Q3 report.pdf", MIME: "application/pdf"},
 	}})
-	r := httptest.NewRequest("GET", "/agent_versions/v/chat/s", nil)
+	r := httptest.NewRequest("GET", "/agent_versions/v/chat/"+testSID, nil)
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 	h.ChatView(w, r)
 	body := w.Body.String()
 	for _, want := range []string{
 		`id="pending-artifacts"`,
 		`Q3 report.pdf`,
-		`hx-delete="/agent_versions/v/chat/s/pending-artifacts/11111111-1111-1111-1111-111111111111"`,
+		`hx-delete="/agent_versions/v/chat/` + testSID + `/pending-artifacts/11111111-1111-1111-1111-111111111111"`,
 		`hx-on::after-request="if (event.detail.successful) this.closest('.artifact-chip').remove()"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -325,9 +332,9 @@ func renderChatView(t *testing.T, store *stubChatStore, rows []*types.SessionArt
 	t.Helper()
 	h := newTestChatHandlerWithStore(t, store, &stubTurnRunner{}, web.Assets)
 	h.WithPendingArtifacts(stubPendingLister{rows: rows})
-	r := httptest.NewRequest("GET", "/agent_versions/v/chat/s", nil)
+	r := httptest.NewRequest("GET", "/agent_versions/v/chat/"+testSID, nil)
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 	h.ChatView(w, r)
 	return w.Body.String()
@@ -347,7 +354,35 @@ func TestChatView_LockedSession_ChipWithoutRemoveControl(t *testing.T) {
 	if !strings.Contains(body, "Q3 report.pdf") {
 		t.Error("chip label missing")
 	}
-	if strings.Contains(body, "hx-delete=\"/agent_versions/v/chat/s/pending-artifacts/") {
+	if strings.Contains(body, "hx-delete=\"/agent_versions/v/chat/"+testSID+"/pending-artifacts/") {
 		t.Error("locked session must not render a remove control")
+	}
+}
+
+func TestChat_MalformedSessionID_404(t *testing.T) {
+	for _, sid := range []string{"not-a-uuid", "urn:uuid:11111111-1111-4111-8111-111111111111"} {
+		runner := &stubTurnRunner{}
+		h := newTestChatHandlerWithStore(t, &stubChatStore{}, runner, emptyTemplateFS())
+
+		r := httptest.NewRequest("POST", "/agent_versions/v/chat/x/turn", strings.NewReader(`{"input":[{"type":"text","text":"hi"}]}`))
+		r.SetPathValue("version_id", "v")
+		r.SetPathValue("session_id", sid)
+		w := httptest.NewRecorder()
+		h.Turn(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("Turn(%q) = %d, want 404", sid, w.Code)
+		}
+		if runner.capturedSessionID != "" {
+			t.Errorf("Turn(%q) reached the runner", sid)
+		}
+
+		r = httptest.NewRequest("GET", "/agent_versions/v/chat/x", nil)
+		r.SetPathValue("version_id", "v")
+		r.SetPathValue("session_id", sid)
+		w = httptest.NewRecorder()
+		h.ChatView(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("ChatView(%q) = %d, want 404", sid, w.Code)
+		}
 	}
 }
