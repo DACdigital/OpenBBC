@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -185,11 +187,17 @@ func (s *artifactService) upload(w http.ResponseWriter, r *http.Request, session
 }
 
 // rejectBody answers a request body that failed to read or parse: 413 when it
-// hit the upload cap, else 400. Multipart errors can echo the part's
+// hit the upload cap, 408 when a read deadline expired, else 400. Multipart errors can echo the part's
 // Content-Disposition line (the filename), so only the error's type is logged.
 func (s *artifactService) rejectBody(w http.ResponseWriter, err error) {
 	if errors.Is(err, errMaxSizeExceeded) || isMaxBytesError(err) {
 		http.Error(w, "upload exceeds ARTIFACT_MAX_UPLOAD_MB", http.StatusRequestEntityTooLarge)
+		return
+	}
+	var ne net.Error
+	if errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		s.logger.Info("artifact upload: body read timed out")
+		http.Error(w, "upload timed out", http.StatusRequestTimeout)
 		return
 	}
 	s.logger.Info("artifact upload: malformed multipart",

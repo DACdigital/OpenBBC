@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -662,5 +663,25 @@ func TestHashAndBuffer_LargeHintSmallStream(t *testing.T) {
 	got, _, err = hashAndBuffer(bytes.NewReader(data), max, int64(len(data)))
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("3 MiB with exact hint: len %d err %v", len(got), err)
+	}
+}
+
+type timeoutReader struct{}
+
+func (timeoutReader) Read([]byte) (int, error) { return 0, os.ErrDeadlineExceeded }
+
+func TestUpload_BodyReadTimeout_408(t *testing.T) {
+	b := newBOHarness(t, 10)
+	req := httptest.NewRequest(http.MethodPost, "/agent_versions/v1/chat/s1/artifacts", timeoutReader{})
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=xyz")
+	req.SetPathValue("version_id", "v1")
+	req.SetPathValue("session_id", testSID)
+	rec := httptest.NewRecorder()
+	b.h.HandleUpload(rec, req)
+	if rec.Code != http.StatusRequestTimeout || !strings.Contains(rec.Body.String(), "upload timed out") {
+		t.Fatalf("got %d %q, want 408 upload timed out", rec.Code, rec.Body.String())
+	}
+	if len(b.rows.rows) != 0 || b.store.putCalls != 0 {
+		t.Error("timeout must not write anything")
 	}
 }
