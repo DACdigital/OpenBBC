@@ -35,6 +35,7 @@
   let currentUserBubble = null;
   let pendingAttachments = [];
   let uploadsInFlight = 0;
+  let deletesInFlight = 0;
   let turnActive = false;
   let syncSeq = 0;
   let chipGen = 0; // bumped per chip added; lets a sync keep chips newer than its request
@@ -72,7 +73,7 @@
   }
 
   function updateSendEnabled() {
-    sendBtn.disabled = uploadsInFlight > 0 || turnActive;
+    sendBtn.disabled = uploadsInFlight > 0 || deletesInFlight > 0 || turnActive;
     if (attachBtn) attachBtn.disabled = pendingLocked || uploadsInFlight > 0;
   }
 
@@ -239,6 +240,18 @@
     pendingBox.addEventListener('click', async (e) => {
       const btn = e.target.closest('.artifact-chip-remove');
       if (!btn || !btn.dataset.deleteUrl) return;
+      // A chip whose DELETE is in flight must not be captured as "claimed".
+      deletesInFlight++;
+      updateSendEnabled();
+      try {
+        await removeChip(btn);
+      } finally {
+        deletesInFlight--;
+        updateSendEnabled();
+      }
+    });
+
+    async function removeChip(btn) {
       btn.disabled = true;
       let resp = null;
       try {
@@ -260,7 +273,7 @@
         detail = `: HTTP ${resp.status}${t ? ' ' + t : ''}`;
       }
       showError(`Could not remove file${detail}`);
-    });
+    }
   }
 
   sendBtn.addEventListener('click', send);
@@ -286,7 +299,7 @@
     const text = input.value.trim();
     const attached = pendingLabels();
     if (!text && attached.length === 0) return;
-    if (uploadsInFlight > 0 || turnActive) return;
+    if (uploadsInFlight > 0 || deletesInFlight > 0 || turnActive) return;
     input.value = '';
     turnActive = true;
     runStarted = false;
