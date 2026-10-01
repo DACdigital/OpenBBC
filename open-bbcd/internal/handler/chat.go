@@ -301,6 +301,7 @@ type blockView struct {
 	ArtifactStoreID string
 	ArtifactURI     string
 	ArtifactLabel   string
+	ArtifactHref    string // empty: not safely linkable, render as plain label
 }
 
 // buildMessageViews turns persisted ChatMessage rows into UI bubbles. Each
@@ -309,7 +310,7 @@ type blockView struct {
 // a single assistant bubble per turn, so the history matches the in-stream
 // rendering (one bubble per assistant turn, regardless of how many DB rows
 // the orchestrator split it across).
-func buildMessageViews(msgs []*types.ChatMessage) []messageView {
+func buildMessageViews(msgs []*types.ChatMessage, artifactBase string) []messageView {
 	out := make([]messageView, 0, len(msgs))
 	var pending *messageView // open assistant bubble waiting for more blocks
 	flush := func() {
@@ -323,7 +324,7 @@ func buildMessageViews(msgs []*types.ChatMessage) []messageView {
 		if err := json.Unmarshal(m.Content, &raw); err != nil {
 			continue
 		}
-		blocks := decodeBlocks(raw)
+		blocks := decodeBlocks(raw, artifactBase)
 		if m.Role == types.ChatRoleUser {
 			flush()
 			out = append(out, messageView{ID: m.ID, Role: string(types.ChatRoleUser), Blocks: blocks})
@@ -341,7 +342,25 @@ func buildMessageViews(msgs []*types.ChatMessage) []messageView {
 	return out
 }
 
-func decodeBlocks(raw []json.RawMessage) []blockView {
+// artifactHref builds the BO retrieval URL for a persisted ref, escaping each
+// path segment. It returns "" (render without a link) when the store id or
+// any uri segment could retarget the link: '/' in the store id, or an empty,
+// "." or ".." uri segment.
+func artifactHref(base, storeID, uri string) string {
+	if strings.Contains(storeID, "/") {
+		return ""
+	}
+	segs := strings.Split(uri, "/")
+	for i, sg := range segs {
+		if sg == "" || sg == "." || sg == ".." {
+			return ""
+		}
+		segs[i] = url.PathEscape(sg)
+	}
+	return base + url.PathEscape(storeID) + "/" + strings.Join(segs, "/")
+}
+
+func decodeBlocks(raw []json.RawMessage, artifactBase string) []blockView {
 	blocks := make([]blockView, 0, len(raw))
 	for _, r := range raw {
 		var head struct {
@@ -390,11 +409,16 @@ func decodeBlocks(raw []json.RawMessage) []blockView {
 			if name == "" {
 				name = "file"
 			}
+			mime := b.MIME
+			if mime == "" {
+				mime = "unknown"
+			}
 			blocks = append(blocks, blockView{
 				Kind:            "artifact_ref",
+				ArtifactHref:    artifactHref(artifactBase, b.StoreID, b.URI),
 				ArtifactStoreID: b.StoreID,
 				ArtifactURI:     b.URI,
-				ArtifactLabel:   name + " (" + b.MIME + ", " + llm.HumanBytes(b.SizeBytes) + ")",
+				ArtifactLabel:   name + " (" + mime + ", " + llm.HumanBytes(b.SizeBytes) + ")",
 			})
 		}
 	}
@@ -495,7 +519,7 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		AgentName:    agent.Name,
 		SessionID:    sessionID,
 		SessionTitle: sessionTitle,
-		Messages:     buildMessageViews(msgs),
+		Messages:     buildMessageViews(msgs, "/agent_versions/"+url.PathEscape(versionID)+"/chat/"+url.PathEscape(sessionID)+"/artifacts/"),
 		HasBundle:    len(agent.Architecture) > 0 && len(version.Prompts) > 0,
 		Feedback:     feedback,
 		Locked:       locked,

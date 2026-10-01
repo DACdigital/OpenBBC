@@ -92,7 +92,7 @@
               <pre>{{.ToolResult}}</pre>
             </details>
           {{else if eq .Kind "artifact_ref"}}
-            <a class="artifact-link" href="/agent_versions/{{$.VersionID}}/chat/{{$.SessionID}}/artifacts/{{.ArtifactStoreID}}/{{.ArtifactURI}}" target="_blank" rel="noopener">📎 {{.ArtifactLabel}}</a>
+            {{if .ArtifactHref}}<a class="artifact-link" href="{{.ArtifactHref}}" title="{{.ArtifactLabel}}" target="_blank" rel="noopener">📎 {{.ArtifactLabel}}</a>{{else}}<span class="artifact-link artifact-link-disabled" title="{{.ArtifactLabel}}">📎 {{.ArtifactLabel}}</span>{{end}}
           {{end}}
         {{end}}
       </div>

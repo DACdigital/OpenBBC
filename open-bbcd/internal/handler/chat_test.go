@@ -217,7 +217,7 @@ func TestBuildMessageViews_MergesAssistantTurns(t *testing.T) {
 		{Role: types.ChatRoleAssistant, Content: []byte(`[{"type":"text","text":"here you go"}]`)},
 		{Role: types.ChatRoleUser, Content: []byte(`[{"type":"text","text":"thanks"}]`)},
 	}
-	views := buildMessageViews(msgs)
+	views := buildMessageViews(msgs, "/b/")
 	if len(views) != 3 {
 		t.Fatalf("expected 3 bubbles (user, merged-assistant, user), got %d", len(views))
 	}
@@ -421,7 +421,7 @@ func TestBuildMessageViews_ArtifactRefBlocks(t *testing.T) {
 		{Role: types.ChatRoleUser, Content: []byte(`[{"type":"text","text":"see"},{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/ab","mime":"application/pdf","size_bytes":245678,"sha256":"ab","filename":"Q3 report.pdf"}]`)},
 		{Role: types.ChatRoleTool, Content: []byte(`[{"type":"tool_result","tool_use_id":"tu_1","content":{"ok":true}},{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/cd","mime":"image/png","size_bytes":10,"sha256":"cd"}]`)},
 	}
-	views := buildMessageViews(msgs)
+	views := buildMessageViews(msgs, "/b/")
 	if len(views) != 2 {
 		t.Fatalf("got %d bubbles, want 2", len(views))
 	}
@@ -441,7 +441,7 @@ func TestChatView_RendersArtifactRefLinks(t *testing.T) {
 		{ID: "m1", Role: types.ChatRoleUser, Content: []byte(`[{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/ab","mime":"application/pdf","size_bytes":245678,"sha256":"ab","filename":"<script>x</script>.pdf"}]`)},
 	}}
 	body := renderChatView(t, store, nil)
-	want := `<a class="artifact-link" href="/agent_versions/v/chat/` + testSID + `/artifacts/MAIN/sha256/ab" target="_blank" rel="noopener">`
+	want := `<a class="artifact-link" href="/agent_versions/v/chat/` + testSID + `/artifacts/MAIN/sha256/ab" title="`
 	if !strings.Contains(body, want) {
 		t.Errorf("missing link %q in:\n%s", want, body)
 	}
@@ -450,5 +450,57 @@ func TestChatView_RendersArtifactRefLinks(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;script&gt;x&lt;/script&gt;.pdf") {
 		t.Error("escaped filename missing")
+	}
+}
+
+func TestBuildMessageViews_ArtifactRefHardening(t *testing.T) {
+	ref := func(store, uri string) string {
+		b, _ := json.Marshal(map[string]any{"type": "artifact_ref", "store_id": store, "uri": uri, "mime": "", "size_bytes": 1})
+		return string(b)
+	}
+	for _, c := range []struct{ store, uri string }{
+		{"MAIN", "../../x"}, {"MAIN", "a/./b"}, {"MAIN", "a//b"}, {"A/B", "sha256/ab"},
+	} {
+		v := buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref(c.store, c.uri) + "]")}}, "/b/")
+		blk := v[0].Blocks[0]
+		if blk.Kind != "artifact_ref" || blk.ArtifactHref != "" {
+			t.Errorf("%+v: want unlinked artifact_ref, got %+v", c, blk)
+		}
+		if !strings.Contains(blk.ArtifactLabel, "(unknown, ") {
+			t.Errorf("label %q lacks unknown mime", blk.ArtifactLabel)
+		}
+	}
+	// '?' and '#' are escaped, not interpreted.
+	v := buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "a?x=1#f") + "]")}}, "/b/")
+	if got := v[0].Blocks[0].ArtifactHref; got != "/b/MAIN/a%3Fx=1%23f" {
+		t.Errorf("href = %q", got)
+	}
+	// Normal ref unchanged.
+	v = buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "sha256/ab") + "]")}}, "/b/")
+	if got := v[0].Blocks[0].ArtifactHref; got != "/b/MAIN/sha256/ab" {
+		t.Errorf("href = %q", got)
+	}
+	// Missing store_id / uri skipped.
+	v = buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("", "x") + "," + ref("MAIN", "") + "]")}}, "/b/")
+	if len(v[0].Blocks) != 0 {
+		t.Errorf("want skipped, got %+v", v[0].Blocks)
+	}
+	// Assistant + tool-with-ref merge into one bubble containing the link.
+	v = buildMessageViews([]*types.ChatMessage{
+		{Role: types.ChatRoleAssistant, Content: []byte(`[{"type":"text","text":"here"}]`)},
+		{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "sha256/ab") + "]")},
+	}, "/b/")
+	if len(v) != 1 || len(v[0].Blocks) != 2 || v[0].Blocks[1].ArtifactHref == "" {
+		t.Errorf("merge: %+v", v)
+	}
+}
+
+func TestChatView_HostileArtifactRefRendersDisabledSpan(t *testing.T) {
+	store := &stubChatStore{messages: []*types.ChatMessage{
+		{ID: "m1", Role: types.ChatRoleTool, Content: []byte(`[{"type":"artifact_ref","store_id":"MAIN","uri":"../../x","mime":"text/plain","size_bytes":1}]`)},
+	}}
+	body := renderChatView(t, store, nil)
+	if !strings.Contains(body, `<span class="artifact-link artifact-link-disabled"`) || strings.Contains(body, `href="../../x`) || strings.Contains(body, `/artifacts/MAIN/..`) {
+		t.Errorf("hostile ref rendered as link:\n%s", body)
 	}
 }

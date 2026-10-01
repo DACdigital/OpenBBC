@@ -410,3 +410,5 @@
 
 .artifact-link { display: inline-block; margin: 0.2rem 0.4rem 0.2rem 0; padding: 0.15rem 0.5rem; border: 1px solid var(--border, #ccc); border-radius: 6px; font-size: 0.85rem; text-decoration: none; max-width: 28rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .artifact-link:hover { text-decoration: underline; }
+.artifact-link-disabled { opacity: 0.6; cursor: default; }
+.artifact-link-disabled:hover { text-decoration: none; }
