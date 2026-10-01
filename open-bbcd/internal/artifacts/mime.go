@@ -69,9 +69,27 @@ func CleanText(s string) string {
 		if unicode.IsControl(r) {
 			return -1
 		}
+		if isBidiControl(r) {
+			return -1
+		}
 		return r
 	}, s)
 	return strings.TrimSpace(s)
+}
+
+// isBidiControl reports Unicode bidirectional formatting characters (LRM, RLM,
+// ALM, the embedding/override and isolate controls). They let a display label
+// render differently from its bytes (e.g. "invoice\u202efdp.exe").
+func isBidiControl(r rune) bool {
+	switch {
+	case r == '\u200e', r == '\u200f', r == '\u061c':
+		return true
+	case r >= '\u202a' && r <= '\u202e':
+		return true
+	case r >= '\u2066' && r <= '\u2069':
+		return true
+	}
+	return false
 }
 
 // normaliseMIME cleans (CleanText), strips parameters, trims and
