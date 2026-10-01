@@ -319,11 +319,15 @@ func TestChatView_RendersPendingChipsWithRemoveControl(t *testing.T) {
 	for _, want := range []string{
 		`id="pending-artifacts"`,
 		`Q3 report.pdf`,
-		`hx-delete="/agent_versions/v/chat/` + testSID + `/pending-artifacts/11111111-1111-1111-1111-111111111111"`,
-		`hx-on::after-request="if (event.detail.successful) this.closest('.artifact-chip').remove()"`,
+		`data-delete-url="/agent_versions/v/chat/` + testSID + `/pending-artifacts/11111111-1111-1111-1111-111111111111"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("chat view missing %q", want)
+		}
+	}
+	for _, bad := range []string{`hx-delete=`, `hx-on`} {
+		if strings.Contains(body, bad) {
+			t.Errorf("chat view must not contain %q", bad)
 		}
 	}
 }
@@ -354,8 +358,33 @@ func TestChatView_LockedSession_ChipWithoutRemoveControl(t *testing.T) {
 	if !strings.Contains(body, "Q3 report.pdf") {
 		t.Error("chip label missing")
 	}
-	if strings.Contains(body, "hx-delete=\"/agent_versions/v/chat/"+testSID+"/pending-artifacts/") {
+	if strings.Contains(body, "data-delete-url=") {
 		t.Error("locked session must not render a remove control")
+	}
+}
+
+func TestChatView_AttachControl(t *testing.T) {
+	attach := []string{`id="chat-attach"`, `id="chat-attach-input"`}
+	body := renderChatView(t, &stubChatStore{}, nil)
+	for _, want := range attach {
+		if !strings.Contains(body, want) {
+			t.Errorf("enabled session missing %q", want)
+		}
+	}
+	locked := renderChatView(t, &stubChatStore{locked: true}, nil)
+	// Artifacts disabled: no pending lister wired.
+	h := newTestChatHandlerWithStore(t, &stubChatStore{}, &stubTurnRunner{}, web.Assets)
+	r := httptest.NewRequest("GET", "/agent_versions/v/chat/"+testSID, nil)
+	r.SetPathValue("version_id", "v")
+	r.SetPathValue("session_id", testSID)
+	w := httptest.NewRecorder()
+	h.ChatView(w, r)
+	for name, b := range map[string]string{"locked": locked, "disabled": w.Body.String()} {
+		for _, bad := range attach {
+			if strings.Contains(b, bad) {
+				t.Errorf("%s session must not render %q", name, bad)
+			}
+		}
 	}
 }
 

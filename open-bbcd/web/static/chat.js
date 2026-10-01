@@ -32,6 +32,8 @@
   if (!versionID || !sessionID) return;
 
   let currentAssistantTurn = null;
+  let currentUserBubble = null;
+  let pendingAttachments = [];
   let displayBuf = '';
   let typingActive = false;
   let streamEnded = false;
@@ -40,6 +42,107 @@
   // Used post-finalize to fetch the feedback footer for the bubble.
   let currentAssistantMessageID = null;
   const toolCallElements = new Map();
+
+  // ---- Artifacts: attach, pending chips ------------------------------------
+  // Server is authoritative: chips are rendered optimistically from upload
+  // responses and re-synced from GET …/pending-artifacts after every turn.
+  const chatBase = `/agent_versions/${versionID}/chat/${sessionID}`;
+  const pendingBox = document.getElementById('pending-artifacts');
+  const attachBtn = document.getElementById('chat-attach');
+  const attachInput = document.getElementById('chat-attach-input');
+
+  function chipLabel(p) {
+    return p.filename || `file (${p.mime})`;
+  }
+
+  function addPendingChip(p) {
+    if (!pendingBox || document.getElementById(`pending-artifact-${p.id}`)) return;
+    const chip = document.createElement('span');
+    chip.className = 'artifact-chip';
+    chip.id = `pending-artifact-${p.id}`;
+    const label = document.createElement('span');
+    label.className = 'artifact-chip-label';
+    label.textContent = chipLabel(p);
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'artifact-chip-remove';
+    rm.setAttribute('aria-label', `Remove ${chipLabel(p)}`);
+    rm.dataset.deleteUrl = `${chatBase}/pending-artifacts/${p.id}`;
+    rm.textContent = '×';
+    chip.appendChild(label);
+    chip.appendChild(rm);
+    pendingBox.appendChild(chip);
+  }
+
+  function pendingLabels() {
+    if (!pendingBox) return [];
+    return [...pendingBox.querySelectorAll('.artifact-chip-label')].map((el) => el.textContent);
+  }
+
+  async function syncPendingChips() {
+    if (!pendingBox) return;
+    try {
+      const resp = await fetch(`${chatBase}/pending-artifacts`, { headers: { Accept: 'application/json' } });
+      if (!resp.ok) return;
+      const body = await resp.json();
+      pendingBox.replaceChildren();
+      (body.pending_artifacts || []).forEach(addPendingChip);
+    } catch (err) {
+      console.warn('[chat.js] pending-artifacts sync failed', err);
+    }
+  }
+
+  async function uploadFile(file) {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    const resp = await fetch(`${chatBase}/artifacts`, { method: 'POST', body: fd });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      throw new Error(`HTTP ${resp.status}${body ? ': ' + body.trim() : ''}`);
+    }
+    addPendingChip(await resp.json());
+  }
+
+  if (attachBtn && attachInput) {
+    attachBtn.addEventListener('click', () => attachInput.click());
+    attachInput.addEventListener('change', async () => {
+      const files = [...attachInput.files];
+      attachInput.value = '';
+      attachBtn.disabled = true;
+      try {
+        for (const f of files) {
+          try {
+            await uploadFile(f);
+          } catch (err) {
+            showError(`Upload of ${f.name} failed: ${err.message || err}`);
+          }
+        }
+      } finally {
+        attachBtn.disabled = false;
+      }
+    });
+  }
+
+  if (pendingBox) {
+    pendingBox.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.artifact-chip-remove');
+      if (!btn || !btn.dataset.deleteUrl) return;
+      btn.disabled = true;
+      let resp = null;
+      try {
+        resp = await fetch(btn.dataset.deleteUrl, { method: 'DELETE' });
+      } catch (_) { /* network error: fall through */ }
+      // 204 removed; 404 already gone; 409 already consumed by a turn —
+      // in every case the chip is stale, so drop it and re-sync.
+      if (resp && (resp.ok || resp.status === 404 || resp.status === 409)) {
+        btn.closest('.artifact-chip').remove();
+        if (!resp.ok) syncPendingChips();
+        return;
+      }
+      btn.disabled = false;
+      showError(`Could not remove file${resp ? ': HTTP ' + resp.status : ''}`);
+    });
+  }
 
   sendBtn.addEventListener('click', send);
   // Enter sends; Shift+Enter inserts a newline (standard chat textarea behavior).
@@ -62,19 +165,21 @@
 
   async function send() {
     const text = input.value.trim();
-    if (!text) return;
+    const attached = pendingLabels();
+    if (!text && attached.length === 0) return;
     input.value = '';
     sendBtn.disabled = true;
     input.disabled = true;
 
-    appendUserBubble(text);
+    currentUserBubble = appendUserBubble(text);
+    pendingAttachments = attached;
     startAssistantBubble();
 
     try {
       const resp = await fetch(`/agent_versions/${versionID}/chat/${sessionID}/turn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: [{ type: 'text', text }] }),
+        body: JSON.stringify({ input: text ? [{ type: 'text', text }] : [] }),
       });
       if (!resp.ok) {
         const body = await resp.text().catch(() => '');
@@ -236,13 +341,16 @@
     b.appendChild(buildHeader('user'));
     const content = document.createElement('div');
     content.className = 'content';
-    const md = document.createElement('div');
-    md.className = 'md';
-    md.innerHTML = renderMarkdown(text);
-    content.appendChild(md);
+    if (text) {
+      const md = document.createElement('div');
+      md.className = 'md';
+      md.innerHTML = renderMarkdown(text);
+      content.appendChild(md);
+    }
     b.appendChild(content);
     log.appendChild(b);
     scheduleScroll();
+    return b;
   }
 
   function startAssistantBubble() {

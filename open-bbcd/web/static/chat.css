@@ -240,6 +240,8 @@
   flex: 0 0 auto;
 }
 
+.chat-attach { flex: 0 0 auto; align-self: flex-start; }
+
 .chat-input textarea {
   flex: 1;
   padding: 0.5rem 0.75rem;
