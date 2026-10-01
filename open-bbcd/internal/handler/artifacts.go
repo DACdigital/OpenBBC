@@ -102,23 +102,29 @@ var errMaxSizeExceeded = errors.New("upload exceeds ARTIFACT_MAX_UPLOAD_MB")
 // caller has no usable size hint.
 const defaultUploadBufferBytes = 32 << 10
 
+// maxUpfrontBufferBytes caps the capacity hashAndBuffer reserves before any
+// bytes arrive: the hint is the client's Content-Length, and a client that
+// claims a large body and then stalls must not pin a cap-sized buffer.
+const maxUpfrontBufferBytes = 1 << 20
+
 // hashAndBuffer reads r fully into memory while computing sha256. Aborts
 // with errMaxSizeExceeded if the stream would grow past maxBytes. sizeHint,
-// when 0 < sizeHint <= maxBytes, is the starting capacity: a hint at or above
-// the stream length means the buffer is allocated once.
+// when 0 < sizeHint <= maxBytes, sizes the buffer: it starts at up to
+// maxUpfrontBufferBytes and jumps straight to the hint on its first growth,
+// so a hint at or above the stream length costs at most two allocations.
 func hashAndBuffer(r io.Reader, maxBytes, sizeHint int64) (data []byte, sum []byte, err error) {
 	if sizeHint <= 0 || sizeHint > maxBytes {
 		sizeHint = min(defaultUploadBufferBytes, maxBytes)
 	}
-	// One byte past the hint lets a stream of exactly sizeHint bytes reach
-	// EOF without growing.
-	data = make([]byte, 0, sizeHint+1)
+	// One byte past the size lets a stream of exactly that many bytes
+	// reach EOF without growing.
+	data = make([]byte, 0, min(sizeHint, maxUpfrontBufferBytes)+1)
 	for {
 		if len(data) == cap(data) {
 			if int64(len(data)) > maxBytes {
 				return nil, nil, errMaxSizeExceeded
 			}
-			grown := make([]byte, len(data), min(2*int64(cap(data)), maxBytes+1))
+			grown := make([]byte, len(data), min(max(2*int64(cap(data)), sizeHint+1), maxBytes+1))
 			copy(grown, data)
 			data = grown
 		}

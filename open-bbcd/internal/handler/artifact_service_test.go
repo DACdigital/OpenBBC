@@ -585,8 +585,9 @@ func TestUpload_NotMultipart_400(t *testing.T) {
 
 // The upload keeps one copy of the file in memory. The old ParseMultipartForm
 // + hashAndBuffer path allocated about 5.3x the file size for 6 MiB (10.7x
-// under -race); streaming the part into a buffer pre-sized from the request
-// Content-Length allocates about 1.01x in both modes.
+// under -race); streaming the part into a buffer sized from the request
+// Content-Length (1 MiB up front, then the hint) allocates about 1.17x in
+// both modes.
 func TestUpload_SingleBuffer_AllocationBound(t *testing.T) {
 	const size = 6 << 20
 	store := &fakeArtifactStore{kind: "test-fake", delivery: artifacts.DeliverySignedURL, statHit: true}
@@ -642,5 +643,24 @@ func TestHashAndBuffer_CapBoundaryAndHints(t *testing.T) {
 				t.Fatalf("hint %d n %d: len %d err %v", hint, n, len(got), err)
 			}
 		}
+	}
+}
+
+// A Content-Length hint is the client's claim: a large hint over a small
+// stream must not reserve more than 1 MiB up front, and a stream that does
+// reach the hint still arrives intact.
+func TestHashAndBuffer_LargeHintSmallStream(t *testing.T) {
+	const max = 8 << 20
+	got, _, err := hashAndBuffer(strings.NewReader("tiny"), max, max)
+	if err != nil || string(got) != "tiny" {
+		t.Fatalf("got %q err %v", got, err)
+	}
+	if c := cap(got); c > 1<<20+1 {
+		t.Fatalf("starting capacity %d, want <= %d", c, 1<<20+1)
+	}
+	data := bytes.Repeat([]byte{'q'}, 3<<20)
+	got, _, err = hashAndBuffer(bytes.NewReader(data), max, int64(len(data)))
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("3 MiB with exact hint: len %d err %v", len(got), err)
 	}
 }
