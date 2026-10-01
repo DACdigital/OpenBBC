@@ -125,7 +125,7 @@
       const list = body.pending_artifacts || [];
       const ids = new Set(list.map((p) => `pending-artifact-${p.id}`));
       pendingBox.querySelectorAll('.artifact-chip').forEach((chip) => {
-        if (!ids.has(chip.id) && Number(chip.dataset.gen) <= startGen) chip.remove();
+        if (!ids.has(chip.id) && Number(chip.dataset.gen || 0) <= startGen) chip.remove();
       });
       list.forEach(addPendingChip);
       if (!pendingBox.querySelector('.artifact-chip')) pendingBox.replaceChildren();
