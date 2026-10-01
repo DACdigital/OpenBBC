@@ -100,6 +100,21 @@ func TestDeployedChatStore_AppendMessages_StampsAgentVersionID(t *testing.T) {
 	}
 }
 
+func TestDeployedChatStore_AppendMessages_PassesID(t *testing.T) {
+	f := newFakeDeployedRepo()
+	store := NewDeployedChatStore(f)
+
+	err := store.AppendMessages(context.Background(), "v-7", []types.ChatMessage{
+		{ID: "m-asst", SessionID: "s1", Role: types.ChatRoleAssistant, Content: json.RawMessage(`[]`), Seq: 2},
+	})
+	if err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+	if got := f.messages["s1"][0].ID; got != "m-asst" {
+		t.Fatalf("got ID %q want m-asst", got)
+	}
+}
+
 func TestDeployedChatStore_LoadMessages_TranslatesShape(t *testing.T) {
 	f := newFakeDeployedRepo()
 	f.messages["s1"] = []*types.DeployedMessage{

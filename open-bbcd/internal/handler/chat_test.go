@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -51,6 +52,9 @@ func (s *stubChatStore) EnsureSession(ctx context.Context, sessionID, versionID 
 	return s.err
 }
 func (s *stubChatStore) GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error) {
+	if !validUUID(sessionID) { // like Postgres: invalid uuid text is a plain error
+		return nil, errors.New("pq: invalid input syntax for type uuid")
+	}
 	sess := &types.ChatSession{ID: sessionID, AgentVersionID: versionID}
 	if s.locked {
 		now := time.Now()
@@ -62,6 +66,9 @@ func (s *stubChatStore) ListSessions(ctx context.Context, versionID string, limi
 	return s.sessions, len(s.sessions), s.err
 }
 func (s *stubChatStore) LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error) {
+	if !validUUID(sessionID) {
+		return nil, errors.New("pq: invalid input syntax for type uuid")
+	}
 	return s.messages, s.err
 }
 func (s *stubChatStore) UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error {
@@ -135,9 +142,9 @@ func TestChatHandler_Turn_HappyPath(t *testing.T) {
 	body, _ := json.Marshal(TurnRequest{
 		Input: []TurnInputBlock{{Type: "text", Text: "hi"}},
 	})
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", bytes.NewReader(body))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", bytes.NewReader(body))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 
 	h.Turn(w, r)
@@ -148,7 +155,7 @@ func TestChatHandler_Turn_HappyPath(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "text_delta") {
 		t.Fatalf("expected text_delta in body, got: %q", w.Body.String())
 	}
-	if runner.capturedAgentID != "v" || runner.capturedSessionID != "s" {
+	if runner.capturedAgentID != "v" || runner.capturedSessionID != testSID {
 		t.Fatalf("captured ids: %+v", runner)
 	}
 	if len(runner.capturedInput) != 1 {
@@ -162,9 +169,9 @@ func TestChatHandler_Turn_HappyPath(t *testing.T) {
 func TestChatHandler_Turn_MalformedJSON_Returns400(t *testing.T) {
 	h := newTestChatHandler(t, &stubTurnRunner{})
 
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader("{not json"))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", strings.NewReader("{not json"))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 
 	h.Turn(w, r)
@@ -184,9 +191,9 @@ func TestChatHandler_Turn_SetsSSEHeaders(t *testing.T) {
 	body, _ := json.Marshal(TurnRequest{
 		Input: []TurnInputBlock{{Type: "text", Text: "hi"}},
 	})
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", bytes.NewReader(body))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", bytes.NewReader(body))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 
 	h.Turn(w, r)
@@ -210,7 +217,7 @@ func TestBuildMessageViews_MergesAssistantTurns(t *testing.T) {
 		{Role: types.ChatRoleAssistant, Content: []byte(`[{"type":"text","text":"here you go"}]`)},
 		{Role: types.ChatRoleUser, Content: []byte(`[{"type":"text","text":"thanks"}]`)},
 	}
-	views := buildMessageViews(msgs)
+	views := buildMessageViews(msgs, "/b/")
 	if len(views) != 3 {
 		t.Fatalf("expected 3 bubbles (user, merged-assistant, user), got %d", len(views))
 	}
@@ -244,9 +251,9 @@ func TestChatHandler_Turn_IgnoresArtifactRefInputBlocks(t *testing.T) {
 		`{"type":"text","text":"look at this"},` +
 		`{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/abc","mime":"image/png","size_bytes":7,"sha256":"abc","filename":"x.png"}` +
 		`]}`
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader(body))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", strings.NewReader(body))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 
 	h.Turn(w, r)
@@ -265,9 +272,9 @@ func TestChatHandler_Turn_IgnoresArtifactRefInputBlocks(t *testing.T) {
 func TestChatTurn_EmptyTurnWithoutPending_400BeforeSSE(t *testing.T) {
 	runner := &stubTurnRunner{}
 	h := newTestChatHandlerWithStore(t, &stubChatStore{}, runner, emptyTemplateFS())
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader(`{"input":[{"type":"text","text":""}]}`))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", strings.NewReader(`{"input":[{"type":"text","text":""}]}`))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 	h.Turn(w, r)
 	if w.Code != http.StatusBadRequest || strings.TrimSpace(w.Body.String()) != "empty turn: no text and no pending artifacts" {
@@ -281,12 +288,12 @@ func TestChatTurn_EmptyTurnWithoutPending_400BeforeSSE(t *testing.T) {
 func TestChatTurn_EmptyTextWithPending_Accepted(t *testing.T) {
 	runner := &stubTurnRunner{}
 	h := newTestChatHandlerWithStore(t, &stubChatStore{hasPending: true}, runner, emptyTemplateFS())
-	r := httptest.NewRequest("POST", "/agent_versions/v/chat/s/turn", strings.NewReader(`{"input":[]}`))
+	r := httptest.NewRequest("POST", "/agent_versions/v/chat/"+testSID+"/turn", strings.NewReader(`{"input":[]}`))
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 	h.Turn(w, r)
-	if w.Code != http.StatusOK || runner.capturedSessionID != "s" {
+	if w.Code != http.StatusOK || runner.capturedSessionID != testSID {
 		t.Fatalf("status %d captured %q", w.Code, runner.capturedSessionID)
 	}
 }
@@ -303,21 +310,36 @@ func TestChatView_RendersPendingChipsWithRemoveControl(t *testing.T) {
 	h.WithPendingArtifacts(stubPendingLister{rows: []*types.SessionArtifact{
 		{ID: "11111111-1111-1111-1111-111111111111", Filename: "Q3 report.pdf", MIME: "application/pdf"},
 	}})
-	r := httptest.NewRequest("GET", "/agent_versions/v/chat/s", nil)
+	r := httptest.NewRequest("GET", "/agent_versions/v/chat/"+testSID, nil)
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 	h.ChatView(w, r)
 	body := w.Body.String()
 	for _, want := range []string{
 		`id="pending-artifacts"`,
 		`Q3 report.pdf`,
-		`hx-delete="/agent_versions/v/chat/s/pending-artifacts/11111111-1111-1111-1111-111111111111"`,
-		`hx-on::after-request="if (event.detail.successful) this.closest('.artifact-chip').remove()"`,
+		`data-delete-url="/agent_versions/v/chat/` + testSID + `/pending-artifacts/11111111-1111-1111-1111-111111111111"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("chat view missing %q", want)
 		}
+	}
+	frag := regexp.MustCompile(`(?s)<div id="pending-artifacts".*?</div>`).FindString(body)
+	if frag == "" {
+		t.Fatal("pending-artifacts fragment missing")
+	}
+	for _, bad := range []string{`hx-delete=`, `hx-on`} {
+		if strings.Contains(frag, bad) {
+			t.Errorf("pending-artifacts must not contain %q", bad)
+		}
+	}
+	// No whitespace text nodes: only <span> children, nothing after the last chip.
+	if !regexp.MustCompile(`id="pending-artifacts"[^>]*><span`).MatchString(frag) {
+		t.Error("whitespace before first chip")
+	}
+	if !strings.HasSuffix(frag, `</span></div>`) {
+		t.Errorf("whitespace after last chip: %q", frag)
 	}
 }
 
@@ -325,9 +347,9 @@ func renderChatView(t *testing.T, store *stubChatStore, rows []*types.SessionArt
 	t.Helper()
 	h := newTestChatHandlerWithStore(t, store, &stubTurnRunner{}, web.Assets)
 	h.WithPendingArtifacts(stubPendingLister{rows: rows})
-	r := httptest.NewRequest("GET", "/agent_versions/v/chat/s", nil)
+	r := httptest.NewRequest("GET", "/agent_versions/v/chat/"+testSID, nil)
 	r.SetPathValue("version_id", "v")
-	r.SetPathValue("session_id", "s")
+	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 	h.ChatView(w, r)
 	return w.Body.String()
@@ -347,7 +369,166 @@ func TestChatView_LockedSession_ChipWithoutRemoveControl(t *testing.T) {
 	if !strings.Contains(body, "Q3 report.pdf") {
 		t.Error("chip label missing")
 	}
-	if strings.Contains(body, "hx-delete=\"/agent_versions/v/chat/s/pending-artifacts/") {
+	if strings.Contains(body, "data-delete-url=") {
 		t.Error("locked session must not render a remove control")
+	}
+}
+
+func TestChatView_AttachControl(t *testing.T) {
+	attach := []string{`id="chat-attach"`, `id="chat-attach-input"`}
+	body := renderChatView(t, &stubChatStore{}, nil)
+	for _, want := range attach {
+		if !strings.Contains(body, want) {
+			t.Errorf("enabled session missing %q", want)
+		}
+	}
+	locked := renderChatView(t, &stubChatStore{locked: true}, nil)
+	// No bundle: empty architecture.
+	nb, err := NewChatHandler(
+		&stubAgentRepo{
+			version: &types.AgentVersion{ID: "v", AgentID: "a"},
+			agent:   &types.Agent{ID: "a", Name: "test"},
+		},
+		&stubChatStore{}, nil, nil, &stubTurnRunner{}, jsonl.NewFactory(), nil, nil, web.Assets, slog.Default(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nb.WithPendingArtifacts(stubPendingLister{})
+	nr := httptest.NewRequest("GET", "/agent_versions/v/chat/"+testSID, nil)
+	nr.SetPathValue("version_id", "v")
+	nr.SetPathValue("session_id", testSID)
+	nw := httptest.NewRecorder()
+	nb.ChatView(nw, nr)
+	// Artifacts disabled: no pending lister wired.
+	h := newTestChatHandlerWithStore(t, &stubChatStore{}, &stubTurnRunner{}, web.Assets)
+	r := httptest.NewRequest("GET", "/agent_versions/v/chat/"+testSID, nil)
+	r.SetPathValue("version_id", "v")
+	r.SetPathValue("session_id", testSID)
+	w := httptest.NewRecorder()
+	h.ChatView(w, r)
+	for name, b := range map[string]string{"locked": locked, "disabled": w.Body.String(), "no bundle": nw.Body.String()} {
+		for _, bad := range attach {
+			if strings.Contains(b, bad) {
+				t.Errorf("%s session must not render %q", name, bad)
+			}
+		}
+	}
+}
+
+func TestChat_MalformedSessionID_404(t *testing.T) {
+	for _, sid := range []string{"not-a-uuid", "urn:uuid:11111111-1111-4111-8111-111111111111"} {
+		runner := &stubTurnRunner{}
+		h := newTestChatHandlerWithStore(t, &stubChatStore{}, runner, emptyTemplateFS())
+
+		r := httptest.NewRequest("POST", "/agent_versions/v/chat/x/turn", strings.NewReader(`{"input":[{"type":"text","text":"hi"}]}`))
+		r.SetPathValue("version_id", "v")
+		r.SetPathValue("session_id", sid)
+		w := httptest.NewRecorder()
+		h.Turn(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("Turn(%q) = %d, want 404", sid, w.Code)
+		}
+		if runner.capturedSessionID != "" {
+			t.Errorf("Turn(%q) reached the runner", sid)
+		}
+
+		r = httptest.NewRequest("GET", "/agent_versions/v/chat/x", nil)
+		r.SetPathValue("version_id", "v")
+		r.SetPathValue("session_id", sid)
+		w = httptest.NewRecorder()
+		h.ChatView(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("ChatView(%q) = %d, want 404", sid, w.Code)
+		}
+	}
+}
+
+func TestBuildMessageViews_ArtifactRefBlocks(t *testing.T) {
+	msgs := []*types.ChatMessage{
+		{Role: types.ChatRoleUser, Content: []byte(`[{"type":"text","text":"see"},{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/ab","mime":"application/pdf","size_bytes":245678,"sha256":"ab","filename":"Q3 report.pdf"}]`)},
+		{Role: types.ChatRoleTool, Content: []byte(`[{"type":"tool_result","tool_use_id":"tu_1","content":{"ok":true}},{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/cd","mime":"image/png","size_bytes":10,"sha256":"cd"}]`)},
+	}
+	views := buildMessageViews(msgs, "/b/")
+	if len(views) != 2 {
+		t.Fatalf("got %d bubbles, want 2", len(views))
+	}
+	u := views[0].Blocks[1]
+	if u.Kind != "artifact_ref" || u.ArtifactStoreID != "MAIN" || u.ArtifactURI != "sha256/ab" ||
+		u.ArtifactLabel != "Q3 report.pdf (application/pdf, 239.9 KB)" {
+		t.Errorf("user artifact block = %+v", u)
+	}
+	a := views[1].Blocks[1]
+	if a.Kind != "artifact_ref" || a.ArtifactLabel != "file (image/png, 10 B)" {
+		t.Errorf("assistant artifact block = %+v", a)
+	}
+}
+
+func TestChatView_RendersArtifactRefLinks(t *testing.T) {
+	store := &stubChatStore{messages: []*types.ChatMessage{
+		{ID: "m1", Role: types.ChatRoleUser, Content: []byte(`[{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/ab","mime":"application/pdf","size_bytes":245678,"sha256":"ab","filename":"<script>x</script>.pdf"}]`)},
+	}}
+	body := renderChatView(t, store, nil)
+	want := `<a class="artifact-link" href="/agent_versions/v/chat/` + testSID + `/artifacts/MAIN/sha256/ab" title="`
+	if !strings.Contains(body, want) {
+		t.Errorf("missing link %q in:\n%s", want, body)
+	}
+	if strings.Contains(body, "<script>x</script>") {
+		t.Error("filename not escaped")
+	}
+	if !strings.Contains(body, "&lt;script&gt;x&lt;/script&gt;.pdf") {
+		t.Error("escaped filename missing")
+	}
+}
+
+func TestBuildMessageViews_ArtifactRefHardening(t *testing.T) {
+	ref := func(store, uri string) string {
+		b, _ := json.Marshal(map[string]any{"type": "artifact_ref", "store_id": store, "uri": uri, "mime": "", "size_bytes": 1})
+		return string(b)
+	}
+	for _, c := range []struct{ store, uri string }{
+		{"MAIN", "../../x"}, {"MAIN", "a/./b"}, {"MAIN", "a//b"}, {"A/B", "sha256/ab"}, {".", "sha256/ab"}, {"..", "sha256/ab"},
+	} {
+		v := buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref(c.store, c.uri) + "]")}}, "/b/")
+		blk := v[0].Blocks[0]
+		if blk.Kind != "artifact_ref" || blk.ArtifactHref != "" {
+			t.Errorf("%+v: want unlinked artifact_ref, got %+v", c, blk)
+		}
+		if !strings.Contains(blk.ArtifactLabel, "(unknown, ") {
+			t.Errorf("label %q lacks unknown mime", blk.ArtifactLabel)
+		}
+	}
+	// '?' and '#' are escaped, not interpreted.
+	v := buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "a?x=1#f") + "]")}}, "/b/")
+	if got := v[0].Blocks[0].ArtifactHref; got != "/b/MAIN/a%3Fx=1%23f" {
+		t.Errorf("href = %q", got)
+	}
+	// Normal ref unchanged.
+	v = buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "sha256/ab") + "]")}}, "/b/")
+	if got := v[0].Blocks[0].ArtifactHref; got != "/b/MAIN/sha256/ab" {
+		t.Errorf("href = %q", got)
+	}
+	// Missing store_id / uri skipped.
+	v = buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("", "x") + "," + ref("MAIN", "") + "]")}}, "/b/")
+	if len(v[0].Blocks) != 0 {
+		t.Errorf("want skipped, got %+v", v[0].Blocks)
+	}
+	// Assistant + tool-with-ref merge into one bubble containing the link.
+	v = buildMessageViews([]*types.ChatMessage{
+		{Role: types.ChatRoleAssistant, Content: []byte(`[{"type":"text","text":"here"}]`)},
+		{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "sha256/ab") + "]")},
+	}, "/b/")
+	if len(v) != 1 || len(v[0].Blocks) != 2 || v[0].Blocks[1].ArtifactHref == "" {
+		t.Errorf("merge: %+v", v)
+	}
+}
+
+func TestChatView_HostileArtifactRefRendersDisabledSpan(t *testing.T) {
+	store := &stubChatStore{messages: []*types.ChatMessage{
+		{ID: "m1", Role: types.ChatRoleTool, Content: []byte(`[{"type":"artifact_ref","store_id":"MAIN","uri":"../../x","mime":"text/plain","size_bytes":1}]`)},
+	}}
+	body := renderChatView(t, store, nil)
+	if !strings.Contains(body, `<span class="artifact-link artifact-link-disabled"`) || strings.Contains(body, `href="../../x`) || strings.Contains(body, `/artifacts/MAIN/..`) {
+		t.Errorf("hostile ref rendered as link:\n%s", body)
 	}
 }

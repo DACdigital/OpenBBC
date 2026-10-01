@@ -109,6 +109,38 @@ func TestDeployedRepository_AppendMessages_StampsVersion(t *testing.T) {
 	}
 }
 
+func TestDeployedRepository_AppendMessages_KeepsGivenID(t *testing.T) {
+	repo, versionRepo, chainRoot := newDeployedRepoTest(t)
+	ctx := context.Background()
+
+	versionID, _ := versionRepo.CurrentDeployedID(ctx, chainRoot)
+	sess, _ := repo.CreateSession(ctx, chainRoot, "user-A", "")
+	givenID := uuid.NewString()
+
+	err := repo.AppendMessages(ctx, []types.DeployedMessage{
+		{ID: givenID, SessionID: sess.ID, AgentVersionID: versionID, Role: types.ChatRoleUser,
+			Content: json.RawMessage(`[{"type":"text","text":"hi"}]`), Seq: 1},
+		{SessionID: sess.ID, AgentVersionID: versionID, Role: types.ChatRoleAssistant,
+			Content: json.RawMessage(`[{"type":"text","text":"hello"}]`), Seq: 2},
+	})
+	if err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+	got, err := repo.LoadMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("LoadMessages: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d msgs, want 2", len(got))
+	}
+	if got[0].ID != givenID {
+		t.Fatalf("got id %q, want %q", got[0].ID, givenID)
+	}
+	if got[1].ID == "" || got[1].ID == givenID {
+		t.Fatalf("empty-ID message got id %q, want generated and distinct", got[1].ID)
+	}
+}
+
 func TestDeployedRepository_DeleteSession_CascadesMessages(t *testing.T) {
 	repo, versionRepo, chainRoot := newDeployedRepoTest(t)
 	ctx := context.Background()

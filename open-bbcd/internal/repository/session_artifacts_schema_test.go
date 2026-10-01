@@ -120,7 +120,9 @@ func TestChatSessionArtifacts_Backfill(t *testing.T) {
 		{"type":"tool_result","tool_use_id":"t1","content":"ok","is_error":false},
 		{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/aa","mime":"image/png","size_bytes":3,"sha256":"aa","filename":"shot.png"},
 		{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/bb","filename":""},
-		{"type":"artifact_ref","store_id":"MAIN"}
+		{"type":"artifact_ref","store_id":"MAIN"},
+		{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/dd","size_bytes":"12.0"},
+		{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/ee","size_bytes":"abc"}
 	]`
 	userContent := `[{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/cc","mime":"image/png","size_bytes":1,"sha256":"cc"}]`
 	for _, m := range []struct {
@@ -170,7 +172,13 @@ func TestChatSessionArtifacts_Backfill(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chat_session_artifacts WHERE session_id = $1::uuid`, sid).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Fatalf("backfilled %d rows, want 2", n)
+	for _, uri := range []string{"sha256/dd", "sha256/ee"} {
+		bad, err := repo.LookupSessionArtifact(ctx, sid, "MAIN", uri)
+		if err != nil || bad.SizeBytes != 0 {
+			t.Fatalf("non-integer size_bytes ref %s = %+v, err %v; want backfilled with 0", uri, bad, err)
+		}
+	}
+	if n != 4 {
+		t.Fatalf("backfilled %d rows, want 4", n)
 	}
 }

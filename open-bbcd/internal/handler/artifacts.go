@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -99,20 +98,40 @@ func (h *ArtifactHandler) HandleDeletePending(w http.ResponseWriter, r *http.Req
 
 var errMaxSizeExceeded = errors.New("upload exceeds ARTIFACT_MAX_UPLOAD_MB")
 
+// defaultUploadBufferBytes is hashAndBuffer's starting capacity when the
+// caller has no usable size hint.
+const defaultUploadBufferBytes = 32 << 10
+
+// maxUpfrontBufferBytes caps the capacity hashAndBuffer reserves before any
+// bytes arrive: the hint is the client's Content-Length, and a client that
+// claims a large body and then stalls must not pin a cap-sized buffer.
+const maxUpfrontBufferBytes = 1 << 20
+
 // hashAndBuffer reads r fully into memory while computing sha256. Aborts
-// with errMaxSizeExceeded if the stream would grow past maxBytes.
-func hashAndBuffer(r io.Reader, maxBytes int64) (data []byte, sum []byte, err error) {
-	h := sha256.New()
-	var b bytes.Buffer
-	buf := make([]byte, 32*1024)
+// with errMaxSizeExceeded if the stream would grow past maxBytes. sizeHint,
+// when 0 < sizeHint <= maxBytes, sizes the buffer: it starts at up to
+// maxUpfrontBufferBytes and jumps straight to the hint on its first growth,
+// so a hint at or above the stream length costs at most two allocations.
+func hashAndBuffer(r io.Reader, maxBytes, sizeHint int64) (data []byte, sum []byte, err error) {
+	if sizeHint <= 0 || sizeHint > maxBytes {
+		sizeHint = min(defaultUploadBufferBytes, maxBytes)
+	}
+	// One byte past the size lets a stream of exactly that many bytes
+	// reach EOF without growing.
+	data = make([]byte, 0, min(sizeHint, maxUpfrontBufferBytes)+1)
 	for {
-		n, readErr := r.Read(buf)
-		if n > 0 {
-			if int64(b.Len())+int64(n) > maxBytes {
+		if len(data) == cap(data) {
+			if int64(len(data)) > maxBytes {
 				return nil, nil, errMaxSizeExceeded
 			}
-			_, _ = h.Write(buf[:n])
-			_, _ = b.Write(buf[:n])
+			grown := make([]byte, len(data), min(max(2*int64(cap(data)), sizeHint+1), maxBytes+1))
+			copy(grown, data)
+			data = grown
+		}
+		n, readErr := r.Read(data[len(data):cap(data)])
+		data = data[:len(data)+n]
+		if int64(len(data)) > maxBytes {
+			return nil, nil, errMaxSizeExceeded
 		}
 		if readErr == io.EOF {
 			break
@@ -121,13 +140,14 @@ func hashAndBuffer(r io.Reader, maxBytes int64) (data []byte, sum []byte, err er
 			return nil, nil, readErr
 		}
 	}
-	return b.Bytes(), h.Sum(nil), nil
+	s := sha256.Sum256(data)
+	return data, s[:], nil
 }
 
-// isMaxBytesError checks the error returned by ParseMultipartForm for
-// the http.MaxBytesReader signal. Go's stdlib returns *http.MaxBytesError
-// on Go 1.19+; before that, the error had unexported type. This form
-// covers both cases without a hard version dependency.
+// isMaxBytesError reports whether err (from reading or parsing a request
+// body) is the http.MaxBytesReader signal. Go's stdlib returns
+// *http.MaxBytesError on Go 1.19+; before that, the error had unexported
+// type. This form covers both cases without a hard version dependency.
 func isMaxBytesError(err error) bool {
 	var mbe *http.MaxBytesError
 	if errors.As(err, &mbe) {

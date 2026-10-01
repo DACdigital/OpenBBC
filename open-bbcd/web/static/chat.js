@@ -32,6 +32,15 @@
   if (!versionID || !sessionID) return;
 
   let currentAssistantTurn = null;
+  let currentUserBubble = null;
+  let pendingAttachments = [];
+  let uploadsInFlight = 0;
+  let deletesInFlight = 0;
+  let turnActive = false;
+  let syncSeq = 0;
+  let chipGen = 0; // bumped per chip added; lets a sync keep chips newer than its request
+  let pendingLocked = false; // pending set frozen from send until the claim is decided
+  let runStarted = false;
   let displayBuf = '';
   let typingActive = false;
   let streamEnded = false;
@@ -40,6 +49,249 @@
   // Used post-finalize to fetch the feedback footer for the bubble.
   let currentAssistantMessageID = null;
   const toolCallElements = new Map();
+
+  // ---- Artifacts: attach, pending chips ------------------------------------
+  // Server is authoritative: chips are rendered optimistically from upload
+  // responses and re-synced from GET …/pending-artifacts after every turn.
+  const chatBase = `/agent_versions/${versionID}/chat/${sessionID}`;
+  const pendingBox = document.getElementById('pending-artifacts');
+  const attachBtn = document.getElementById('chat-attach');
+  const attachInput = document.getElementById('chat-attach-input');
+
+  function chipLabel(p) {
+    return p.filename || `file (${p.mime})`;
+  }
+
+  // Server error bodies are JSON {error} or plain text.
+  function errText(body) {
+    const t = (body || '').trim();
+    try {
+      const j = JSON.parse(t);
+      if (j && typeof j.error === 'string' && j.error) return j.error;
+    } catch (_) { /* not JSON */ }
+    return t;
+  }
+
+  function updateSendEnabled() {
+    sendBtn.disabled = uploadsInFlight > 0 || deletesInFlight > 0 || turnActive;
+    if (attachBtn) attachBtn.disabled = pendingLocked || uploadsInFlight > 0;
+  }
+
+  function setPendingLocked(on) {
+    pendingLocked = on;
+    if (pendingBox) {
+      pendingBox.querySelectorAll('.artifact-chip-remove').forEach((b) => { b.disabled = on; });
+    }
+    updateSendEnabled();
+  }
+
+  function addPendingChip(p) {
+    if (!pendingBox || document.getElementById(`pending-artifact-${p.id}`)) return;
+    const chip = document.createElement('span');
+    chip.className = 'artifact-chip';
+    chip.id = `pending-artifact-${p.id}`;
+    const label = document.createElement('span');
+    label.className = 'artifact-chip-label';
+    label.textContent = chipLabel(p);
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'artifact-chip-remove';
+    rm.setAttribute('aria-label', `Remove ${chipLabel(p)}`);
+    rm.dataset.deleteUrl = `${chatBase}/pending-artifacts/${p.id}`;
+    rm.textContent = '×';
+    rm.disabled = pendingLocked;
+    chip.dataset.gen = String(++chipGen);
+    chip.appendChild(label);
+    chip.appendChild(rm);
+    pendingBox.appendChild(chip);
+  }
+
+  function pendingLabels() {
+    if (!pendingBox) return [];
+    return [...pendingBox.querySelectorAll('.artifact-chip-label')].map((el) => el.textContent);
+  }
+
+  async function syncPendingChips() {
+    if (!pendingBox) return;
+    const seq = ++syncSeq;
+    const startGen = chipGen;
+    try {
+      const resp = await fetch(`${chatBase}/pending-artifacts`, { headers: { Accept: 'application/json' } });
+      if (!resp.ok) return;
+      const body = await resp.json();
+      if (seq !== syncSeq) return; // stale response
+      // Merge: keep chips the server lists, drop absent ones (unless added
+      // after this request started), add missing ones.
+      const list = body.pending_artifacts || [];
+      const ids = new Set(list.map((p) => `pending-artifact-${p.id}`));
+      pendingBox.querySelectorAll('.artifact-chip').forEach((chip) => {
+        if (!ids.has(chip.id) && Number(chip.dataset.gen || 0) <= startGen) chip.remove();
+      });
+      list.forEach(addPendingChip);
+      if (!pendingBox.querySelector('.artifact-chip')) pendingBox.replaceChildren();
+    } catch (err) {
+      console.warn('[chat.js] pending-artifacts sync failed', err);
+    }
+  }
+
+  // Mirrors llm.HumanBytes: binary units, one truncated decimal, ".0" dropped.
+  function humanBytes(n) {
+    n = Number(n) || 0;
+    const units = [['GB', 1024 * 1024 * 1024], ['MB', 1024 * 1024], ['KB', 1024]];
+    for (const [u, size] of units) {
+      if (n >= size) {
+        const whole = Math.floor(n / size);
+        const frac = Math.floor(((n % size) * 10) / size);
+        return `${whole}${frac ? '.' + frac : ''} ${u}`;
+      }
+    }
+    return `${Math.floor(n)} B`;
+  }
+
+  // Mirrors the Go artifactHref: '' (not linkable) when store_id contains '/'
+  // or any uri segment is '', '.' or '..'.
+  function artifactHref(storeId, uri) {
+    if (String(storeId).includes('/') || storeId === '.' || storeId === '..') return '';
+    const segs = String(uri).split('/');
+    for (const sg of segs) {
+      if (sg === '' || sg === '.' || sg === '..') return '';
+    }
+    return `${chatBase}/artifacts/${encodeURIComponent(storeId)}/${segs.map(encodeURIComponent).join('/')}`;
+  }
+
+  function appendArtifactLink(v) {
+    if (!v || !v.storeId || !v.uri) return;
+    if (!currentAssistantTurn) startAssistantBubble();
+    const label = `${v.filename || 'file'} (${v.mime || 'unknown'}, ${humanBytes(v.sizeBytes)})`;
+    const href = artifactHref(v.storeId, v.uri);
+    let el;
+    if (href) {
+      el = document.createElement('a');
+      el.className = 'artifact-link';
+      el.setAttribute('href', href);
+      el.setAttribute('target', '_blank');
+      el.setAttribute('rel', 'noopener');
+    } else {
+      el = document.createElement('span');
+      el.className = 'artifact-link artifact-link-disabled';
+    }
+    el.setAttribute('title', label);
+    el.textContent = `\u{1F4CE} ${label}`;
+    flushDisplayBuf();
+    currentAssistantTurn.content.appendChild(el);
+    scheduleScroll();
+  }
+
+  // Paint any text still waiting in the typewriter buffer right now, so a
+  // block appended next lands after it, not before.
+  function flushDisplayBuf() {
+    if (!currentAssistantTurn || displayBuf.length === 0) return;
+    const last = currentAssistantTurn.content.lastChild;
+    if (last !== currentAssistantTurn.stream) {
+      const seg = newStreamSegment();
+      currentAssistantTurn.content.appendChild(seg);
+      currentAssistantTurn.stream = seg;
+    }
+    currentAssistantTurn.stream.firstChild.data += displayBuf;
+    displayBuf = '';
+  }
+
+  // RUN_STARTED is emitted only after the user turn committed, so the pending
+  // files are claimed: show them on the user bubble and empty the chips.
+  function markAttachmentsClaimed() {
+    if (currentUserBubble && pendingAttachments.length) {
+      const wrap = document.createElement('div');
+      wrap.className = 'user-attachments';
+      pendingAttachments.forEach((label) => {
+        const tag = document.createElement('span');
+        tag.className = 'artifact-chip artifact-chip-sent';
+        tag.textContent = `\u{1F4CE} ${label}`;
+        wrap.appendChild(tag);
+      });
+      const content = currentUserBubble.querySelector('.content');
+      if (content) content.appendChild(wrap);
+    }
+    pendingAttachments = [];
+    runStarted = true;
+    syncSeq++; // an older in-flight sync must not resurrect claimed chips
+    if (pendingBox) pendingBox.replaceChildren();
+    setPendingLocked(false);
+  }
+
+  async function uploadFile(file) {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    const resp = await fetch(`${chatBase}/artifacts`, { method: 'POST', body: fd });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      throw new Error(`HTTP ${resp.status}${body ? ': ' + errText(body) : ''}`);
+    }
+    addPendingChip(await resp.json());
+  }
+
+  if (attachBtn && attachInput) {
+    attachBtn.addEventListener('click', () => attachInput.click());
+    attachInput.addEventListener('change', async () => {
+      const files = [...attachInput.files];
+      attachInput.value = '';
+      if (pendingLocked) return; // pending set frozen while a turn is being claimed
+      attachBtn.disabled = true;
+      for (const f of files) {
+        uploadsInFlight++;
+        updateSendEnabled();
+        try {
+          await uploadFile(f);
+        } catch (err) {
+          showError(`Upload of ${f.name} failed: ${err.message || err}`);
+        } finally {
+          uploadsInFlight--;
+          updateSendEnabled();
+        }
+      }
+      updateSendEnabled();
+    });
+  }
+
+  if (pendingBox) {
+    pendingBox.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.artifact-chip-remove');
+      if (!btn || !btn.dataset.deleteUrl) return;
+      // A chip whose DELETE is in flight must not be captured as "claimed".
+      deletesInFlight++;
+      updateSendEnabled();
+      try {
+        await removeChip(btn);
+      } finally {
+        deletesInFlight--;
+        updateSendEnabled();
+      }
+    });
+
+    async function removeChip(btn) {
+      btn.disabled = true;
+      let resp = null;
+      try {
+        resp = await fetch(btn.dataset.deleteUrl, { method: 'DELETE' });
+      } catch (_) { /* network error: fall through */ }
+      // 204 removed; 404 already gone; 409 already consumed by a turn —
+      // in every case the chip is stale, so drop it and re-sync.
+      if (resp && (resp.ok || resp.status === 404 || resp.status === 409)) {
+        syncSeq++; // an in-flight sync GET must not resurrect this chip
+        btn.closest('.artifact-chip').remove();
+        // Drop any leftover whitespace so #pending-artifacts:empty matches.
+        if (!pendingBox.querySelector('.artifact-chip')) pendingBox.replaceChildren();
+        if (!resp.ok) syncPendingChips();
+        return;
+      }
+      btn.disabled = pendingLocked;
+      let detail = '';
+      if (resp) {
+        const t = errText(await resp.text().catch(() => ''));
+        detail = `: HTTP ${resp.status}${t ? ' ' + t : ''}`;
+      }
+      showError(`Could not remove file${detail}`);
+    }
+  }
 
   sendBtn.addEventListener('click', send);
   // Enter sends; Shift+Enter inserts a newline (standard chat textarea behavior).
@@ -62,19 +314,23 @@
 
   async function send() {
     const text = input.value.trim();
-    if (!text) return;
+    const attached = pendingLabels();
+    if (!text && attached.length === 0) return;
+    if (uploadsInFlight > 0 || deletesInFlight > 0 || turnActive) return;
     input.value = '';
-    sendBtn.disabled = true;
+    turnActive = true;
+    runStarted = false;
+    setPendingLocked(true);
     input.disabled = true;
 
-    appendUserBubble(text);
-    startAssistantBubble();
-
     try {
+      currentUserBubble = appendUserBubble(text);
+      pendingAttachments = attached;
+      startAssistantBubble();
       const resp = await fetch(`/agent_versions/${versionID}/chat/${sessionID}/turn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: [{ type: 'text', text }] }),
+        body: JSON.stringify({ input: text ? [{ type: 'text', text }] : [] }),
       });
       if (!resp.ok) {
         const body = await resp.text().catch(() => '');
@@ -105,7 +361,16 @@
       // mid-sentence visually.
       await waitForDrain();
       finalizeAssistantBubble();
-      sendBtn.disabled = false;
+      // Artifact-only send that never started: drop the empty user bubble.
+      if (!runStarted && currentUserBubble && !currentUserBubble.querySelector('.md')) {
+        currentUserBubble.remove();
+      }
+      currentUserBubble = null;
+      pendingAttachments = [];
+      setPendingLocked(false);
+      syncPendingChips();
+      turnActive = false;
+      updateSendEnabled();
       input.disabled = false;
       input.focus();
     }
@@ -144,6 +409,11 @@
   function handleEvent(type, data) {
     switch (type) {
       case 'RUN_STARTED':
+        markAttachmentsClaimed();
+        break;
+      case 'CUSTOM':
+        if (data.name === 'ARTIFACT_REF') appendArtifactLink(data.value);
+        break;
       case 'TEXT_MESSAGE_END':
       case 'RUN_FINISHED':
         break;
@@ -236,13 +506,16 @@
     b.appendChild(buildHeader('user'));
     const content = document.createElement('div');
     content.className = 'content';
-    const md = document.createElement('div');
-    md.className = 'md';
-    md.innerHTML = renderMarkdown(text);
-    content.appendChild(md);
+    if (text) {
+      const md = document.createElement('div');
+      md.className = 'md';
+      md.innerHTML = renderMarkdown(text);
+      content.appendChild(md);
+    }
     b.appendChild(content);
     log.appendChild(b);
     scheduleScroll();
+    return b;
   }
 
   function startAssistantBubble() {

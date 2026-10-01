@@ -91,6 +91,8 @@
               <summary{{if .ToolIsMocked}} class="mocked"{{end}}>▸ result{{if .ToolIsMocked}} (mocked){{end}}</summary>
               <pre>{{.ToolResult}}</pre>
             </details>
+          {{else if eq .Kind "artifact_ref"}}
+            {{if .ArtifactHref}}<a class="artifact-link" href="{{.ArtifactHref}}" title="{{.ArtifactLabel}}" target="_blank" rel="noopener">📎 {{.ArtifactLabel}}</a>{{else}}<span class="artifact-link artifact-link-disabled" title="{{.ArtifactLabel}}">📎 {{.ArtifactLabel}}</span>{{end}}
           {{end}}
         {{end}}
       </div>
@@ -105,14 +107,12 @@
 
 {{if .ArtifactsEnabled}}
 <div id="pending-artifacts" class="pending-artifacts" aria-label="Files attached to your next message">
-  {{- range .PendingArtifacts}}
-  <span class="artifact-chip" id="pending-artifact-{{.ID}}">
+  {{- range .PendingArtifacts -}}
+  <span class="artifact-chip" data-gen="0" id="pending-artifact-{{.ID}}">
     <span class="artifact-chip-label">{{.Label}}</span>
     {{- if not $.Locked}}
     <button type="button" class="artifact-chip-remove" aria-label="Remove {{.Label}}"
-            hx-delete="/agent_versions/{{$.VersionID}}/chat/{{$.SessionID}}/pending-artifacts/{{.ID}}"
-            hx-swap="none"
-            hx-on::after-request="if (event.detail.successful) this.closest('.artifact-chip').remove()">×</button>
+            data-delete-url="/agent_versions/{{$.VersionID}}/chat/{{$.SessionID}}/pending-artifacts/{{.ID}}">×</button>
     {{- end}}
   </span>
   {{- end -}}
@@ -120,6 +120,10 @@
 {{end}}
 
 <form id="chat-form" class="chat-input" onsubmit="return false;">
+  {{if and .ArtifactsEnabled .HasBundle (not .Locked)}}
+  <input type="file" id="chat-attach-input" multiple hidden>
+  <button type="button" id="chat-attach" class="btn-secondary chat-attach" title="Attach files to your next message" aria-label="Attach files">📎</button>
+  {{end}}
   <textarea id="chat-input" rows="2"{{if or (not .HasBundle) .Locked}} disabled{{end}} placeholder="{{if .Locked}}Session is locked (part of a closed dataset version).{{else}}Type a message…  (Enter to send, Shift+Enter for newline){{end}}"></textarea>
   <button type="submit" id="chat-send" class="btn-primary"{{if or (not .HasBundle) .Locked}} disabled{{if .Locked}} title="Session is locked"{{else}} title="Agent has no bundle"{{end}}{{end}}>Send</button>
 </form>

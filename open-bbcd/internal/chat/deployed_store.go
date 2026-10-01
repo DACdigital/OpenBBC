@@ -64,17 +64,12 @@ func (s *DeployedChatStore) LoadMessages(ctx context.Context, sessionID string) 
 	return out, nil
 }
 
-// AppendMessages stamps each row with agentVersionID before persisting.
+// AppendMessages stamps each row with agentVersionID and passes the message id
+// through, so assistant rows keep the id the stream announced.
 func (s *DeployedChatStore) AppendMessages(ctx context.Context, agentVersionID string, msgs []types.ChatMessage) error {
 	depl := make([]types.DeployedMessage, len(msgs))
 	for i, m := range msgs {
-		depl[i] = types.DeployedMessage{
-			SessionID:      m.SessionID,
-			AgentVersionID: agentVersionID,
-			Role:           m.Role,
-			Content:        m.Content,
-			Seq:            m.Seq,
-		}
+		depl[i] = toDeployedMessage(agentVersionID, m)
 	}
 	return s.repo.AppendMessages(ctx, depl)
 }

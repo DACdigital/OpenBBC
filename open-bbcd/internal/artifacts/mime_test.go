@@ -57,3 +57,18 @@ func TestIsNativeRenderMIME(t *testing.T) {
 		t.Error("application/zip must not be native-render")
 	}
 }
+
+func TestCleanText_StripsBidiControls(t *testing.T) {
+	cases := map[string]string{
+		"invoice‮fdp.exe": "invoicefdp.exe",
+		"a‎b‏c؜d":         "abcd",
+		"x⁦y⁧z⁨w⁩":        "xyzw",
+		"‪‫‬‭ok":          "ok",
+		"family \U0001F468‍\U0001F469‍\U0001F467.png": "family \U0001F468‍\U0001F469‍\U0001F467.png", // ZWJ kept
+	}
+	for in, want := range cases {
+		if got := CleanText(in); got != want {
+			t.Errorf("CleanText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
