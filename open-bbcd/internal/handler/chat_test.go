@@ -487,7 +487,7 @@ func TestBuildMessageViews_ArtifactRefHardening(t *testing.T) {
 		return string(b)
 	}
 	for _, c := range []struct{ store, uri string }{
-		{"MAIN", "../../x"}, {"MAIN", "a/./b"}, {"MAIN", "a//b"}, {"A/B", "sha256/ab"},
+		{"MAIN", "../../x"}, {"MAIN", "a/./b"}, {"MAIN", "a//b"}, {"A/B", "sha256/ab"}, {".", "sha256/ab"}, {"..", "sha256/ab"},
 	} {
 		v := buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref(c.store, c.uri) + "]")}}, "/b/")
 		blk := v[0].Blocks[0]

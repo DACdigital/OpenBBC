@@ -151,7 +151,7 @@
   // Mirrors the Go artifactHref: '' (not linkable) when store_id contains '/'
   // or any uri segment is '', '.' or '..'.
   function artifactHref(storeId, uri) {
-    if (String(storeId).includes('/')) return '';
+    if (String(storeId).includes('/') || storeId === '.' || storeId === '..') return '';
     const segs = String(uri).split('/');
     for (const sg of segs) {
       if (sg === '' || sg === '.' || sg === '..') return '';

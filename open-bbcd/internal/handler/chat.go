@@ -347,7 +347,7 @@ func buildMessageViews(msgs []*types.ChatMessage, artifactBase string) []message
 // any uri segment could retarget the link: '/' in the store id, or an empty,
 // "." or ".." uri segment.
 func artifactHref(base, storeID, uri string) string {
-	if strings.Contains(storeID, "/") {
+	if strings.Contains(storeID, "/") || storeID == "." || storeID == ".." {
 		return ""
 	}
 	segs := strings.Split(uri, "/")
