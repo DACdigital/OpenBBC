@@ -234,6 +234,7 @@
     attachInput.addEventListener('change', async () => {
       const files = [...attachInput.files];
       attachInput.value = '';
+      if (pendingLocked) return; // pending set frozen while a turn is being claimed
       attachBtn.disabled = true;
       for (const f of files) {
         uploadsInFlight++;
@@ -322,11 +323,10 @@
     setPendingLocked(true);
     input.disabled = true;
 
-    currentUserBubble = appendUserBubble(text);
-    pendingAttachments = attached;
-    startAssistantBubble();
-
     try {
+      currentUserBubble = appendUserBubble(text);
+      pendingAttachments = attached;
+      startAssistantBubble();
       const resp = await fetch(`/agent_versions/${versionID}/chat/${sessionID}/turn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
