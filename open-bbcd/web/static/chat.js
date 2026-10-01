@@ -275,6 +275,7 @@
       // 204 removed; 404 already gone; 409 already consumed by a turn —
       // in every case the chip is stale, so drop it and re-sync.
       if (resp && (resp.ok || resp.status === 404 || resp.status === 409)) {
+        syncSeq++; // an in-flight sync GET must not resurrect this chip
         btn.closest('.artifact-chip').remove();
         // Drop any leftover whitespace so #pending-artifacts:empty matches.
         if (!pendingBox.querySelector('.artifact-chip')) pendingBox.replaceChildren();
