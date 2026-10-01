@@ -412,3 +412,5 @@
 .artifact-link:hover { text-decoration: underline; }
 .artifact-link-disabled { opacity: 0.6; cursor: default; }
 .artifact-link-disabled:hover { text-decoration: none; }
+.user-attachments { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+.artifact-chip-sent { opacity: 0.85; }

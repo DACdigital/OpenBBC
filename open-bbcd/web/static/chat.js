@@ -112,6 +112,73 @@
     }
   }
 
+  // Mirrors llm.HumanBytes: binary units, one truncated decimal, ".0" dropped.
+  function humanBytes(n) {
+    n = Number(n) || 0;
+    const units = [['GB', 1024 * 1024 * 1024], ['MB', 1024 * 1024], ['KB', 1024]];
+    for (const [u, size] of units) {
+      if (n >= size) {
+        const whole = Math.floor(n / size);
+        const frac = Math.floor(((n % size) * 10) / size);
+        return `${whole}${frac ? '.' + frac : ''} ${u}`;
+      }
+    }
+    return `${Math.floor(n)} B`;
+  }
+
+  // Mirrors the Go artifactHref: '' (not linkable) when store_id contains '/'
+  // or any uri segment is '', '.' or '..'.
+  function artifactHref(storeId, uri) {
+    if (String(storeId).includes('/')) return '';
+    const segs = String(uri).split('/');
+    for (const sg of segs) {
+      if (sg === '' || sg === '.' || sg === '..') return '';
+    }
+    return `${chatBase}/artifacts/${encodeURIComponent(storeId)}/${segs.map(encodeURIComponent).join('/')}`;
+  }
+
+  function appendArtifactLink(v) {
+    if (!v || !v.storeId || !v.uri) return;
+    if (!currentAssistantTurn) startAssistantBubble();
+    const label = `${v.filename || 'file'} (${v.mime || 'unknown'}, ${humanBytes(v.sizeBytes)})`;
+    const href = artifactHref(v.storeId, v.uri);
+    let el;
+    if (href) {
+      el = document.createElement('a');
+      el.className = 'artifact-link';
+      el.setAttribute('href', href);
+      el.setAttribute('target', '_blank');
+      el.setAttribute('rel', 'noopener');
+    } else {
+      el = document.createElement('span');
+      el.className = 'artifact-link artifact-link-disabled';
+    }
+    el.setAttribute('title', label);
+    el.textContent = `\u{1F4CE} ${label}`;
+    currentAssistantTurn.content.appendChild(el);
+    scheduleScroll();
+  }
+
+  // RUN_STARTED is emitted only after the user turn committed, so the pending
+  // files are claimed: show them on the user bubble and empty the chips.
+  function markAttachmentsClaimed() {
+    if (currentUserBubble && pendingAttachments.length) {
+      const wrap = document.createElement('div');
+      wrap.className = 'user-attachments';
+      pendingAttachments.forEach((label) => {
+        const tag = document.createElement('span');
+        tag.className = 'artifact-chip artifact-chip-sent';
+        tag.textContent = `\u{1F4CE} ${label}`;
+        wrap.appendChild(tag);
+      });
+      const content = currentUserBubble.querySelector('.content');
+      if (content) content.appendChild(wrap);
+    }
+    pendingAttachments = [];
+    syncSeq++; // an older in-flight sync must not resurrect claimed chips
+    if (pendingBox) pendingBox.replaceChildren();
+  }
+
   async function uploadFile(file) {
     const fd = new FormData();
     fd.append('file', file, file.name);
@@ -241,6 +308,9 @@
       // mid-sentence visually.
       await waitForDrain();
       finalizeAssistantBubble();
+      currentUserBubble = null;
+      pendingAttachments = [];
+      syncPendingChips();
       turnActive = false;
       updateSendEnabled();
       input.disabled = false;
@@ -281,6 +351,11 @@
   function handleEvent(type, data) {
     switch (type) {
       case 'RUN_STARTED':
+        markAttachmentsClaimed();
+        break;
+      case 'CUSTOM':
+        if (data.name === 'ARTIFACT_REF') appendArtifactLink(data.value);
+        break;
       case 'TEXT_MESSAGE_END':
       case 'RUN_FINISHED':
         break;
