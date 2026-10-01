@@ -30,12 +30,29 @@ func (f *fakeAgentRepo) GetWithAgent(ctx context.Context, id string) (*types.Age
 	return f.version, agent, nil
 }
 
+// fakeToolRow is one origin='tool_result' row recorded by AppendToolMessage.
+type fakeToolRow struct {
+	MessageID string
+	Ref       llm.ArtifactRefBlock
+}
+
 type fakeChatRepo struct {
 	mu       sync.Mutex
 	ensured  map[string]string
 	messages []types.ChatMessage
 	nextSeq  int
 	failRole types.ChatRole
+	// pending: sessionID → pending uploads, in claim order. AppendUserTurn
+	// consumes them (unless it returns ErrEmptyTurn).
+	pending map[string][]llm.ArtifactRefBlock
+	// toolRows: refs recorded by AppendToolMessage, in call order, with
+	// the id of the tool message they were recorded against.
+	toolRows []fakeToolRow
+	// beforeClaim runs at the start of AppendUserTurn, outside the lock;
+	// tests use it to simulate a DELETE racing the claim.
+	beforeClaim func()
+	// userTurnErr, if set, is returned by AppendUserTurn (nothing persisted).
+	userTurnErr error
 }
 
 func (f *fakeChatRepo) EnsureSession(ctx context.Context, sessionID, scopeID string) error {
@@ -77,6 +94,57 @@ func (f *fakeChatRepo) AppendMessages(ctx context.Context, agentVersionID string
 	return nil
 }
 
+func (f *fakeChatRepo) AppendUserTurn(ctx context.Context, agentVersionID string, msg types.ChatMessage) ([]llm.ArtifactRefBlock, error) {
+	if f.beforeClaim != nil {
+		f.beforeClaim()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failRole == types.ChatRoleUser {
+		return nil, errors.New("fake: append failed")
+	}
+	if f.userTurnErr != nil {
+		return nil, f.userTurnErr
+	}
+	var raw []json.RawMessage
+	_ = json.Unmarshal(msg.Content, &raw)
+	blocks := parseBlocks(raw)
+	claimed := f.pending[msg.SessionID]
+	hasText := false
+	for _, b := range blocks {
+		if tb, ok := b.(llm.TextBlock); ok && tb.Text != "" {
+			hasText = true
+		}
+	}
+	if len(claimed) == 0 && !hasText {
+		return nil, types.ErrEmptyTurn
+	}
+	delete(f.pending, msg.SessionID)
+	for _, r := range claimed {
+		blocks = append(blocks, r)
+	}
+	content, err := blocksToJSON(blocks)
+	if err != nil {
+		return nil, err
+	}
+	msg.Content = content
+	f.messages = append(f.messages, msg)
+	return claimed, nil
+}
+
+func (f *fakeChatRepo) AppendToolMessage(ctx context.Context, agentVersionID string, msg types.ChatMessage, refs []llm.ArtifactRefBlock) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failRole == types.ChatRoleTool {
+		return errors.New("fake: append failed")
+	}
+	f.messages = append(f.messages, msg)
+	for _, r := range refs {
+		f.toolRows = append(f.toolRows, fakeToolRow{MessageID: msg.ID, Ref: r})
+	}
+	return nil
+}
+
 func (f *fakeChatRepo) NextSeq(ctx context.Context, sessionID string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -92,6 +160,8 @@ type fakeLLM struct {
 	script   [][]llm.Event
 	calls    int
 	requests []llm.Request
+	// failCall: call index → error yielded instead of the script slot.
+	failCall map[int]error
 }
 
 func (f *fakeLLM) Name() string { return f.name }
@@ -99,6 +169,11 @@ func (f *fakeLLM) Name() string { return f.name }
 func (f *fakeLLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event, error] {
 	f.requests = append(f.requests, req)
 	return func(yield func(llm.Event, error) bool) {
+		if err, ok := f.failCall[f.calls]; ok {
+			f.calls++
+			yield(nil, err)
+			return
+		}
 		if f.calls >= len(f.script) {
 			return
 		}

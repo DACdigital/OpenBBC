@@ -62,11 +62,12 @@ func messagesWithRole(chats *fakeChatRepo, role types.ChatRole) []types.ChatMess
 
 func TestOrchestrator_ArtifactRefsSurviveHistoryReload(t *testing.T) {
 	flm := &fakeLLM{script: [][]llm.Event{endRound(), endRound()}}
-	o, _, _ := newArtifactOrchestrator(t, flm, nil)
+	o, chats, _ := newArtifactOrchestrator(t, flm, nil)
 	ctx := context.Background()
 
 	ref := llm.ArtifactRefBlock{StoreID: "MAIN", URI: "sha256/abc", MIME: "application/pdf", SizeBytes: 42, Sha256: "abc", Filename: "q3.pdf"}
-	if err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "summarise"}, ref}, &recordingSink{}); err != nil {
+	chats.pending = map[string][]llm.ArtifactRefBlock{"s1": {ref}}
+	if err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "summarise"}}, &recordingSink{}); err != nil {
 		t.Fatalf("turn 1: %v", err)
 	}
 	if err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "and again"}}, &recordingSink{}); err != nil {
@@ -297,5 +298,46 @@ func TestOrchestrator_BlobFetchedOncePerTurn(t *testing.T) {
 	// The image ref is sent on calls 2 and 3.
 	if f.gets != 1 {
 		t.Fatalf("blob fetched %d times in one turn, want 1", f.gets)
+	}
+}
+
+// With no artifact uploader wired (registry disabled), tool results are not
+// normalised: the ImageContent is streamed and persisted unchanged, no
+// tool_result rows are recorded and no ARTIFACT_REF is sent.
+func TestOrchestrator_NoUploader_ToolResultPassesThroughUnchanged(t *testing.T) {
+	flm := &fakeLLM{script: [][]llm.Event{toolUseRound("tu1"), endRound()}}
+	version := &types.AgentVersion{ID: "v1", Prompts: []byte(`{"main_prompt":"sys"}`)}
+	agents := &fakeAgentRepo{version: version, agent: &types.Agent{ID: "a1", Architecture: []byte(`{}`)}}
+	chats := &fakeChatRepo{}
+	out := imageToolOutput()
+	o := NewOrchestrator(agents, chats, flm, &fakeBuilder{handler: &fakeTools{results: []tools.Result{{ToolUseID: "tu1", Output: out}}}}, slog.Default())
+	sink := &recordingSink{}
+	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	var streamed []transport.ToolResultEvent
+	for _, ev := range sink.events {
+		switch e := ev.(type) {
+		case transport.ToolResultEvent:
+			streamed = append(streamed, e)
+		case transport.ArtifactRefEvent:
+			t.Fatalf("ARTIFACT_REF sent with no uploader: %+v", e)
+		}
+	}
+	if len(streamed) != 1 || streamed[0].ToolCallID != "tu1" || string(streamed[0].Result) != string(out) {
+		t.Fatalf("streamed tool results = %+v, want the raw output once", streamed)
+	}
+	tm := messagesWithRole(chats, types.ChatRoleTool)
+	if len(tm) != 1 {
+		t.Fatalf("tool messages = %d, want 1", len(tm))
+	}
+	if !strings.Contains(string(tm[0].Content), onePixelPNG) {
+		t.Fatalf("raw base64 not persisted: %s", tm[0].Content)
+	}
+	if got := blockTypes(t, tm[0].Content); !reflect.DeepEqual(got, []string{"tool_result"}) {
+		t.Fatalf("tool message block types = %v, want [tool_result]", got)
+	}
+	if len(chats.toolRows) != 0 {
+		t.Fatalf("toolRows = %+v, want none", chats.toolRows)
 	}
 }

@@ -6,15 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
 type ChatRepository struct {
 	db *sql.DB
+	sessionArtifacts
 }
 
 func NewChatRepository(db *sql.DB) *ChatRepository {
-	return &ChatRepository{db: db}
+	return &ChatRepository{db: db, sessionArtifacts: sessionArtifacts{
+		db: db, table: "chat_session_artifacts", sessionTable: "chat_sessions", lockKey: chatSessionArtifactsLockKey,
+		recheckSession: recheckChatSession, lockTurnSession: lockChatSessionForTurn,
+	}}
 }
 
 // EnsureSession inserts a chat_sessions row with the given id if it
@@ -262,46 +267,6 @@ func (r *ChatRepository) GetSessionHeaderOverrides(ctx context.Context, sessionI
 	return out, nil
 }
 
-// SessionReferences returns true when at least one chat_messages row in
-// sessionID carries an artifact_ref content-block with matching
-// (storeID, uri). mime is returned so the retrieval handler can set
-// Content-Type without another round-trip.
-//
-// The scan uses Postgres's jsonb_path_exists / jsonb_path_query_first
-// operators to walk the content array once per row. At BO chat scale
-// (dozens to low hundreds of messages per session) the row count is
-// small enough that a session-scoped scan is acceptable index-free.
-// A materialised reverse-index table would be a follow-on
-// (chat-artifacts-index spec) if this becomes hot.
-func (r *ChatRepository) SessionReferences(ctx context.Context, sessionID, storeID, uri string) (found bool, mime string, err error) {
-	const q = `
-		SELECT COALESCE(
-			(SELECT block->>'mime'
-			 FROM chat_messages,
-			      jsonb_array_elements(content) AS block
-			 WHERE session_id = $1::uuid
-			   AND block->>'type' = 'artifact_ref'
-			   AND block->>'store_id' = $2
-			   AND block->>'uri' = $3
-			 LIMIT 1),
-			''
-		) AS mime,
-		EXISTS (
-			SELECT 1
-			FROM chat_messages,
-			     jsonb_array_elements(content) AS block
-			WHERE session_id = $1::uuid
-			  AND block->>'type' = 'artifact_ref'
-			  AND block->>'store_id' = $2
-			  AND block->>'uri' = $3
-		)
-	`
-	if err := r.db.QueryRowContext(ctx, q, sessionID, storeID, uri).Scan(&mime, &found); err != nil {
-		return false, "", err
-	}
-	return found, mime, nil
-}
-
 // SetSessionHeaderOverrides replaces the per-backend header override map for a
 // session. Returns ErrNotFound if the session doesn't exist.
 func (r *ChatRepository) SetSessionHeaderOverrides(ctx context.Context, sessionID string, ovr map[string]map[string]string) error {
@@ -319,4 +284,50 @@ func (r *ChatRepository) SetSessionHeaderOverrides(ctx context.Context, sessionI
 		return types.ErrNotFound
 	}
 	return nil
+}
+
+// AppendUserTurn persists the user message and claims every pending artifact
+// on the session in one transaction. Claimed refs are appended to
+// msg.Content after its existing blocks, in (created_at, id) order, and
+// returned. Returns types.ErrEmptyTurn (persisting nothing) if msg has no
+// non-empty text block and nothing was claimed. agentVersionID is ignored
+// (BO sessions are version-pinned), as in AppendMessages. There is no
+// ON CONFLICT: a retried msg.ID errors, by design. msg.ID is required.
+func (r *ChatRepository) AppendUserTurn(ctx context.Context, agentVersionID string, msg types.ChatMessage) ([]llm.ArtifactRefBlock, error) {
+	_ = agentVersionID
+	if msg.ID == "" {
+		return nil, errors.New("message ID required")
+	}
+	return r.sessionArtifacts.appendUserTurn(ctx, msg.SessionID, msg.ID, msg.Content, func(tx *sql.Tx, content json.RawMessage) error {
+		return r.insertChatMessageTx(ctx, tx, msg, content)
+	})
+}
+
+// AppendToolMessage persists a tool-role message and one origin='tool_result'
+// row per ref (message_id = msg.ID) in one transaction. refs may be empty.
+// No ON CONFLICT: a retried msg.ID errors, by design. msg.ID is required.
+func (r *ChatRepository) AppendToolMessage(ctx context.Context, agentVersionID string, msg types.ChatMessage, refs []llm.ArtifactRefBlock) error {
+	_ = agentVersionID
+	if msg.ID == "" {
+		return errors.New("message ID required")
+	}
+	return r.sessionArtifacts.appendToolMessage(ctx, msg.SessionID, msg.ID, refs, func(tx *sql.Tx) error {
+		return r.insertChatMessageTx(ctx, tx, msg, msg.Content)
+	})
+}
+
+// insertChatMessageTx inserts one message and bumps the session's
+// updated_at, as AppendMessages does.
+func (r *ChatRepository) insertChatMessageTx(ctx context.Context, tx *sql.Tx, m types.ChatMessage, content json.RawMessage) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO chat_messages (id, session_id, role, content, seq)
+		VALUES ($1::uuid, $2::uuid, $3, $4, $5)
+	`, m.ID, m.SessionID, string(m.Role), []byte(content), m.Seq); err != nil {
+		if isForeignKeyViolation(err) {
+			return types.ErrNotFound
+		}
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE chat_sessions SET updated_at = now() WHERE id = $1::uuid`, m.SessionID)
+	return err
 }

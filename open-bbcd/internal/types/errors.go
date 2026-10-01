@@ -93,4 +93,10 @@ var (
 	// ErrTrainingSessionEvalNotEligible is returned when a POST /training-sessions
 	// is attempted against an eval that isn't DONE or has a perfect score.
 	ErrTrainingSessionEvalNotEligible = errors.New("eval is not eligible for training")
+
+	// Session artifacts (spec: docs/superpowers/specs/2026-09-30-deployed-runtime-artifacts-design.md).
+	// ErrEmptyTurn's text is the exact plain-text 400 body the turn routes return.
+	ErrEmptyTurn          = errors.New("empty turn: no text and no pending artifacts")
+	ErrPendingArtifactCap = errors.New("session already has ARTIFACT_MAX_PENDING pending artifacts")
+	ErrArtifactConsumed   = errors.New("artifact is already part of the conversation and cannot be removed")
 )

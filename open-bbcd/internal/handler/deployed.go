@@ -27,6 +27,8 @@ type DeployedStore interface {
 	UpdateSessionTitle(ctx context.Context, sessionID, userID, title string) error
 	DeleteSession(ctx context.Context, sessionID, userID string) error
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.DeployedMessage, error)
+	// HasPendingArtifacts is true when the session has >=1 pending artifact (empty-turn rule).
+	HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error)
 }
 
 type DeployedHandler struct {
@@ -59,6 +61,10 @@ func NewDeployedHandler(
 // Returns (versionID, true) if a version is deployed; ("", false) and a
 // 404 written to w if no version is deployed (no existence leak).
 func (h *DeployedHandler) requireDeployed(w http.ResponseWriter, r *http.Request, agentID string) (string, bool) {
+	if !validUUID(agentID) {
+		Error(w, types.ErrNotFound)
+		return "", false
+	}
 	v, err := h.agents.CurrentDeployedID(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
@@ -126,6 +132,10 @@ func (h *DeployedHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireDeployed(w, r, agentID); !ok {
 		return
 	}
+	if !validUUID(sessionID) {
+		Error(w, types.ErrNotFound)
+		return
+	}
 	userID := r.URL.Query().Get("user_id")
 	if userID == "" {
 		Error(w, types.ErrUserIDRequired)
@@ -159,6 +169,10 @@ func (h *DeployedHandler) UpdateTitle(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireDeployed(w, r, agentID); !ok {
 		return
 	}
+	if !validUUID(sessionID) {
+		Error(w, types.ErrNotFound)
+		return
+	}
 	var body struct {
 		UserID string `json:"user_id"`
 		Title  string `json:"title"`
@@ -183,6 +197,10 @@ func (h *DeployedHandler) DeleteSession(w http.ResponseWriter, r *http.Request) 
 	agentID := r.PathValue("agent_id")
 	sessionID := r.PathValue("session_id")
 	if _, ok := h.requireDeployed(w, r, agentID); !ok {
+		return
+	}
+	if !validUUID(sessionID) {
+		Error(w, types.ErrNotFound)
 		return
 	}
 	userID := r.URL.Query().Get("user_id")
@@ -217,6 +235,11 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validUUID(sessionID) {
+		Error(w, types.ErrNotFound)
+		return
+	}
+
 	var req turnRequest
 	if err := DecodeJSON(r, &req); err != nil {
 		Error(w, err)
@@ -243,6 +266,19 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	for _, b := range req.Input {
 		if b.Type == "text" && b.Text != "" {
 			input = append(input, llm.TextBlock{Text: b.Text})
+		}
+	}
+
+	// Empty-turn rule (spec § REST — turn): mirrors the BO turn.
+	if len(input) == 0 {
+		has, err := h.store.HasPendingArtifacts(r.Context(), sessionID)
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		if !has {
+			http.Error(w, types.ErrEmptyTurn.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 

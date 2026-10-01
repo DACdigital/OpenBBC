@@ -189,3 +189,33 @@ func TestExportBuild_SkipsToolBackends_WhenMockEnabled(t *testing.T) {
 		t.Errorf("ToolBackends = %v, want nil (mock=true)", got.ToolBackends)
 	}
 }
+
+// Eval replay of artifacts is out of scope; exporting must still succeed and
+// carry artifact_ref blocks through unchanged.
+func TestExportBuild_ArtifactRefBlocksPassThrough(t *testing.T) {
+	userContent := `[{"type":"text","text":"summarise"},{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/ab","mime":"application/pdf","size_bytes":42,"sha256":"ab","filename":"q3.pdf"}]`
+	fs := &fakeStore{
+		eval:   &types.Eval{ID: "e-1", AgentVersionID: "av-1", DatasetVersionID: "dv-1", MockMCPTools: true},
+		bundle: []byte(`{"main_prompt":"hi","tools":[]}`),
+		refs:   []*types.DatasetSessionRef{{SessionID: "s-1"}},
+		msgs: map[string][]*types.ChatMessage{"s-1": {
+			{ID: "m-1", Role: types.ChatRoleUser, Content: json.RawMessage(userContent)},
+			{ID: "m-2", Role: types.ChatRoleAssistant, Content: json.RawMessage(`[{"type":"text","text":"ok"}]`)},
+		}},
+	}
+	got, err := Build(context.Background(), fs, "e-1")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	blocks, ok := got.DatasetVersion.Sessions[0].Transcript[0].Content.([]any)
+	if !ok || len(blocks) != 2 {
+		t.Fatalf("content = %#v", got.DatasetVersion.Sessions[0].Transcript[0].Content)
+	}
+	ref := blocks[1].(map[string]any)
+	if ref["type"] != "artifact_ref" || ref["uri"] != "sha256/ab" || ref["filename"] != "q3.pdf" || ref["size_bytes"] != float64(42) {
+		t.Fatalf("artifact_ref changed in export: %#v", ref)
+	}
+	if _, err := yaml.Marshal(got); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+}

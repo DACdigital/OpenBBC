@@ -3,18 +3,24 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
 type DeployedRepository struct {
 	db *sql.DB
+	sessionArtifacts
 }
 
 func NewDeployedRepository(db *sql.DB) *DeployedRepository {
-	return &DeployedRepository{db: db}
+	return &DeployedRepository{db: db, sessionArtifacts: sessionArtifacts{
+		db: db, table: "deployed_session_artifacts", sessionTable: "deployed_sessions", lockKey: deployedSessionArtifactsLockKey,
+		recheckSession: recheckDeployedSession,
+	}}
 }
 
 func scanDeployedSession(s scanner) (*types.DeployedSession, error) {
@@ -214,4 +220,41 @@ func (r *DeployedRepository) NextSeq(ctx context.Context, sessionID string) (int
 		return 1, nil
 	}
 	return int(n.Int64) + 1, nil
+}
+
+// AppendUserTurn: see ChatRepository.AppendUserTurn. The message id is
+// inserted explicitly (m.ID, required) so claimed rows' message_id names the
+// real row. Unlike the BO method it takes a DeployedMessage (AgentVersionID on
+// the message) instead of an agentVersionID argument. No ON CONFLICT: a
+// retried m.ID errors, by design.
+func (r *DeployedRepository) AppendUserTurn(ctx context.Context, m types.DeployedMessage) ([]llm.ArtifactRefBlock, error) {
+	if m.ID == "" {
+		return nil, errors.New("message ID required")
+	}
+	return r.sessionArtifacts.appendUserTurn(ctx, m.SessionID, m.ID, m.Content, func(tx *sql.Tx, content json.RawMessage) error {
+		return insertDeployedMessageTx(ctx, tx, m, content)
+	})
+}
+
+// AppendToolMessage: see ChatRepository.AppendToolMessage. It takes a
+// DeployedMessage (AgentVersionID on the message) instead of an agentVersionID
+// argument; m.ID is required.
+func (r *DeployedRepository) AppendToolMessage(ctx context.Context, m types.DeployedMessage, refs []llm.ArtifactRefBlock) error {
+	if m.ID == "" {
+		return errors.New("message ID required")
+	}
+	return r.sessionArtifacts.appendToolMessage(ctx, m.SessionID, m.ID, refs, func(tx *sql.Tx) error {
+		return insertDeployedMessageTx(ctx, tx, m, m.Content)
+	})
+}
+
+func insertDeployedMessageTx(ctx context.Context, tx *sql.Tx, m types.DeployedMessage, content json.RawMessage) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO deployed_messages (id, session_id, agent_version_id, role, content, seq)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6)
+	`, m.ID, m.SessionID, m.AgentVersionID, string(m.Role), []byte(content), m.Seq)
+	if isForeignKeyViolation(err) {
+		return types.ErrNotFound
+	}
+	return err
 }

@@ -388,6 +388,15 @@ func TestUnavailableNote_CapsMIME(t *testing.T) {
 	}
 }
 
+// Postgres JSONB rejects \u0000, so a tool's NUL-carrying mimeType must not
+// reach the persisted note.
+func TestUnavailableNote_CleansMIME(t *testing.T) {
+	n := string(unavailableNote("image/p\x00n\x01g\xff", "5 B"))
+	if strings.Contains(n, `\u0000`) || strings.Contains(n, `\u0001`) || strings.Contains(n, `\ufffd`) || !strings.Contains(n, "image/png") {
+		t.Fatalf("mime not cleaned: %s", n)
+	}
+}
+
 func TestNormalise_UnknownTypeWithDataBecomesNote(t *testing.T) {
 	for _, item := range []string{
 		`{"type":"video","data":"aGVsbG8="}`,

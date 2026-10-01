@@ -368,8 +368,10 @@ func inlineMedia(item mcpContentItem) (declared string, data []byte, decoded, is
 	return "", nil, false, false
 }
 
-// truncateMIME caps a possibly tool-controlled mime string at 100 bytes.
+// truncateMIME cleans (artifacts.CleanText) and caps a possibly
+// tool-controlled mime string at 100 bytes.
 func truncateMIME(mime string) string {
+	mime = artifacts.CleanText(mime) // JSONB rejects \u0000
 	if len(mime) > 100 {
 		return strings.ToValidUTF8(mime[:100], "")
 	}

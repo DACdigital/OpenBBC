@@ -109,6 +109,8 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	// failure. Any other Load error IS a boot failure — the deployer
 	// misconfigured something and would silently ship without artifacts.
 	var artifactHandler *ArtifactHandler
+	var deployedArtifactHandler *DeployedArtifactHandler
+	var artifactRegistry *artifacts.Registry
 	{
 		reg, regErr := artifacts.Load(cfg.Artifacts)
 		switch {
@@ -119,7 +121,9 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 				fatal("probe artifact store", probeErr)
 			}
 			cancel()
-			artifactHandler = NewArtifactHandler(chatRepo, chatRepo, reg, cfg.Artifacts.MaxUploadMB, logger)
+			artifactRegistry = reg
+			artifactHandler = NewArtifactHandler(chatRepo, chatRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
+			deployedArtifactHandler = NewDeployedArtifactHandler(versionRepo, deployedRepo, deployedRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
 			logger.Info("artifacts: registry hydrated",
 				slog.Int("stores", len(reg.IDs())),
 				slog.String("default", reg.DefaultID()),
@@ -175,10 +179,10 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	// Wire artifact-support hooks when the registry is enabled — resolver
 	// for user-uploaded refs rendered before each LLM call, uploader for
 	// MCP tool result normalisation.
-	if artifactHandler != nil {
+	if artifactRegistry != nil {
 		orchestrator.
-			WithArtifacts(artifactResolverFrom(artifactHandler.registry)).
-			WithArtifactUploader(artifactUploader{registry: artifactHandler.registry})
+			WithArtifacts(artifactResolverFrom(artifactRegistry)).
+			WithArtifactUploader(artifactUploader{registry: artifactRegistry})
 	}
 	orchestrator.Model = cfg.Anthropic.DefaultModel
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
@@ -224,12 +228,22 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	if err != nil {
 		fatal("init chat handler", err)
 	}
+	if artifactHandler != nil {
+		chatHandler.WithPendingArtifacts(chatRepo)
+	}
 
 	deployedChatStore := chat.NewDeployedChatStore(deployedRepo)
 	deployedOrchestrator := chat.NewOrchestrator(versionRepo, deployedChatStore, llmClient, builder, logger)
 	deployedOrchestrator.Model = cfg.Anthropic.DefaultModel
 	deployedOrchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
+	// Deployed parity with BO: claimed refs render natively and MCP tool
+	// results are normalised into tool_result artifacts.
+	if artifactRegistry != nil {
+		deployedOrchestrator.
+			WithArtifacts(artifactResolverFrom(artifactRegistry)).
+			WithArtifactUploader(artifactUploader{registry: artifactRegistry})
+	}
 
 	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger)
 	deployHandler := NewDeployHandler(agentRepo, versionRepo, agentWiringRepo)
@@ -323,6 +337,8 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	if artifactHandler != nil {
 		mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/artifacts", artifactHandler.HandleUpload)
 		mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/artifacts/{path...}", artifactHandler.HandleRetrieve)
+		mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/pending-artifacts", artifactHandler.HandleListPending)
+		mux.HandleFunc("DELETE /agent_versions/{version_id}/chat/{session_id}/pending-artifacts/{id}", artifactHandler.HandleDeletePending)
 	}
 
 	// Datasets — /datasets/new MUST precede /datasets/{dataset_id} so the
@@ -389,6 +405,9 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("PATCH /deployed/{agent_id}/sessions/{session_id}/title", deployedHandler.UpdateTitle)
 	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}", deployedHandler.DeleteSession)
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions/{session_id}/turn", deployedHandler.Turn)
+	if deployedArtifactHandler != nil {
+		deployedArtifactHandler.Register(mux)
+	}
 
 	// Static
 	staticFS, err := fs.Sub(web.Assets, "static")

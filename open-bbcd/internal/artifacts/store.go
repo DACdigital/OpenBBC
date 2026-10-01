@@ -1,8 +1,10 @@
 // Package artifacts declares the pluggable storage substrate for chat
-// artifact bytes. open-bbcd holds only refs in Postgres (embedded as
-// `artifact_ref` content blocks inside chat_messages.content JSONB); the
-// bytes themselves live in a deployer-configured Object store reached
-// through an ArtifactStore adapter.
+// artifact bytes. open-bbcd holds only refs in Postgres: each artifact in a
+// session's read scope is a row in that context's session-artifact table
+// (chat_session_artifacts for BO, deployed_session_artifacts for deployed),
+// and messages carry `artifact_ref` content blocks that retrieval authorises
+// by row lookup. The bytes themselves live in a deployer-configured Object
+// store reached through an ArtifactStore adapter.
 //
 // The store registry is loaded once at daemon boot from env vars
 // (ARTIFACT_STORE_<ID>_* groups + ARTIFACT_STORE_DEFAULT); there is no
@@ -56,6 +58,16 @@ type StatResult struct {
 	Sha256    string
 }
 
+// SignOptions are per-request response overrides a signed URL carries, so
+// the store serves the artifact with the same Content-Type and
+// Content-Disposition the bytes-delivery path sets. Per request because
+// content-addressed blobs are shared by rows with different filenames.
+// Kinds that cannot set response overrides ignore them.
+type SignOptions struct {
+	ContentType        string
+	ContentDisposition string
+}
+
 // ArtifactStore is the pluggable interface every store-kind implementation
 // satisfies. Framework-side callers (the upload/retrieval handlers, the
 // tool-result normaliser, the LLM multimodal renderer) always call through
@@ -86,8 +98,10 @@ type ArtifactStore interface {
 	// Sign returns a time-bounded HTTPS URL that any HTTP client can
 	// GET without further auth. Only called when PreferredDelivery()
 	// returns DeliverySignedURL. TTL is honoured on a best-effort basis;
-	// some kinds may enforce a floor or ceiling.
-	Sign(ctx context.Context, uri string, ttl time.Duration) (string, error)
+	// some kinds may enforce a floor or ceiling. opts are applied as
+	// response overrides (S3 response-content-type /
+	// response-content-disposition).
+	Sign(ctx context.Context, uri string, ttl time.Duration, opts SignOptions) (string, error)
 
 	// Stat returns metadata about the blob at URI. The framework calls
 	// this on the upload path before Put to short-circuit dedup: if
@@ -104,7 +118,10 @@ type ArtifactStore interface {
 
 	// Probe performs a boot-time self-check: a small write+read+delete
 	// round-trip against a sentinel key that verifies credentials, bucket
-	// reachability, and permission set. Failure of the default store's
+	// reachability, and permission set, and that Stat of a random missing
+	// key reports not-found (for s3_compatible this needs s3:ListBucket;
+	// without it S3 answers 403 and a missing blob is indistinguishable
+	// from an auth failure). Failure of the default store's
 	// Probe (after bounded retry) fails daemon boot.
 	Probe(ctx context.Context) error
 }

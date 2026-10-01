@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/google/uuid"
 )
 
 type ErrorResponse struct {
@@ -87,7 +88,9 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrDatasetVersionClosed),
 		errors.Is(err, types.ErrEvalNotPending),
 		errors.Is(err, types.ErrEvalAlreadyFinal),
-		errors.Is(err, types.ErrTrainingSessionConflict):
+		errors.Is(err, types.ErrTrainingSessionConflict),
+		errors.Is(err, types.ErrPendingArtifactCap),
+		errors.Is(err, types.ErrArtifactConsumed):
 		status = http.StatusConflict
 	case errors.Is(err, types.ErrSessionAgentMismatch):
 		status = http.StatusForbidden
@@ -112,7 +115,8 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrDatasetNameRequired),
 		errors.Is(err, types.ErrDatasetVersionNotClosed),
 		errors.Is(err, types.ErrDatasetMissingCriteria),
-		errors.Is(err, types.ErrTrainingSessionEvalNotEligible):
+		errors.Is(err, types.ErrTrainingSessionEvalNotEligible),
+		errors.Is(err, types.ErrEmptyTurn):
 		status = http.StatusBadRequest
 	case errors.Is(err, types.ErrLLMUnavailable),
 		errors.Is(err, types.ErrToolHandlerFailed):
@@ -120,4 +124,16 @@ func Error(w http.ResponseWriter, err error) {
 	}
 
 	JSON(w, status, ErrorResponse{Error: err.Error()})
+}
+
+// validUUID reports whether id is a canonical 36-char UUID. uuid.Parse also
+// accepts urn:uuid:, braced and bare-hex forms; require the canonical length
+// so only ids Postgres accepts pass (others would surface as a 500). Shared
+// by the BO and deployed path-id checks.
+func validUUID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	_, err := uuid.Parse(id)
+	return err == nil
 }

@@ -28,7 +28,7 @@ func (f *fakeStore) Put(ctx context.Context, uri, mime string, r io.Reader, size
 	return PutResult{URI: uri, SizeBytes: size}, nil
 }
 func (f *fakeStore) Get(ctx context.Context, uri string) (io.ReadCloser, error) { return nil, nil }
-func (f *fakeStore) Sign(ctx context.Context, uri string, ttl time.Duration) (string, error) {
+func (f *fakeStore) Sign(ctx context.Context, uri string, ttl time.Duration, opts SignOptions) (string, error) {
 	return "https://example.com/signed/" + uri, nil
 }
 func (f *fakeStore) Stat(ctx context.Context, uri string) (StatResult, error) {

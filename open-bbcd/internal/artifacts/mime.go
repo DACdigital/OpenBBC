@@ -8,6 +8,7 @@ import (
 	_ "image/png"  // register decoder for DecodeConfig
 	"net/http"
 	"strings"
+	"unicode"
 
 	_ "golang.org/x/image/webp" // register decoder for DecodeConfig
 )
@@ -59,9 +60,25 @@ func ResolveMIME(declared string, data []byte) string {
 	return mime
 }
 
-// normaliseMIME strips parameters, trims and lower-cases; empty becomes
-// application/octet-stream.
+// CleanText makes a client- or tool-supplied label safe for a Postgres
+// TEXT column: invalid UTF-8 and control characters (NUL included) are
+// dropped, then surrounding space is trimmed.
+func CleanText(s string) string {
+	s = strings.ToValidUTF8(s, "")
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	return strings.TrimSpace(s)
+}
+
+// normaliseMIME cleans (CleanText), strips parameters, trims and
+// lower-cases; empty becomes application/octet-stream. Cleaning keeps an MCP
+// tool-result mimeType or multipart Content-Type from breaking the insert.
 func normaliseMIME(s string) string {
+	s = CleanText(s)
 	if i := strings.IndexByte(s, ';'); i >= 0 {
 		s = s[:i]
 	}
