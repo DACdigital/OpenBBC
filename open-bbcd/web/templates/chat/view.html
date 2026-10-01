@@ -107,7 +107,7 @@
 
 {{if .ArtifactsEnabled}}
 <div id="pending-artifacts" class="pending-artifacts" aria-label="Files attached to your next message">
-  {{- range .PendingArtifacts}}
+  {{- range .PendingArtifacts -}}
   <span class="artifact-chip" id="pending-artifact-{{.ID}}">
     <span class="artifact-chip-label">{{.Label}}</span>
     {{- if not $.Locked}}

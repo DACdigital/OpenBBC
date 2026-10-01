@@ -325,10 +325,21 @@ func TestChatView_RendersPendingChipsWithRemoveControl(t *testing.T) {
 			t.Errorf("chat view missing %q", want)
 		}
 	}
+	frag := regexp.MustCompile(`(?s)<div id="pending-artifacts".*?</div>`).FindString(body)
+	if frag == "" {
+		t.Fatal("pending-artifacts fragment missing")
+	}
 	for _, bad := range []string{`hx-delete=`, `hx-on`} {
-		if strings.Contains(body, bad) {
-			t.Errorf("chat view must not contain %q", bad)
+		if strings.Contains(frag, bad) {
+			t.Errorf("pending-artifacts must not contain %q", bad)
 		}
+	}
+	// No whitespace text nodes: only <span> children, nothing after the last chip.
+	if !regexp.MustCompile(`id="pending-artifacts"[^>]*><span`).MatchString(frag) {
+		t.Error("whitespace before first chip")
+	}
+	if !strings.HasSuffix(frag, `</span></div>`) {
+		t.Errorf("whitespace after last chip: %q", frag)
 	}
 }
 
@@ -372,6 +383,23 @@ func TestChatView_AttachControl(t *testing.T) {
 		}
 	}
 	locked := renderChatView(t, &stubChatStore{locked: true}, nil)
+	// No bundle: empty architecture.
+	nb, err := NewChatHandler(
+		&stubAgentRepo{
+			version: &types.AgentVersion{ID: "v", AgentID: "a"},
+			agent:   &types.Agent{ID: "a", Name: "test"},
+		},
+		&stubChatStore{}, nil, nil, &stubTurnRunner{}, jsonl.NewFactory(), nil, nil, web.Assets, slog.Default(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nb.WithPendingArtifacts(stubPendingLister{})
+	nr := httptest.NewRequest("GET", "/agent_versions/v/chat/"+testSID, nil)
+	nr.SetPathValue("version_id", "v")
+	nr.SetPathValue("session_id", testSID)
+	nw := httptest.NewRecorder()
+	nb.ChatView(nw, nr)
 	// Artifacts disabled: no pending lister wired.
 	h := newTestChatHandlerWithStore(t, &stubChatStore{}, &stubTurnRunner{}, web.Assets)
 	r := httptest.NewRequest("GET", "/agent_versions/v/chat/"+testSID, nil)
@@ -379,7 +407,7 @@ func TestChatView_AttachControl(t *testing.T) {
 	r.SetPathValue("session_id", testSID)
 	w := httptest.NewRecorder()
 	h.ChatView(w, r)
-	for name, b := range map[string]string{"locked": locked, "disabled": w.Body.String()} {
+	for name, b := range map[string]string{"locked": locked, "disabled": w.Body.String(), "no bundle": nw.Body.String()} {
 		for _, bad := range attach {
 			if strings.Contains(b, bad) {
 				t.Errorf("%s session must not render %q", name, bad)

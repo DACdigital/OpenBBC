@@ -34,6 +34,9 @@
   let currentAssistantTurn = null;
   let currentUserBubble = null;
   let pendingAttachments = [];
+  let uploadsInFlight = 0;
+  let turnActive = false;
+  let syncSeq = 0;
   let displayBuf = '';
   let typingActive = false;
   let streamEnded = false;
@@ -55,6 +58,20 @@
     return p.filename || `file (${p.mime})`;
   }
 
+  // Server error bodies are JSON {error} or plain text.
+  function errText(body) {
+    const t = (body || '').trim();
+    try {
+      const j = JSON.parse(t);
+      if (j && typeof j.error === 'string' && j.error) return j.error;
+    } catch (_) { /* not JSON */ }
+    return t;
+  }
+
+  function updateSendEnabled() {
+    sendBtn.disabled = uploadsInFlight > 0 || turnActive;
+  }
+
   function addPendingChip(p) {
     if (!pendingBox || document.getElementById(`pending-artifact-${p.id}`)) return;
     const chip = document.createElement('span');
@@ -72,6 +89,7 @@
     chip.appendChild(label);
     chip.appendChild(rm);
     pendingBox.appendChild(chip);
+    syncSeq++; // an older in-flight sync must not drop this chip
   }
 
   function pendingLabels() {
@@ -81,10 +99,12 @@
 
   async function syncPendingChips() {
     if (!pendingBox) return;
+    const seq = ++syncSeq;
     try {
       const resp = await fetch(`${chatBase}/pending-artifacts`, { headers: { Accept: 'application/json' } });
       if (!resp.ok) return;
       const body = await resp.json();
+      if (seq !== syncSeq) return; // stale response
       pendingBox.replaceChildren();
       (body.pending_artifacts || []).forEach(addPendingChip);
     } catch (err) {
@@ -98,7 +118,7 @@
     const resp = await fetch(`${chatBase}/artifacts`, { method: 'POST', body: fd });
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');
-      throw new Error(`HTTP ${resp.status}${body ? ': ' + body.trim() : ''}`);
+      throw new Error(`HTTP ${resp.status}${body ? ': ' + errText(body) : ''}`);
     }
     addPendingChip(await resp.json());
   }
@@ -109,17 +129,19 @@
       const files = [...attachInput.files];
       attachInput.value = '';
       attachBtn.disabled = true;
-      try {
-        for (const f of files) {
-          try {
-            await uploadFile(f);
-          } catch (err) {
-            showError(`Upload of ${f.name} failed: ${err.message || err}`);
-          }
+      for (const f of files) {
+        uploadsInFlight++;
+        updateSendEnabled();
+        try {
+          await uploadFile(f);
+        } catch (err) {
+          showError(`Upload of ${f.name} failed: ${err.message || err}`);
+        } finally {
+          uploadsInFlight--;
+          updateSendEnabled();
         }
-      } finally {
-        attachBtn.disabled = false;
       }
+      attachBtn.disabled = false;
     });
   }
 
@@ -136,11 +158,18 @@
       // in every case the chip is stale, so drop it and re-sync.
       if (resp && (resp.ok || resp.status === 404 || resp.status === 409)) {
         btn.closest('.artifact-chip').remove();
+        // Drop any leftover whitespace so #pending-artifacts:empty matches.
+        if (!pendingBox.querySelector('.artifact-chip')) pendingBox.replaceChildren();
         if (!resp.ok) syncPendingChips();
         return;
       }
       btn.disabled = false;
-      showError(`Could not remove file${resp ? ': HTTP ' + resp.status : ''}`);
+      let detail = '';
+      if (resp) {
+        const t = errText(await resp.text().catch(() => ''));
+        detail = `: HTTP ${resp.status}${t ? ' ' + t : ''}`;
+      }
+      showError(`Could not remove file${detail}`);
     });
   }
 
@@ -167,8 +196,10 @@
     const text = input.value.trim();
     const attached = pendingLabels();
     if (!text && attached.length === 0) return;
+    if (uploadsInFlight > 0 || turnActive) return;
     input.value = '';
-    sendBtn.disabled = true;
+    turnActive = true;
+    updateSendEnabled();
     input.disabled = true;
 
     currentUserBubble = appendUserBubble(text);
@@ -210,7 +241,8 @@
       // mid-sentence visually.
       await waitForDrain();
       finalizeAssistantBubble();
-      sendBtn.disabled = false;
+      turnActive = false;
+      updateSendEnabled();
       input.disabled = false;
       input.focus();
     }
