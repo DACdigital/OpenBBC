@@ -52,7 +52,7 @@ INSERT INTO chat_session_artifacts
     (session_id, origin, store_id, uri, mime, size_bytes, sha256, filename, message_id, created_at, updated_at)
 SELECT m.session_id, 'tool_result', b->>'store_id', b->>'uri',
        COALESCE(b->>'mime', 'application/octet-stream'),
-       COALESCE((b->>'size_bytes')::bigint, 0),
+       CASE WHEN b->>'size_bytes' ~ '^[0-9]{1,18}$' THEN (b->>'size_bytes')::bigint ELSE 0 END,
        COALESCE(b->>'sha256', ''),
        NULLIF(b->>'filename', ''),
        m.id, m.created_at, m.created_at
