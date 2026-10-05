@@ -421,6 +421,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions", deployedHandler.CreateSession)
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions", deployedHandler.ListSessions)
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{session_id}", deployedHandler.GetSession)
+	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{root_id}/children/{child_id}", deployedHandler.GetChildSession)
 	mux.HandleFunc("PATCH /deployed/{agent_id}/sessions/{session_id}/title", deployedHandler.UpdateTitle)
 	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}", deployedHandler.DeleteSession)
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions/{session_id}/turn", deployedHandler.Turn)

@@ -65,10 +65,23 @@ func (s *stubDeployedStore) GetSession(ctx context.Context, sessionID, userID st
 		return nil, errors.New("pq: invalid input syntax for type uuid")
 	}
 	sess, ok := s.sessions[sessionID]
-	if !ok || sess.UserID != userID {
+	if !ok || sess.UserID != userID || sess.ParentSessionID != nil {
 		return nil, types.ErrNotFound
 	}
 	return sess, nil
+}
+func (s *stubDeployedStore) GetDescendant(ctx context.Context, rootID, childID string) (*types.DeployedSession, error) {
+	root, ok := s.sessions[rootID]
+	if !ok || root.ParentSessionID != nil || childID == rootID {
+		return nil, types.ErrNotFound
+	}
+	sess, ok := s.sessions[childID]
+	for cur := sess; ok && cur.ParentSessionID != nil; cur, ok = s.sessions[*cur.ParentSessionID] {
+		if *cur.ParentSessionID == rootID {
+			return sess, nil
+		}
+	}
+	return nil, types.ErrNotFound
 }
 func (s *stubDeployedStore) HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error) {
 	return s.hasPending, nil
@@ -118,6 +131,7 @@ func newDeployedMux(ar DeployedAgentReader, ds DeployedStore, orch TurnRunner, t
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions", h.CreateSession)
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions", h.ListSessions)
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{session_id}", h.GetSession)
+	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{root_id}/children/{child_id}", h.GetChildSession)
 	mux.HandleFunc("PATCH /deployed/{agent_id}/sessions/{session_id}/title", h.UpdateTitle)
 	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}", h.DeleteSession)
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions/{session_id}/turn", h.Turn)
@@ -308,6 +322,7 @@ func TestDeployedArtifactRoutes_NoPatternConflict(t *testing.T) {
 	mux.HandleFunc("PATCH /deployed/{agent_id}/sessions/{session_id}/title", h.UpdateTitle)
 	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}", h.DeleteSession)
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions/{session_id}/turn", h.Turn)
+	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{root_id}/children/{child_id}", h.GetChildSession)
 	sessions := newStubDeployedStore()
 	ah := NewDeployedArtifactHandler(&stubDeployedAgentReader{deployedID: "v1"}, sessions, d.rows, buildRegistry(t, d.store), 1, 10, nil)
 	ah.Register(mux) // panics on conflict
