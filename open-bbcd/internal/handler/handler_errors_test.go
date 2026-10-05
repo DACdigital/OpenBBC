@@ -46,6 +46,8 @@ func TestStatusFor(t *testing.T) {
 		{types.ErrEmptyTurn, http.StatusBadRequest},
 		{types.ErrLLMUnavailable, http.StatusBadGateway},
 		{types.ErrSessionAgentMismatch, http.StatusForbidden},
+		{errAgentsFormInvalid, http.StatusBadRequest},
+		{errAgentsBadForm("enabled must be on or off"), http.StatusBadRequest},
 		{errors.New("x"), http.StatusInternalServerError},
 		{fmt.Errorf("wrap: %w", types.ErrBindingConflict), http.StatusConflict},
 	}

@@ -46,7 +46,7 @@
 
 {{define "agents_toggle"}}
 {{if .Locked}}
-<div id="agents-toggle" class="config-agents-toggle">
+<div id="agents-toggle" class="config-agents-toggle"{{if .OOB}} hx-swap-oob="true"{{end}}>
   <label class="config-mcp-toggle">
     <input type="checkbox" name="enabled" value="on" {{if .Enabled}}checked{{end}} disabled>
     <span class="config-mcp-name">Enable the <code>agent</code> tool</span>
@@ -56,7 +56,7 @@
 {{/* The hidden enabled=off precedes the checkbox: an unticked box posts
      only "off", a ticked one posts "off" and "on" and the handler treats
      any "on" as enabled. */}}
-<form id="agents-toggle" class="config-agents-toggle"
+<form id="agents-toggle" class="config-agents-toggle"{{if .OOB}} hx-swap-oob="true"{{end}}
       hx-post="/agent_versions/{{.VersionID}}/architecture/agents/toggle"
       hx-trigger="change"
       hx-target="#agents-toggle" hx-swap="outerHTML"

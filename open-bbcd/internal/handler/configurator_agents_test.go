@@ -445,3 +445,50 @@ func TestAgentsTab_UnknownVersion(t *testing.T) {
 	assertAgentsError(t, agentsPOST(t, h, "nope", toggleWrite("on")), http.StatusNotFound, types.ErrNotFound.Error())
 	assertAgentsError(t, agentsPOST(t, h, "00000000-0000-0000-0000-000000000000", toggleWrite("on")), http.StatusNotFound, types.ErrNotFound.Error())
 }
+
+// A refused toggle answers with the error fragment plus an out-of-band
+// #agents-toggle carrying the persisted state, so the flipped box snaps back.
+func TestAgentsTab_RefusedToggleSnapsBack(t *testing.T) {
+	db := openConfiguratorTestDB(t)
+	bossAgent, caller := seedAgentsVersion(t, db, "boss", types.AgentStatusDraft)
+	if _, err := db.Exec(`UPDATE agents SET architecture = '{"tools":[{"id":"t1","name":"agent"}]}'::jsonb WHERE id = $1::uuid`, bossAgent); err != nil {
+		t.Fatal(err)
+	}
+	h := newConfigHandlerWithDB(t, db)
+
+	rec := agentsPOST(t, h, caller, toggleWrite("on"))
+	assertAgentsError(t, rec, http.StatusConflict, "already has an endpoint tool named")
+	body := rec.Body.String()
+	oob := regexp.MustCompile(`(?s)<form id="agents-toggle"[^>]*hx-swap-oob="true".*?<input type="checkbox" name="enabled" value="on" ?>`)
+	if !oob.MatchString(body) {
+		t.Fatalf("refused toggle lacks OOB unchecked checkbox: %s", body)
+	}
+	if agentsSnapshot(t, db, caller).enabled {
+		t.Fatal("agent tool enabled despite refusal")
+	}
+
+	// Locked version: the OOB fragment is the disabled, read-only box.
+	_, locked := seedAgentsVersion(t, db, "locked", types.AgentStatusReady)
+	rec = agentsPOST(t, h, locked, toggleWrite("on"))
+	assertAgentsError(t, rec, http.StatusConflict, "can only change while the version is INITIALIZING or DRAFT")
+	if !regexp.MustCompile(`<div id="agents-toggle"[^>]*hx-swap-oob="true"`).MatchString(rec.Body.String()) ||
+		!strings.Contains(rec.Body.String(), "disabled") {
+		t.Fatalf("locked refusal lacks OOB disabled toggle: %s", rec.Body.String())
+	}
+
+	// Form-shape errors (not refusals by the store) stay plain.
+	rec = agentsPOST(t, h, caller, toggleWrite("maybe"))
+	assertAgentsError(t, rec, http.StatusBadRequest, "enabled must be on or off")
+	if strings.Contains(rec.Body.String(), `id="agents-toggle"`) {
+		t.Fatalf("form error carries toggle: %s", rec.Body.String())
+	}
+
+	// Success responses never carry the OOB attribute on the toggle.
+	if _, err := db.Exec(`UPDATE agents SET architecture = '{}'::jsonb WHERE id = $1::uuid`, bossAgent); err != nil {
+		t.Fatal(err)
+	}
+	rec = agentsPOST(t, h, caller, toggleWrite("on"))
+	if rec.Code != http.StatusOK || regexp.MustCompile(`id="agents-toggle"[^>]*hx-swap-oob`).MatchString(rec.Body.String()) {
+		t.Fatalf("success toggle: %d %s", rec.Code, rec.Body.String())
+	}
+}

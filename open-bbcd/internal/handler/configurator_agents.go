@@ -39,11 +39,15 @@ type agentsTabData struct {
 	Locked       bool // no writes: status ∉ {INITIALIZING, DRAFT} or eval/training active
 	EvalBlocked  bool // Locked because of active eval or training work (banner)
 	Saved        bool
+	OOB          bool // agents_toggle: render with hx-swap-oob (refused-toggle snap-back)
 }
 
-// errAgentsBadForm is a form-shape error local to the Agents tab; it maps to
-// 400 via ErrNameRequired's slot in statusFor, as the repository's invalid
-// binding-name error does.
+// errAgentsFormInvalid is the sentinel behind every Agents-tab form-shape
+// error; statusFor maps it to 400.
+var errAgentsFormInvalid = errors.New("invalid agents form")
+
+// errAgentsBadForm is a form-shape error local to the Agents tab carrying a
+// user-facing message; it unwraps to errAgentsFormInvalid.
 func errAgentsBadForm(msg string) error {
 	return &agentsFormError{msg: msg}
 }
@@ -51,11 +55,18 @@ func errAgentsBadForm(msg string) error {
 type agentsFormError struct{ msg string }
 
 func (e *agentsFormError) Error() string { return e.msg }
-func (e *agentsFormError) Unwrap() error { return types.ErrNameRequired }
+func (e *agentsFormError) Unwrap() error { return errAgentsFormInvalid }
 
 // renderAgentsError writes statusFor(err) and the #agents-error fragment.
 // 5xx errors are logged and rendered as a generic "internal error".
 func (h *ConfiguratorHandler) renderAgentsError(w http.ResponseWriter, err error) {
+	h.renderAgentsErrorWith(w, err, nil)
+}
+
+// renderAgentsErrorWith is renderAgentsError followed by extra (already
+// rendered) out-of-band fragments; extra is dropped if the error fragment
+// itself fails to render.
+func (h *ConfiguratorHandler) renderAgentsErrorWith(w http.ResponseWriter, err error, extra []byte) {
 	status := statusFor(err)
 	msg := err.Error()
 	if status >= http.StatusInternalServerError {
@@ -67,6 +78,8 @@ func (h *ConfiguratorHandler) renderAgentsError(w http.ResponseWriter, err error
 		slog.Error("template execution failed", slog.String("template", "agents_error"), slog.Any("error", terr))
 		buf.Reset()
 		buf.WriteString(`<div id="agents-error" role="alert">internal error</div>`)
+	} else {
+		buf.Write(extra)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -227,10 +240,30 @@ func (h *ConfiguratorHandler) ToggleAgentTool(w http.ResponseWriter, r *http.Req
 		}
 	}
 	if err := h.subAgents.SetAgentToolEnabled(r.Context(), versionID, enabled); err != nil {
-		h.renderAgentsError(w, err)
+		h.renderRefusedToggle(w, r.Context(), versionID, err)
 		return
 	}
 	h.renderAgentsAfterWrite(w, r.Context(), versionID, "agents_toggle", false)
+}
+
+// renderRefusedToggle answers a refused toggle with the error fragment plus
+// an out-of-band #agents-toggle carrying the persisted state, so the checkbox
+// the user just flipped snaps back. Falls back to the plain error when the
+// reload or render fails.
+func (h *ConfiguratorHandler) renderRefusedToggle(w http.ResponseWriter, ctx context.Context, versionID string, cause error) {
+	data, err := h.agentsTabData(ctx, versionID)
+	if err != nil {
+		h.renderAgentsError(w, cause)
+		return
+	}
+	data.OOB = true
+	var buf bytes.Buffer
+	if terr := h.agentsTmpl.ExecuteTemplate(&buf, "agents_toggle", data); terr != nil {
+		slog.Error("template execution failed", slog.String("template", "agents_toggle"), slog.Any("error", terr))
+		h.renderAgentsError(w, cause)
+		return
+	}
+	h.renderAgentsErrorWith(w, cause, buf.Bytes())
 }
 
 // AddSubAgentBinding handles POST …/architecture/agents (form name,
