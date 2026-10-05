@@ -25,3 +25,13 @@ func isForeignKeyViolation(err error) bool {
 	}
 	return false
 }
+
+// isCheckViolation reports whether err is a Postgres check_violation
+// (SQLSTATE 23514).
+func isCheckViolation(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23514"
+	}
+	return false
+}

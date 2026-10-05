@@ -18,7 +18,7 @@ func NewAgentVersionRepository(db *sql.DB) *AgentVersionRepository {
 	return &AgentVersionRepository{db: db}
 }
 
-const agentVersionColumns = `id, agent_id, parent_version_id, status, prompts, flow_map_config, flow_map_parse_error, created_at, updated_at`
+const agentVersionColumns = `id, agent_id, parent_version_id, status, prompts, flow_map_config, flow_map_parse_error, agent_tool_enabled, created_at, updated_at`
 
 func scanAgentVersion(s scanner) (*types.AgentVersion, error) {
 	v := &types.AgentVersion{}
@@ -26,7 +26,7 @@ func scanAgentVersion(s scanner) (*types.AgentVersion, error) {
 	var prompts []byte
 	var cfg []byte
 	var parseErr sql.NullString
-	if err := s.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &cfg, &parseErr, &v.CreatedAt, &v.UpdatedAt); err != nil {
+	if err := s.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &cfg, &parseErr, &v.AgentToolEnabled, &v.CreatedAt, &v.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if parent.Valid {
@@ -95,7 +95,7 @@ func (r *AgentVersionRepository) Delete(ctx context.Context, versionID string) e
 // the frozen architecture, the version carries the editable prompts.
 func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.prompts, av.flow_map_config, av.flow_map_parse_error, av.created_at, av.updated_at,
+		SELECT av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.prompts, av.flow_map_config, av.flow_map_parse_error, av.agent_tool_enabled, av.created_at, av.updated_at,
 		       a.id::text, a.name, a.description,
 		       (a.discovery_zip IS NOT NULL AND octet_length(a.discovery_zip) > 0),
 		       a.architecture, a.finalized_at, a.created_at
@@ -112,7 +112,7 @@ func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID str
 	var aDesc sql.NullString
 	var arch []byte
 	var aFinal sql.NullTime
-	err := row.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &vCfg, &vParseErr, &v.CreatedAt, &v.UpdatedAt,
+	err := row.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &vCfg, &vParseErr, &v.AgentToolEnabled, &v.CreatedAt, &v.UpdatedAt,
 		&a.ID, &a.Name, &aDesc, &a.HasDiscoveryZip, &arch, &aFinal, &a.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, types.ErrNotFound
