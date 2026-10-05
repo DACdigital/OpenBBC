@@ -150,6 +150,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	if err != nil {
 		fatal("init configurator handler", err)
 	}
+	configuratorHandler.WithSubAgents(repository.NewSubAgentRepository(db))
 
 	agentDetailHandler, err := NewAgentDetailHandler(
 		&agentDetailStoreAdapter{agents: agentRepo, versions: versionRepo},
@@ -291,6 +292,13 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	mux.HandleFunc("POST /agent_versions/{version_id}/delete", configuratorHandler.Delete)
 	// Convenience alias under the new top-level "MCP" version tab.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/mcp", configuratorHandler.MCPSubtab)
+	// Agents tab: agent tool toggle + sub-agent bindings. Writes answer with
+	// HTML fragments (errors included) for the response-targets extension.
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/agents", configuratorHandler.AgentsTab)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents/toggle", configuratorHandler.ToggleAgentTool)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents", configuratorHandler.AddSubAgentBinding)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents/notes", configuratorHandler.UpdateSubAgentNotes)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents/{name}/delete", configuratorHandler.DeleteSubAgentBinding)
 
 	// Agent-level detail page: tabbed Versions / Inputs / Architecture.
 	// Architecture is editable pre-finalize (reads/writes the root version's

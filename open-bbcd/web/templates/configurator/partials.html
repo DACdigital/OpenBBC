@@ -34,3 +34,103 @@
   {{template "mcp_row_detail" .}}
 </div>
 {{end}}
+
+{{/* ---- Agents tab (agent tool + sub-agent bindings) ----
+     Every write control carries hx-target-error="#agents-error" and swaps
+     outerHTML, so a 4xx error fragment (a whole #agents-error div, see
+     agents_error) replaces the slot while the target it would have swapped
+     stays unchanged. Success fragments carry an out-of-band empty
+     #agents-error to clear a previous error. */}}
+
+{{define "agents_error"}}<div id="agents-error" class="config-banner config-banner-error config-agents-error" role="alert"{{if .OOB}} hx-swap-oob="true"{{end}}>{{.Message}}</div>{{end}}
+
+{{define "agents_toggle"}}
+{{if .Locked}}
+<div id="agents-toggle" class="config-agents-toggle">
+  <label class="config-mcp-toggle">
+    <input type="checkbox" name="enabled" value="on" {{if .Enabled}}checked{{end}} disabled>
+    <span class="config-mcp-name">Enable the <code>agent</code> tool</span>
+  </label>
+</div>
+{{else}}
+{{/* The hidden enabled=off precedes the checkbox: an unticked box posts
+     only "off", a ticked one posts "off" and "on" and the handler treats
+     any "on" as enabled. */}}
+<form id="agents-toggle" class="config-agents-toggle"
+      hx-post="/agent_versions/{{.VersionID}}/architecture/agents/toggle"
+      hx-trigger="change"
+      hx-target="#agents-toggle" hx-swap="outerHTML"
+      hx-target-error="#agents-error">
+  <input type="hidden" name="enabled" value="off">
+  <label class="config-mcp-toggle">
+    <input type="checkbox" name="enabled" value="on" {{if .Enabled}}checked{{end}}>
+    <span class="config-mcp-name">Enable the <code>agent</code> tool</span>
+  </label>
+</form>
+{{end}}
+{{end}}
+
+{{define "agents_table"}}
+<div id="agents-table" class="config-agents-table">
+  {{if .Bindings}}
+  <table class="data-table">
+    <thead>
+      <tr><th>Name</th><th>Target version</th><th>Note (shown to the calling agent)</th>{{if not .Locked}}<th></th>{{end}}</tr>
+    </thead>
+    <tbody>
+      {{range .Bindings}}
+      <tr id="agents-row-{{.Name}}">
+        <td><code>{{.Name}}</code></td>
+        <td><a href="/agent_versions/{{.TargetVersionID}}/configure/prompts">{{.TargetLabel}}</a></td>
+        <td class="config-mcp-note">
+          {{if $.Locked}}{{.Note}}{{else}}
+          <textarea name="note[{{.Name}}]" form="agents-notes-form" rows="2"
+                    placeholder="When should the caller delegate to this sub-agent?">{{.Note}}</textarea>
+          {{end}}
+        </td>
+        {{if not $.Locked}}
+        <td>
+          <button type="button" class="btn-danger"
+                  hx-post="/agent_versions/{{$.VersionID}}/architecture/agents/{{.Name}}/delete"
+                  hx-confirm="Remove sub-agent {{.Name}}?"
+                  hx-target="#agents-table" hx-swap="outerHTML"
+                  hx-target-error="#agents-error">Delete</button>
+        </td>
+        {{end}}
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="empty-state">No sub-agents bound to this version.</p>
+  {{end}}
+</div>
+{{end}}
+
+{{define "agents_add_form"}}
+<form id="agents-add-form" class="config-agents-add"
+      hx-post="/agent_versions/{{.VersionID}}/architecture/agents"
+      hx-target="#agents-table" hx-swap="outerHTML"
+      hx-target-error="#agents-error">
+  <label>Name
+    <input type="text" name="name" required maxlength="40"
+           pattern="[a-z][a-z0-9_-]{0,39}" placeholder="researcher"
+           title="lowercase letter first, then lowercase letters, digits, _ or -">
+  </label>
+  <label>Target version
+    <select name="target_version_id" required>
+      <option value="">Select a READY or DEPLOYED version…</option>
+      {{range .TargetGroups}}
+      <optgroup label="{{.AgentName}}">
+        {{range .Targets}}<option value="{{.VersionID}}">{{.Label}}</option>{{end}}
+      </optgroup>
+      {{end}}
+    </select>
+  </label>
+  <label>Note
+    <textarea name="note" rows="2" placeholder="When should the caller delegate to this sub-agent?"></textarea>
+  </label>
+  <button type="submit" class="btn-primary">Add sub-agent</button>
+  {{if not .TargetGroups}}<p class="hint muted">No READY or DEPLOYED versions of other agents to bind yet.</p>{{end}}
+</form>
+{{end}}

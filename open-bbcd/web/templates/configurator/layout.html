@@ -52,6 +52,8 @@
        class="config-tab {{if eq .Tab "prompts"}}active{{end}}">Prompts</a>
     <a href="/agent_versions/{{.VersionID}}/configure/mcp"
        class="config-tab {{if eq .Tab "mcp"}}active{{end}}">MCP</a>
+    <a href="/agent_versions/{{.VersionID}}/configure/agents"
+       class="config-tab {{if eq .Tab "agents"}}active{{end}}">Agents</a>
     {{if not .ReadOnly}}
     <span class="config-spacer"></span>
     <a href="/agent_versions/{{.VersionID}}/configure/finalize"

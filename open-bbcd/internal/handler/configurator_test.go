@@ -749,7 +749,7 @@ func newConfigHandlerWithDB(t *testing.T, db *sql.DB) *handler.ConfiguratorHandl
 	if err != nil {
 		t.Fatalf("NewConfiguratorHandler: %v", err)
 	}
-	return h
+	return h.WithSubAgents(repository.NewSubAgentRepository(db))
 }
 
 // TestDownloadYAML_IncludesAttachedMCPs verifies that DownloadYAML joins the

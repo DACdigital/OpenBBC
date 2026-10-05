@@ -48,10 +48,12 @@ type ConfiguratorHandler struct {
 	backends    *repository.ToolBackendRepository
 	wiring      *repository.VersionWiringRepository
 	agentWiring *repository.AgentWiringRepository
+	subAgents   *repository.SubAgentRepository // nil → Agents tab routes 500; set via WithSubAgents
 	schema      *types.WizardSchema
 	inputsTmpl  *template.Template
 	promptsTmpl *template.Template
 	mcpTmpl     *template.Template
+	agentsTmpl  *template.Template
 	deleteTmpl  *template.Template
 }
 
@@ -101,6 +103,15 @@ func NewConfiguratorHandler(
 	if err != nil {
 		return nil, err
 	}
+	agentsTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/layout.html",
+		"templates/configurator/layout.html",
+		"templates/configurator/partials.html",
+		"templates/configurator/agents.html",
+	)
+	if err != nil {
+		return nil, err
+	}
 	deleteTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/configurator/delete_confirm_modal.html",
 	)
@@ -116,6 +127,7 @@ func NewConfiguratorHandler(
 		inputsTmpl:  inputsTmpl,
 		promptsTmpl: promptsTmpl,
 		mcpTmpl:     mcpTmpl,
+		agentsTmpl:  agentsTmpl,
 		deleteTmpl:  deleteTmpl,
 	}, nil
 }

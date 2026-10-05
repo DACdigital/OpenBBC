@@ -1090,3 +1090,12 @@
   0%, 60% { opacity: 1; }
   100% { opacity: 0; }
 }
+
+/* Agents tab (agent tool + sub-agent bindings). */
+.config-agents { display: flex; flex-direction: column; gap: 14px; padding: 18px 4px 24px; }
+.config-agents-error:empty { display: none; }
+.config-agents-heading { font-size: 15px; font-weight: 600; margin-top: 8px; }
+.config-agents-table textarea { width: 100%; min-width: 260px; }
+.config-agents-add { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.config-agents-add label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #8b949e; }
+.config-agents-add .hint { flex-basis: 100%; margin: 0; font-size: 13px; }
