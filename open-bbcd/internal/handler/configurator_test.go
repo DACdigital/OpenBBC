@@ -681,7 +681,7 @@ func openConfiguratorTestDB(t *testing.T) *sql.DB {
 	if _, err := db.Exec(`TRUNCATE
 		deployed_messages, deployed_sessions, chat_messages, chat_sessions,
 		resources, agent_versions, agents,
-		tool_backends, agent_endpoint_backend, agent_version_mcp_backend
+		tool_backends, agent_endpoint_backend, agent_version_mcp_backend, agent_version_subagent
 		RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -806,5 +806,33 @@ func TestDownloadYAML_IncludesAttachedMCPs(t *testing.T) {
 	}
 	if notes["github-test"] != "" {
 		t.Fatalf("github-test note should be empty, got %q", notes["github-test"])
+	}
+}
+
+// A version that is another version's sub-agent binding target cannot be
+// deleted: POST /agent_versions/{version_id}/delete returns 409.
+func TestConfigurator_Delete_BindingTarget_409(t *testing.T) {
+	db := openConfiguratorTestDB(t)
+	target := seedConfiguratorAgentVersion(t, db)
+	caller := seedConfiguratorAgentVersion(t, db)
+	if _, err := db.Exec(`UPDATE agent_versions SET status = 'READY' WHERE id = $1::uuid`, target); err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_version_subagent (caller_version_id, target_version_id, name)
+		VALUES ($1::uuid, $2::uuid, 'worker')`, caller, target); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	h := newConfigHandlerWithDB(t, db)
+	req := httptest.NewRequest(http.MethodPost, "/agent_versions/"+target+"/delete", nil)
+	req.SetPathValue("version_id", target)
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM agent_versions WHERE id = $1::uuid`, target).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("version rows = %d (%v), want 1", n, err)
 	}
 }

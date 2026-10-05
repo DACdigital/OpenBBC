@@ -26,6 +26,7 @@ type stubAgentDetailStore struct {
 	versionID     string // defaults to "v1" if empty
 	versionStatus string // defaults to "INITIALIZING" if empty
 	statusFn      func(versionID, expectedFrom, to string) error
+	deleteErr     error
 }
 
 func (s *stubAgentDetailStore) rootVersionID() string {
@@ -86,7 +87,7 @@ func (s *stubAgentDetailStore) UpdateVersionStatus(ctx context.Context, versionI
 	return nil
 }
 
-func (s *stubAgentDetailStore) Delete(ctx context.Context, agentID string) error { return nil }
+func (s *stubAgentDetailStore) Delete(ctx context.Context, agentID string) error { return s.deleteErr }
 
 func newAgentDetailHandler(t *testing.T, store handler.AgentDetailStore) *handler.AgentDetailHandler {
 	t.Helper()
@@ -683,5 +684,21 @@ func TestAgentDetail_WorkflowUpdate_UnknownFlow_404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+// A version of the agent is still referenced by another agent (sub-agent
+// binding, deployed child or locked BO child): the delete is a 409.
+func TestAgentDetail_Delete_VersionReferenced_409(t *testing.T) {
+	store := &stubAgentDetailStore{agent: &types.Agent{Name: "alpha"}, deleteErr: types.ErrVersionReferenced}
+	h := newAgentDetailHandler(t, store)
+	form := url.Values{"confirm_name": {"alpha"}}
+	req := httptest.NewRequest(http.MethodPost, "/agents/a1/delete", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("agent_id", "a1")
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
 }
