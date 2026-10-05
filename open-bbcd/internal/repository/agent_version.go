@@ -309,7 +309,8 @@ func (r *AgentVersionRepository) SetPrompts(ctx context.Context, versionID strin
 }
 
 // insertVersionFromPromptsTx inserts a new agent_versions row inside an
-// existing transaction. Copies MCP attachments forward. Returns the new id.
+// existing transaction. Copies MCP attachments, the agent-tool flag and
+// sub-agent bindings forward. Returns the new id.
 // Extracted so training-session Complete can bundle version-creation + session
 // state update in one transaction. Public callers use CreateVersionFromPrompts.
 func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context, tx *sql.Tx, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
@@ -341,6 +342,25 @@ func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context,
 		return "", fmt.Errorf("copy mcp attachments: %w", err)
 	}
 
+	// Agent-tool config is per-version and forks with the prompts. Bindings
+	// are copied verbatim even if a target is no longer READY: pins are by id
+	// and a target's status cannot regress.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE agent_versions
+		SET agent_tool_enabled = (SELECT agent_tool_enabled FROM agent_versions WHERE id = $1::uuid)
+		WHERE id = $2::uuid
+	`, parentVersionID, newID); err != nil {
+		return "", fmt.Errorf("copy agent tool flag: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO agent_version_subagent (caller_version_id, target_version_id, name, note)
+		SELECT $2::uuid, target_version_id, name, note
+		FROM agent_version_subagent
+		WHERE caller_version_id = $1::uuid
+	`, parentVersionID, newID); err != nil {
+		return "", fmt.Errorf("copy sub-agent bindings: %w", err)
+	}
+
 	return newID, nil
 }
 
@@ -352,9 +372,9 @@ func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context,
 // parent_version_id links the version chain; agent_id stays the same
 // (architecture is shared agent-wide).
 //
-// MCP attachments are copied forward in the same transaction so the new
-// version inherits its predecessor's per-version wiring without manual
-// re-attachment. Endpoint→backend wiring is agent-keyed and doesn't need
+// MCP attachments, the agent-tool flag and sub-agent bindings are copied
+// forward in the same transaction so the new version inherits its
+// predecessor's per-version wiring without manual re-attachment. Endpoint→backend wiring is agent-keyed and doesn't need
 // copying.
 //
 // Returns the new version's id.

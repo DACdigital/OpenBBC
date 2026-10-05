@@ -379,3 +379,29 @@ func TestTrainingSessionRepository_List_FiltersByStatus(t *testing.T) {
 		t.Errorf("limited count = %d, want 1", len(limited))
 	}
 }
+
+func TestComplete_CopiesAgentToolConfig(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewTrainingSessionRepository(db)
+	vrepo := NewAgentVersionRepository(db)
+	ctx := context.Background()
+
+	evalID, versionID := seedEvalForTraining(t, db)
+	want := seedForkParent(t, db, versionID)
+	id, err := repo.Create(ctx, evalID, versionID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.Start(ctx, id, 5, 3); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	prompts, _ := json.Marshal(types.Prompts{MainPrompt: "trained", SkillPrompts: map[string]string{}})
+	report := json.RawMessage(`{"schema_version":"training-report-v1","initial_score":0.4,"final_score":0.7,"total_epochs_run":3,"stopped_reason":"max_epochs","epochs":[]}`)
+	newID, err := repo.Complete(ctx, vrepo, id, prompts, report, types.CompleteSummary{
+		InitialScore: 0.4, FinalScore: 0.7, TotalEpochsRun: 3, StoppedReason: "max_epochs",
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	assertForkCopied(t, db, versionID, newID, true, want)
+}
