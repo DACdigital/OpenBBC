@@ -329,9 +329,13 @@ func (r *AgentVersionRepository) SetPrompts(ctx context.Context, versionID strin
 // Extracted so training-session Complete can bundle version-creation + session
 // state update in one transaction. Public callers use CreateVersionFromPrompts.
 func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context, tx *sql.Tx, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
+	// FOR SHARE on the parent row: agent-tool config writes take FOR NO KEY
+	// UPDATE on it (SubAgentRepository.lockVersions), so holding the share
+	// lock until commit keeps the flag and bindings copied below from one
+	// consistent point — a concurrent toggle/AddBinding waits for the fork.
 	var agentID string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT agent_id::text FROM agent_versions WHERE id = $1`, parentVersionID,
+		`SELECT agent_id::text FROM agent_versions WHERE id = $1 FOR SHARE`, parentVersionID,
 	).Scan(&agentID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", types.ErrNotFound
