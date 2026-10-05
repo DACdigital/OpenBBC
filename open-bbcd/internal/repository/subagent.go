@@ -26,7 +26,8 @@ func NewSubAgentRepository(db *sql.DB) *SubAgentRepository { return &SubAgentRep
 
 // bindingNameRe mirrors the CHECK on agent_version_subagent.name. Validating
 // in Go first gives a clean error before any lock is taken; the CHECK stays
-// the source of truth (a 23514 is translated to the same error).
+// the source of truth (a violation of that CHECK is translated to the same
+// error).
 var bindingNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
 
 // errInvalidBindingName wraps ErrNameRequired so handler.statusFor maps it to
@@ -202,15 +203,26 @@ func (r *SubAgentRepository) AddBinding(ctx context.Context, callerID, name, tar
 		INSERT INTO agent_version_subagent (caller_version_id, target_version_id, name, note)
 		VALUES ($1::uuid, $2::uuid, $3, $4)
 	`, callerID, targetID, name, note); err != nil {
-		switch {
-		case isUniqueViolation(err):
-			return types.ErrBindingConflict
-		case isCheckViolation(err):
-			return errInvalidBindingName
-		}
-		return err
+		return translateBindingInsertErr(err)
 	}
 	return tx.Commit()
+}
+
+// bindingNameCheck is the auto-generated name of the CHECK on
+// agent_version_subagent.name (migration 029).
+const bindingNameCheck = "agent_version_subagent_name_check"
+
+// translateBindingInsertErr maps an INSERT INTO agent_version_subagent error:
+// a unique violation is a duplicate name/target, and only the name CHECK is an
+// invalid name — any other check violation is returned unchanged.
+func translateBindingInsertErr(err error) error {
+	switch {
+	case isUniqueViolation(err):
+		return types.ErrBindingConflict
+	case isCheckViolationOn(err, bindingNameCheck):
+		return errInvalidBindingName
+	}
+	return err
 }
 
 // UpdateNotes sets the note of each named binding on the caller. Names with
