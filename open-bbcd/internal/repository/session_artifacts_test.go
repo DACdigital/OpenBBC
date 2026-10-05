@@ -77,7 +77,7 @@ func saSurfaces(t *testing.T) []saSurface {
 				return s.ID
 			},
 			delSession: func(t *testing.T, id string) {
-				if err := depl.DeleteSession(ctx, id, "user-A"); err != nil {
+				if err := depl.DeleteSession(ctx, agent.ID, id, "user-A"); err != nil {
 					t.Fatal(err)
 				}
 			},

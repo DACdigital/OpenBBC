@@ -25,16 +25,24 @@ func NewDeployedRepository(db *sql.DB) *DeployedRepository {
 
 func scanDeployedSession(s scanner) (*types.DeployedSession, error) {
 	sess := &types.DeployedSession{}
-	var title sql.NullString
-	err := s.Scan(&sess.ID, &sess.AgentID, &sess.UserID, &title, &sess.CreatedAt, &sess.UpdatedAt)
+	var title, parentID, versionID sql.NullString
+	err := s.Scan(&sess.ID, &sess.AgentID, &sess.UserID, &title, &sess.CreatedAt, &sess.UpdatedAt,
+		&parentID, &sess.ParentToolCallID, &sess.Depth, &versionID)
 	if err != nil {
 		return nil, err
 	}
 	sess.Title = title.String
+	if parentID.Valid {
+		sess.ParentSessionID = &parentID.String
+	}
+	if versionID.Valid {
+		sess.AgentVersionID = &versionID.String
+	}
 	return sess, nil
 }
 
-const deployedSessionCols = `id::text, agent_id::text, user_id, title, created_at, updated_at`
+const deployedSessionCols = `id::text, agent_id::text, user_id, title, created_at, updated_at, ` +
+	`parent_session_id::text, COALESCE(parent_tool_call_id, ''), depth, agent_version_id::text`
 
 // CreateSession inserts a session row. UserID is required (NOT NULL).
 func (r *DeployedRepository) CreateSession(ctx context.Context, agentID, userID, title string) (*types.DeployedSession, error) {
@@ -50,16 +58,17 @@ func (r *DeployedRepository) CreateSession(ctx context.Context, agentID, userID,
 	return scanDeployedSession(row)
 }
 
-// GetSession returns the session iff (id, userID) matches a stored row.
+// GetSession returns the root session iff (id, userID) matches a stored row.
 // Returns ErrNotFound otherwise — including the case where the session exists
-// under a different userID (no existence leak).
+// under a different userID (no existence leak) or is a sub-agent child
+// (root-only rule).
 func (r *DeployedRepository) GetSession(ctx context.Context, sessionID, userID string) (*types.DeployedSession, error) {
 	if userID == "" {
 		return nil, types.ErrUserIDRequired
 	}
 	row := r.db.QueryRowContext(ctx, `
 		SELECT `+deployedSessionCols+` FROM deployed_sessions
-		WHERE id = $1::uuid AND user_id = $2
+		WHERE id = $1::uuid AND user_id = $2 AND parent_session_id IS NULL
 	`, sessionID, userID)
 	sess, err := scanDeployedSession(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -72,7 +81,8 @@ func (r *DeployedRepository) GetSession(ctx context.Context, sessionID, userID s
 // The deployed-runtime handler validates (session_id, user_id) before
 // calling into the orchestrator; once in the orchestrator the user scope has
 // already been enforced, and the orchestrator only needs to verify the
-// session belongs to the chain it claims.
+// session belongs to the chain it claims. Exempt from the root-only rule:
+// child turns resolve their session through it. No route preamble calls it.
 func (r *DeployedRepository) GetSessionByID(ctx context.Context, sessionID string) (*types.DeployedSession, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT `+deployedSessionCols+` FROM deployed_sessions WHERE id = $1::uuid
@@ -84,14 +94,14 @@ func (r *DeployedRepository) GetSessionByID(ctx context.Context, sessionID strin
 	return sess, err
 }
 
-// ListSessions returns all sessions for (agentID, userID), newest first.
+// ListSessions returns all root sessions for (agentID, userID), newest first.
 func (r *DeployedRepository) ListSessions(ctx context.Context, agentID, userID string) ([]*types.DeployedSession, error) {
 	if userID == "" {
 		return nil, types.ErrUserIDRequired
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT `+deployedSessionCols+` FROM deployed_sessions
-		WHERE agent_id = $1::uuid AND user_id = $2
+		WHERE agent_id = $1::uuid AND user_id = $2 AND parent_session_id IS NULL
 		ORDER BY created_at DESC
 	`, agentID, userID)
 	if err != nil {
@@ -109,9 +119,9 @@ func (r *DeployedRepository) ListSessions(ctx context.Context, agentID, userID s
 	return out, rows.Err()
 }
 
-// UpdateSessionTitle scoped by user_id. Returns ErrNotFound if the row doesn't
-// match.
-func (r *DeployedRepository) UpdateSessionTitle(ctx context.Context, sessionID, userID, title string) error {
+// UpdateSessionTitle scoped by (agent_id, user_id) on a root session. Returns
+// ErrNotFound if no root row matches (a sub-agent child is never renamed).
+func (r *DeployedRepository) UpdateSessionTitle(ctx context.Context, agentID, sessionID, userID, title string) error {
 	if userID == "" {
 		return types.ErrUserIDRequired
 	}
@@ -119,8 +129,8 @@ func (r *DeployedRepository) UpdateSessionTitle(ctx context.Context, sessionID, 
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE deployed_sessions
 		SET title = NULLIF($3, ''), updated_at = now()
-		WHERE id = $1::uuid AND user_id = $2
-	`, sessionID, userID, title)
+		WHERE id = $1::uuid AND user_id = $2 AND agent_id = $4::uuid AND parent_session_id IS NULL
+	`, sessionID, userID, title, agentID)
 	if err != nil {
 		return err
 	}
@@ -134,14 +144,17 @@ func (r *DeployedRepository) UpdateSessionTitle(ctx context.Context, sessionID, 
 	return nil
 }
 
-// DeleteSession scoped by user_id; cascades to messages via the FK.
-func (r *DeployedRepository) DeleteSession(ctx context.Context, sessionID, userID string) error {
+// DeleteSession scoped by (agent_id, user_id) on a root session; cascades to
+// descendant sessions, messages and artifacts via the FKs. A sub-agent child
+// is ErrNotFound and is left in place.
+func (r *DeployedRepository) DeleteSession(ctx context.Context, agentID, sessionID, userID string) error {
 	if userID == "" {
 		return types.ErrUserIDRequired
 	}
 	res, err := r.db.ExecContext(ctx, `
-		DELETE FROM deployed_sessions WHERE id = $1::uuid AND user_id = $2
-	`, sessionID, userID)
+		DELETE FROM deployed_sessions
+		WHERE id = $1::uuid AND user_id = $2 AND agent_id = $3::uuid AND parent_session_id IS NULL
+	`, sessionID, userID, agentID)
 	if err != nil {
 		return err
 	}

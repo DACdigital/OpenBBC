@@ -297,6 +297,7 @@ func (r *DatasetRepository) GetVersionSessions(ctx context.Context, versionID st
 
 // AssignSessionToDraft adds a session to the dataset's current draft
 // (creating one if none). Refuses if:
+//   - the session is unknown or a sub-agent child (ErrNotFound)
 //   - the session has no feedback rows (ErrSessionNoFeedback)
 //   - the session is locked (ErrSessionLocked)
 //   - the session already belongs to a different dataset (ErrSessionAlreadyInDataset)
@@ -305,6 +306,17 @@ func (r *DatasetRepository) GetVersionSessions(ctx context.Context, versionID st
 // from a previous CLOSED version) is a no-op at the row level — the draft
 // already has the row from EnsureDraft's inheritance step.
 func (r *DatasetRepository) AssignSessionToDraft(ctx context.Context, datasetID, sessionID string) (*types.DatasetVersion, error) {
+	// Root-only: resolve the session first so a sub-agent child is
+	// ErrNotFound regardless of whether it carries feedback rows.
+	var locked sql.NullTime
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT locked_at FROM chat_sessions WHERE id = $1::uuid AND parent_session_id IS NULL`, sessionID,
+	).Scan(&locked); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, types.ErrNotFound
+		}
+		return nil, err
+	}
 	var hasFeedback bool
 	if err := r.db.QueryRowContext(ctx, `
 		SELECT EXISTS(
@@ -317,15 +329,6 @@ func (r *DatasetRepository) AssignSessionToDraft(ctx context.Context, datasetID,
 	}
 	if !hasFeedback {
 		return nil, types.ErrSessionNoFeedback
-	}
-	var locked sql.NullTime
-	if err := r.db.QueryRowContext(ctx,
-		`SELECT locked_at FROM chat_sessions WHERE id = $1::uuid`, sessionID,
-	).Scan(&locked); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, types.ErrNotFound
-		}
-		return nil, err
 	}
 	if locked.Valid {
 		return nil, types.ErrSessionLocked

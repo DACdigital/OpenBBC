@@ -46,17 +46,18 @@ func (r *ChatRepository) EnsureSession(ctx context.Context, sessionID, versionID
 	return nil
 }
 
-// GetSession loads a single session and verifies it belongs to versionID.
-// Returns ErrNotFound if the session doesn't exist and ErrSessionAgentMismatch
-// if it exists but is owned by a different agent version.
+// GetSession loads a single root session and verifies it belongs to versionID.
+// Returns ErrNotFound if the session doesn't exist or is a sub-agent child
+// (root-only rule) and ErrSessionAgentMismatch if it exists but is owned by a
+// different agent version.
 func (r *ChatRepository) GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error) {
 	s := &types.ChatSession{}
 	var lockedAt sql.NullTime
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at, locked_at
+		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at, locked_at, depth
 		FROM chat_sessions
-		WHERE id = $1::uuid
-	`, sessionID).Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt, &lockedAt)
+		WHERE id = $1::uuid AND parent_session_id IS NULL
+	`, sessionID).Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt, &lockedAt, &s.Depth)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, types.ErrNotFound
@@ -73,8 +74,20 @@ func (r *ChatRepository) GetSession(ctx context.Context, sessionID, versionID st
 	return s, nil
 }
 
-// UpdateSessionTitle sets the title of a session. Verifies the session belongs
-// to versionID before updating. An empty title clears the column (NULL in DB).
+// IsChildSession reports whether sessionID names a sub-agent child session.
+// BO preambles that treat GetSession's ErrNotFound as "not created yet" call
+// it first so a child id is a 404, never a lazily adopted session (spec §
+// root-only rule). Unknown ids are not children.
+func (r *ChatRepository) IsChildSession(ctx context.Context, sessionID string) (bool, error) {
+	var child bool
+	err := r.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE id = $1::uuid AND parent_session_id IS NOT NULL)`,
+		sessionID).Scan(&child)
+	return child, err
+}
+
+// UpdateSessionTitle sets the title of a root session. Verifies the session
+// belongs to versionID before updating; a child session is ErrNotFound. An empty title clears the column (NULL in DB).
 func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error {
 	var nullable sql.NullString
 	if title != "" {
@@ -83,7 +96,7 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, vers
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE chat_sessions
 		SET title = $3, updated_at = now()
-		WHERE id = $1::uuid AND agent_version_id = $2::uuid
+		WHERE id = $1::uuid AND agent_version_id = $2::uuid AND parent_session_id IS NULL
 	`, sessionID, versionID, nullable)
 	if err != nil {
 		return err
@@ -97,7 +110,7 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, vers
 		// Distinguish for the caller.
 		var existingVersion string
 		err := r.db.QueryRowContext(ctx,
-			`SELECT agent_version_id::text FROM chat_sessions WHERE id = $1::uuid`,
+			`SELECT agent_version_id::text FROM chat_sessions WHERE id = $1::uuid AND parent_session_id IS NULL`,
 			sessionID,
 		).Scan(&existingVersion)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -111,12 +124,12 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, vers
 	return nil
 }
 
-// ListSessions returns one page of sessions for an agent version, newest
-// first, plus the total row count. limit<=0 fetches everything.
+// ListSessions returns one page of root sessions for an agent version, newest
+// first, plus the total row count (sub-agent children excluded from both). limit<=0 fetches everything.
 func (r *ChatRepository) ListSessions(ctx context.Context, versionID string, limit, offset int) ([]*types.ChatSession, int, error) {
 	var total int
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM chat_sessions WHERE agent_version_id = $1::uuid`,
+		`SELECT COUNT(*) FROM chat_sessions WHERE agent_version_id = $1::uuid AND parent_session_id IS NULL`,
 		versionID,
 	).Scan(&total); err != nil {
 		return nil, 0, err
@@ -125,7 +138,7 @@ func (r *ChatRepository) ListSessions(ctx context.Context, versionID string, lim
 	q := `
 		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at, locked_at
 		FROM chat_sessions
-		WHERE agent_version_id = $1::uuid
+		WHERE agent_version_id = $1::uuid AND parent_session_id IS NULL
 		ORDER BY created_at DESC`
 	args := []any{versionID}
 	if limit > 0 {
@@ -268,13 +281,14 @@ func (r *ChatRepository) GetSessionHeaderOverrides(ctx context.Context, sessionI
 }
 
 // SetSessionHeaderOverrides replaces the per-backend header override map for a
-// session. Returns ErrNotFound if the session doesn't exist.
+// root session. Returns ErrNotFound if the session doesn't exist or is a
+// sub-agent child.
 func (r *ChatRepository) SetSessionHeaderOverrides(ctx context.Context, sessionID string, ovr map[string]map[string]string) error {
 	raw, err := json.Marshal(ovr)
 	if err != nil {
 		return err
 	}
-	const q = `UPDATE chat_sessions SET backend_header_overrides = $1 WHERE id = $2::uuid`
+	const q = `UPDATE chat_sessions SET backend_header_overrides = $1 WHERE id = $2::uuid AND parent_session_id IS NULL`
 	res, err := r.db.ExecContext(ctx, q, raw, sessionID)
 	if err != nil {
 		return err
