@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -68,7 +70,24 @@ func (c *Composite) Call(ctx context.Context, bundle json.RawMessage, call Call)
 	return Result{ToolUseID: call.ID}, fmt.Errorf("tools: no backend owns %q", call.Name)
 }
 
-var _ Handler = (*Composite)(nil)
+// Close closes every backend that holds resources (MCP sessions). The
+// orchestrator calls it once per turn, root or child (spec § Scope).
+func (c *Composite) Close() error {
+	var errs []error
+	for _, be := range c.backends {
+		if cl, ok := be.(io.Closer); ok {
+			if err := cl.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("tools: close backend %s: %w", be.Name(), err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+var (
+	_ Handler   = (*Composite)(nil)
+	_ io.Closer = (*Composite)(nil)
+)
 
 // --- Skill meta-tool shared helpers ---
 

@@ -248,9 +248,16 @@ func convertMessage(m llm.Message) sdk.MessageParam {
 			}
 			blocks = append(blocks, sdk.NewToolUseBlock(x.ID, input, x.Name))
 		case llm.ToolResultBlock:
-			// Result is json.RawMessage; NewToolResultBlock expects a string
-			// for the content parameter. Convert to string to pass through as-is.
-			blocks = append(blocks, sdk.NewToolResultBlock(x.ToolUseID, string(x.Result), x.IsError))
+			// Result is json.RawMessage; NewToolResultBlock expects a string.
+			// A JSON string result (e.g. the agent tool's child text) is sent
+			// as its plain-text value so the LLM never sees JSON quoting;
+			// anything else passes through as-is.
+			content := string(x.Result)
+			var s string
+			if err := json.Unmarshal(x.Result, &s); err == nil {
+				content = s
+			}
+			blocks = append(blocks, sdk.NewToolResultBlock(x.ToolUseID, content, x.IsError))
 		case llm.InlineMediaBlock:
 			// Materialised by RenderArtifactAsBlock upstream: raw bytes plus
 			// MIME, ready for base64 inlining into the provider-native block
