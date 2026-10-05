@@ -48,6 +48,9 @@ ALTER TABLE deployed_sessions
     CHECK ((parent_session_id IS NULL) = (depth = 0));
 CREATE UNIQUE INDEX idx_deployed_sessions_parent ON deployed_sessions(parent_session_id, parent_tool_call_id)
   WHERE parent_session_id IS NOT NULL;
+-- FK check + delete guards look children up by pinned version.
+CREATE INDEX idx_deployed_sessions_agent_version ON deployed_sessions(agent_version_id)
+  WHERE agent_version_id IS NOT NULL;
 
 -- +goose Down
 -- Children first: once the parent link is dropped, a former child would read as a
@@ -55,6 +58,7 @@ CREATE UNIQUE INDEX idx_deployed_sessions_parent ON deployed_sessions(parent_ses
 DELETE FROM deployed_sessions WHERE parent_session_id IS NOT NULL;
 DELETE FROM chat_sessions     WHERE parent_session_id IS NOT NULL;
 
+DROP INDEX idx_deployed_sessions_agent_version;
 DROP INDEX idx_deployed_sessions_parent;
 ALTER TABLE deployed_sessions
   DROP CONSTRAINT deployed_sessions_depth_chk,

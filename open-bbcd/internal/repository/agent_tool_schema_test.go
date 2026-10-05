@@ -72,6 +72,13 @@ func TestAgentToolSchema(t *testing.T) {
 		}
 	})
 
+	t.Run("deployed_sessions agent_version index", func(t *testing.T) {
+		var one int
+		if err := db.QueryRow(`SELECT 1 FROM pg_indexes WHERE indexname='idx_deployed_sessions_agent_version'`).Scan(&one); err != nil {
+			t.Fatalf("index missing: %v", err)
+		}
+	})
+
 	t.Run("binding name pattern", func(t *testing.T) {
 		wantPQ(t, bind(v1, v2, "Bad"), "23514", "")
 		wantPQ(t, bind(v1, v2, "a"+strings.Repeat("b", 40)), "23514", "") // 41 chars
