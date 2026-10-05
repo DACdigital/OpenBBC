@@ -1012,3 +1012,104 @@ func TestMultiAgent_Artifacts(t *testing.T) {
 		}
 	})
 }
+
+// panicRunner panics for one prompt and delegates every other call.
+type panicRunner struct {
+	inner   subAgentRunner
+	panicOn string
+}
+
+func (p *panicRunner) Run(ctx context.Context, req subAgentRequest) (subAgentResult, error) {
+	if req.Prompt == p.panicOn {
+		panic("kaboom")
+	}
+	return p.inner.Run(ctx, req)
+}
+
+// 15. A panicking child is contained to its own agent call.
+func TestMultiAgent_ChildPanicRecovered(t *testing.T) {
+	logs := &syncBuffer{}
+	e := newMAEnvWithLogger(t, slog.New(slog.NewTextHandler(logs, nil)))
+	e.o.MaxParallel = 1 // a leaked semaphore slot would deadlock the sibling
+	e.standardRoot()
+	e.o.runner = &panicRunner{inner: e.spy, panicOn: "BOOM"}
+	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "BOOM"), agentCall("researcher", "d", "P2")), textStep("root done"))
+	e.llm.route(sysW, echoStep("echo:"))
+
+	sink := &syncRecordingSink{}
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.turn(context.Background(), sink)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn did not finish")
+	}
+
+	uses := e.toolUses("R")
+	rs := resultsOf(e.toolMsgs("R")[0])
+	if len(rs) != 2 {
+		t.Fatalf("results = %d", len(rs))
+	}
+	if !rs[0].IsError || resultString(t, rs[0]) != "subagent_failed: sub-agent panicked" {
+		t.Fatalf("panicked result = %+v (%s)", rs[0], rs[0].Result)
+	}
+	if rs[1].IsError || resultString(t, rs[1]) != "echo:P2" {
+		t.Fatalf("sibling result = %+v (%s)", rs[1], rs[1].Result)
+	}
+	var sawPanicResult bool
+	for _, ev := range sink.snapshot() {
+		if r, ok := ev.(transport.ToolResultEvent); ok && r.ToolCallID == uses[0].ID && r.IsError {
+			sawPanicResult = true
+		}
+	}
+	if !sawPanicResult {
+		t.Fatal("no TOOL_CALL_RESULT for the panicked call")
+	}
+	out := logs.String()
+	for _, want := range []string{"sub-agent panicked", "parent_session_id=R", "tool_use_id=" + uses[0].ID, "stack="} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log missing %q:\n%s", want, out)
+		}
+	}
+	if e.lastText("R") != "root done" {
+		t.Fatal("root did not continue")
+	}
+}
+
+// A panic inside the child turn (after STEP_STARTED) still closes the step.
+func TestMultiAgent_ChildTurnPanicClosesStep(t *testing.T) {
+	e := newMAEnv(t)
+	e.standardRoot()
+	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
+	e.llm.route(sysW, func(llm.Request) []llm.Event { panic("llm client bug") })
+
+	sink := &syncRecordingSink{}
+	if _, err := e.turn(context.Background(), sink); err != nil {
+		t.Fatal(err)
+	}
+	rs := resultsOf(e.toolMsgs("R")[0])
+	if len(rs) != 1 || resultString(t, rs[0]) != "subagent_failed: sub-agent panicked" {
+		t.Fatalf("result = %+v", rs)
+	}
+	var started, finished int
+	for _, ev := range sink.snapshot() {
+		switch f := ev.(type) {
+		case transport.StepStartedEvent:
+			started++
+		case transport.StepFinishedEvent:
+			finished++
+			if !f.IsError {
+				t.Fatal("STEP_FINISHED not flagged as error")
+			}
+		}
+	}
+	if started != 1 || finished != 1 {
+		t.Fatalf("STEP_STARTED=%d STEP_FINISHED=%d", started, finished)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -164,6 +165,14 @@ func (r *turnRunner) Run(ctx context.Context, req subAgentRequest) (subAgentResu
 	}
 	sink := newChildSink(parent, childID, req.Binding.Name, wireID, req.Description)
 	_ = sink.start(ctx)
+	// A panic in the child turn propagates to runAgentCallRecovered; close
+	// the step first so the stream never holds an unmatched STEP_STARTED.
+	finished := false
+	defer func() {
+		if !finished {
+			_ = sink.finish(ctx, true)
+		}
+	}()
 
 	stop, turnErr := r.o.Turn(ctx, req.Binding.TargetVersionID, childID, []llm.Block{llm.TextBlock{Text: req.Prompt}}, sink, TurnOpts{
 		Depth:            req.ParentDepth + 1,
@@ -176,6 +185,7 @@ func (r *turnRunner) Run(ctx context.Context, req subAgentRequest) (subAgentResu
 		res.Text, turnErr = r.o.lastAssistantText(ctx, childID)
 	}
 	err = classifyChildError(ctx, turnErr, res)
+	finished = true
 	_ = sink.finish(ctx, err != nil)
 	return res, err
 }
@@ -280,7 +290,7 @@ func (o *Orchestrator) runAgentCalls(
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
-				results[i] = o.runAgentCall(ctx, tu, bindings, sessionID, opts, shared)
+				results[i] = o.runAgentCallRecovered(ctx, tu, bindings, sessionID, opts, shared)
 			case <-ctx.Done():
 				results[i] = agentErrorResult(tu.ID, &agentToolError{Code: "cancelled", Details: ctx.Err().Error()})
 			}
@@ -288,6 +298,33 @@ func (o *Orchestrator) runAgentCalls(
 		}(i)
 	}
 	wg.Wait()
+}
+
+// runAgentCallRecovered is runAgentCall with panic containment: the call
+// runs off the request goroutine, so an unrecovered panic in a child turn
+// (LLM client, MCP backend, normaliser) would kill the process. A panic
+// becomes this call's subagent_failed result; siblings are unaffected.
+func (o *Orchestrator) runAgentCallRecovered(
+	ctx context.Context,
+	tu llm.ToolUseBlock,
+	bindings map[string]types.SubAgentBinding,
+	sessionID string,
+	opts TurnOpts,
+	shared *lockedSink,
+) (res llm.ToolResultBlock) {
+	defer func() {
+		if r := recover(); r != nil {
+			o.logger.Error("sub-agent panicked",
+				slog.String("parent_session_id", sessionID),
+				slog.String("root_session_id", opts.RootSessionID),
+				slog.String("tool_use_id", tu.ID),
+				slog.Any("panic", r),
+				slog.String("stack", string(debug.Stack())),
+			)
+			res = agentErrorResult(tu.ID, &agentToolError{Code: "subagent_failed", Details: "sub-agent panicked"})
+		}
+	}()
+	return o.runAgentCall(ctx, tu, bindings, sessionID, opts, shared)
 }
 
 // runAgentCall validates one agent call and runs it through o.runner. The
