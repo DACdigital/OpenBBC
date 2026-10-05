@@ -82,13 +82,13 @@ type ArtifactFetcherResolver func(storeID string) llm.ArtifactFetcher
 var ErrInlineMediaNotPersistable = errors.New("chat: inline media blocks must never be persisted")
 
 type Orchestrator struct {
-	agents            AgentReader
-	chats             ChatStore
-	llm               llm.LLM
-	builder           ToolHandlerBuilder
-	logger            *slog.Logger
-	artifactResolver  ArtifactFetcherResolver
-	artifactUploader  ArtifactUploader
+	agents           AgentReader
+	chats            ChatStore
+	llm              llm.LLM
+	builder          ToolHandlerBuilder
+	logger           *slog.Logger
+	artifactResolver ArtifactFetcherResolver
+	artifactUploader ArtifactUploader
 
 	// Tunables; set by NewAPI from config. Sensible defaults baked in.
 	Model         string
@@ -368,6 +368,10 @@ func (o *Orchestrator) Turn(
 			pendingToolUses     []llm.ToolUseBlock
 			inputBuffers        = map[string]*bytes.Buffer{}
 			stopReasonThisRound string
+			// invalidInput: tool_use ids whose streamed input was not valid
+			// JSON. Their block input is replaced by {} and dispatch answers
+			// them with an error result instead of running them.
+			invalidInput = map[string]bool{}
 		)
 
 		// req.Messages always holds the ref form. Every LLM call renders a
@@ -417,6 +421,16 @@ func (o *Orchestrator) Turn(
 				// Finalize the ToolUseBlock with accumulated input bytes.
 				if buf, ok := inputBuffers[e.ID]; ok {
 					inputBytes := buf.Bytes()
+					// The block is persisted and re-sent to the provider,
+					// which requires an object: unparsable input becomes {}
+					// (flagged for dispatch); empty input is a no-argument
+					// call and becomes {} as well.
+					if len(bytes.TrimSpace(inputBytes)) == 0 {
+						inputBytes = []byte(`{}`)
+					} else if !json.Valid(inputBytes) {
+						inputBytes = []byte(`{}`)
+						invalidInput[e.ID] = true
+					}
 					for i, b := range assistantBlocks {
 						if tu, ok := b.(llm.ToolUseBlock); ok && tu.ID == e.ID {
 							tu.Input = inputBytes
@@ -489,7 +503,18 @@ func (o *Orchestrator) Turn(
 		var toolRefs []llm.ArtifactRefBlock
 		var refEvents []transport.ArtifactRefEvent
 		for i, tu := range pendingToolUses {
-			if bindingsByName != nil && tu.Name == tools.AgentToolName {
+			isAgent := bindingsByName != nil && tu.Name == tools.AgentToolName
+			if invalidInput[tu.ID] {
+				if isAgent {
+					results[i] = agentErrorResult(tu.ID, &agentToolError{Code: "invalid_input", Details: "tool input is not valid JSON"})
+				} else {
+					errMsg, _ := json.Marshal(map[string]string{"error": "tool input is not valid JSON"})
+					results[i] = llm.ToolResultBlock{ToolUseID: tu.ID, Result: errMsg, IsError: true}
+				}
+				_ = shared.Send(ctx, transport.ToolResultEvent{ToolCallID: tu.ID, Result: results[i].Result, IsError: true})
+				continue
+			}
+			if isAgent {
 				agentIdx = append(agentIdx, i)
 				continue
 			}
@@ -616,11 +641,15 @@ func historyToLLM(rows []*types.ChatMessage) []llm.Message {
 func parseBlocks(raw []json.RawMessage) []llm.Block {
 	out := make([]llm.Block, 0, len(raw))
 	for _, r := range raw {
-		var head struct{ Type string `json:"type"` }
+		var head struct {
+			Type string `json:"type"`
+		}
 		_ = json.Unmarshal(r, &head)
 		switch head.Type {
 		case "text":
-			var b struct{ Text string `json:"text"` }
+			var b struct {
+				Text string `json:"text"`
+			}
 			_ = json.Unmarshal(r, &b)
 			out = append(out, llm.TextBlock{Text: b.Text})
 		case "tool_use":

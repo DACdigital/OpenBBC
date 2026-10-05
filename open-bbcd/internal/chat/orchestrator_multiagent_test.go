@@ -438,8 +438,8 @@ func TestMultiAgent_UnknownAndInvalid(t *testing.T) {
 	}{
 		{"unknown", mustAgentInput("nobody", "d", "p"), "unknown_subagent: "},
 		{"missing prompt", `{"subagent":"researcher","description":"d"}`, "invalid_input: "},
-		// Syntactically invalid JSON cannot reach dispatch: the assistant
-		// message carrying it fails to persist first (pre-existing, any tool).
+		{"unparsable", `{bad`, "invalid_input: tool input is not valid JSON"},
+		{"truncated", `{"subagent":"researcher","descr`, "invalid_input: tool input is not valid JSON"},
 		{"not an object", `["researcher"]`, "invalid_input: "},
 		{"unknown property", `{"subagent":"researcher","description":"d","prompt":"p","x":1}`, "invalid_input: "},
 	}
@@ -1111,5 +1111,49 @@ func TestMultiAgent_ChildTurnPanicClosesStep(t *testing.T) {
 	}
 	if started != 1 || finished != 1 {
 		t.Fatalf("STEP_STARTED=%d STEP_FINISHED=%d", started, finished)
+	}
+}
+
+// Unparsable input on a non-agent tool is an error result, not a failed turn.
+func TestMultiAgent_UnparsableToolInput(t *testing.T) {
+	e := newMAEnv(t)
+	e.standardRoot()
+	e.llm.route(sysRoot, callsStep("", toolCallSpec{Name: "search", Input: `{bad`}, toolCallSpec{Name: "search", Input: `{"q":1}`}), textStep("root done"))
+
+	stop, err := e.turn(context.Background(), &syncRecordingSink{})
+	if err != nil || stop != "end_turn" {
+		t.Fatalf("Turn = %q, %v", stop, err)
+	}
+	if n := len(e.childCalls()); n != 0 {
+		t.Fatalf("children = %d", n)
+	}
+	var calls []tools.Call
+	for _, h := range e.builder.allHandlers() {
+		calls = append(calls, h.calls...)
+	}
+	if len(calls) != 1 || string(calls[0].Input) != `{"q":1}` {
+		t.Fatalf("handler calls = %+v, want only the valid one", calls)
+	}
+	uses := e.toolUses("R")
+	if len(uses) != 2 || string(uses[0].Input) != `{}` {
+		t.Fatalf("persisted tool_use = %+v, want input {}", uses)
+	}
+	reqs := e.llm.reqs(sysRoot)
+	if len(reqs) != 2 {
+		t.Fatalf("root LLM calls = %d", len(reqs))
+	}
+	for _, m := range reqs[1].Messages {
+		for _, b := range m.Content {
+			if tu, ok := b.(llm.ToolUseBlock); ok && !json.Valid(tu.Input) {
+				t.Fatalf("next request carries invalid tool_use input %q", tu.Input)
+			}
+		}
+	}
+	rs := requestToolResults(reqs[1])
+	if len(rs) != 2 || !rs[0].IsError || string(rs[0].Result) != `{"error":"tool input is not valid JSON"}` || rs[1].IsError {
+		t.Fatalf("results = %+v", rs)
+	}
+	if e.lastText("R") != "root done" {
+		t.Fatal("root did not continue")
 	}
 }
