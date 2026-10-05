@@ -363,7 +363,13 @@
       // bubble (markdown render + re-enable input). Otherwise we'd cut off
       // mid-sentence visually.
       await waitForDrain();
+      closeStaleSubagentCards();
       finalizeAssistantBubble();
+      // Per-turn lookup maps: nothing after the turn reads them (the
+      // feedback footer only needs the bubble), so drop them here rather
+      // than letting them grow for the page lifetime.
+      subagentCards.clear();
+      toolCallElements.clear();
       // Artifact-only send that never started: drop the empty user bubble.
       if (!runStarted && currentUserBubble && !currentUserBubble.querySelector('.md')) {
         currentUserBubble.remove();
@@ -689,12 +695,24 @@
   function finishSubagentCard(raw) {
     const entry = subagentCards.get(raw.childSessionId);
     if (!entry) return;
-    const st = raw.isError ? 'error' : 'done';
+    setSubagentState(entry, raw.isError ? 'error' : 'done');
+  }
+
+  function setSubagentState(entry, st) {
     entry.card.classList.remove('subagent-running');
     entry.card.classList.add(`subagent-${st}`);
     entry.card.dataset.state = st;
     entry.state.textContent = st;
     entry.card.open = false;
+  }
+
+  // Stream ended (normally, RUN_ERROR or fetch failure) while a card never
+  // got its STEP_FINISHED: mark it interrupted, matching the server-rendered
+  // interrupted card (chat/bubble.html) shown after a reload.
+  function closeStaleSubagentCards() {
+    subagentCards.forEach((entry) => {
+      if (entry.card.dataset.state === 'running') setSubagentState(entry, 'interrupted');
+    });
   }
 
   function startToolCall(id, name, container) {
