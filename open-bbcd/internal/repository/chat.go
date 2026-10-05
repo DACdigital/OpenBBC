@@ -345,3 +345,101 @@ func (r *ChatRepository) insertChatMessageTx(ctx context.Context, tx *sql.Tx, m 
 	_, err := tx.ExecContext(ctx, `UPDATE chat_sessions SET updated_at = now() WHERE id = $1::uuid`, m.SessionID)
 	return err
 }
+
+// CreateChildSession inserts a sub-agent child session under parentID in
+// one transaction (spec § Repository invariants). It locks the tree's root
+// FOR SHARE — which conflicts with close-draft's UPDATE … SET locked_at,
+// while parallel sibling spawns can still share it — and refuses with
+// ErrSessionLocked when the root is locked. The child is pinned to
+// targetVersionID, has depth = parent.depth + 1, and copies the root's
+// backend_header_overrides. parentToolCallID is the raw tool_use id.
+// ErrNotFound when rootID is not a root session, parentID does not exist, or
+// targetVersionID does not exist. A duplicate (parentID, parentToolCallID)
+// returns the raw unique-violation error.
+func (r *ChatRepository) CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var lockedAt sql.NullTime
+	err = tx.QueryRowContext(ctx,
+		`SELECT locked_at FROM chat_sessions WHERE id = $1::uuid AND parent_session_id IS NULL FOR SHARE`,
+		rootID).Scan(&lockedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if lockedAt.Valid {
+		return "", types.ErrSessionLocked
+	}
+	var id string
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO chat_sessions (id, agent_version_id, parent_session_id, parent_tool_call_id, depth, backend_header_overrides)
+		SELECT gen_random_uuid(), $4::uuid, p.id, $3, p.depth + 1, root.backend_header_overrides
+		FROM chat_sessions p, chat_sessions root
+		WHERE p.id = $2::uuid AND root.id = $1::uuid
+		RETURNING id::text`, rootID, parentID, parentToolCallID, targetVersionID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return "", types.ErrNotFound
+		}
+		return "", err
+	}
+	return id, tx.Commit()
+}
+
+// GetDescendant returns childID iff it is a strict descendant of the root
+// session rootID. ErrNotFound when rootID is not a root, when childID is
+// rootID itself, or when childID lies outside rootID's tree.
+func (r *ChatRepository) GetDescendant(ctx context.Context, rootID, childID string) (*types.ChatSession, error) {
+	s := &types.ChatSession{}
+	var lockedAt sql.NullTime
+	var parentID, toolCallID sql.NullString
+	err := r.db.QueryRowContext(ctx, `
+		WITH RECURSIVE tree(id) AS (
+		    SELECT id FROM chat_sessions WHERE id = $1::uuid AND parent_session_id IS NULL
+		    UNION ALL
+		    SELECT c.id FROM chat_sessions c JOIN tree t ON c.parent_session_id = t.id
+		)
+		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at, locked_at,
+		       parent_session_id::text, parent_tool_call_id, depth
+		FROM chat_sessions
+		WHERE id = $2::uuid AND id <> $1::uuid AND id IN (SELECT id FROM tree)
+	`, rootID, childID).Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt, &lockedAt,
+		&parentID, &toolCallID, &s.Depth)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, types.ErrNotFound
+		}
+		return nil, err
+	}
+	if lockedAt.Valid {
+		t := lockedAt.Time
+		s.LockedAt = &t
+	}
+	if parentID.Valid {
+		s.ParentSessionID = &parentID.String
+	}
+	s.ParentToolCallID = toolCallID.String
+	return s, nil
+}
+
+// ChildByParentToolCall returns the id of the child session spawned by the
+// agent tool_use toolCallID (raw id) in session parentID, for the history
+// card link. ErrNotFound when there is none.
+func (r *ChatRepository) ChildByParentToolCall(ctx context.Context, parentID, toolCallID string) (string, error) {
+	var id string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id::text FROM chat_sessions WHERE parent_session_id = $1::uuid AND parent_tool_call_id = $2`,
+		parentID, toolCallID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	return id, err
+}

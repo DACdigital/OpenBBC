@@ -135,7 +135,8 @@ func (r *DatasetRepository) EnsureDraft(ctx context.Context, datasetID string) (
 }
 
 // CloseDraft flips the given DRAFT to CLOSED (with optional note) and sets
-// chat_sessions.locked_at on every session in that version. One tx.
+// chat_sessions.locked_at on every session in that version and on all their
+// sub-agent descendants. One tx.
 func (r *DatasetRepository) CloseDraft(ctx context.Context, versionID, note string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -200,6 +201,22 @@ func (r *DatasetRepository) CloseDraft(ctx context.Context, versionID, note stri
 		SET locked_at = now()
 		WHERE locked_at IS NULL
 		  AND id IN (SELECT session_id FROM dataset_version_sessions WHERE dataset_version_id = $1::uuid)
+	`, versionID); err != nil {
+		return err
+	}
+	// Statement 2 (separate, later — spec § Datasets): lock every descendant
+	// of the member roots. Statement 1's row locks conflict with
+	// CreateChildSession's FOR SHARE on the root, and this statement takes a
+	// fresh READ COMMITTED snapshot, so a child that committed while
+	// statement 1 waited is seen here.
+	if _, err := tx.ExecContext(ctx, `
+		WITH RECURSIVE tree(id) AS (
+		    SELECT session_id FROM dataset_version_sessions WHERE dataset_version_id = $1::uuid
+		    UNION ALL
+		    SELECT c.id FROM chat_sessions c JOIN tree t ON c.parent_session_id = t.id
+		)
+		UPDATE chat_sessions SET locked_at = now()
+		WHERE locked_at IS NULL AND parent_session_id IS NOT NULL AND id IN (SELECT id FROM tree)
 	`, versionID); err != nil {
 		return err
 	}

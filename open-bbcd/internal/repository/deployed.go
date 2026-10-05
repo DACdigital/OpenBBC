@@ -272,3 +272,67 @@ func insertDeployedMessageTx(ctx context.Context, tx *sql.Tx, m types.DeployedMe
 	}
 	return err
 }
+
+// CreateChildSession inserts a sub-agent child session under parentID in one
+// transaction (spec § Repository invariants). It locks the tree's root FOR
+// SHARE (deployed sessions have no locked_at, so there is no lock check). The
+// child carries the root's agent_id and user_id, is pinned to
+// targetVersionID, and has depth = parent.depth + 1. parentToolCallID is the
+// raw tool_use id. ErrNotFound when rootID is not a root session, parentID
+// does not exist, or targetVersionID does not exist. A duplicate
+// (parentID, parentToolCallID) returns the raw unique-violation error.
+func (r *DeployedRepository) CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var one int
+	err = tx.QueryRowContext(ctx,
+		`SELECT 1 FROM deployed_sessions WHERE id = $1::uuid AND parent_session_id IS NULL FOR SHARE`,
+		rootID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	var id string
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO deployed_sessions (agent_id, user_id, parent_session_id, parent_tool_call_id, depth, agent_version_id)
+		SELECT root.agent_id, root.user_id, p.id, $3, p.depth + 1, $4::uuid
+		FROM deployed_sessions p, deployed_sessions root
+		WHERE p.id = $2::uuid AND root.id = $1::uuid
+		RETURNING id::text`, rootID, parentID, parentToolCallID, targetVersionID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return "", types.ErrNotFound
+		}
+		return "", err
+	}
+	return id, tx.Commit()
+}
+
+// GetDescendant returns childID iff it is a strict descendant of the root
+// session rootID. ErrNotFound when rootID is not a root, when childID is
+// rootID itself, or when childID lies outside rootID's tree. No user scope:
+// the caller verified rootID's ownership.
+func (r *DeployedRepository) GetDescendant(ctx context.Context, rootID, childID string) (*types.DeployedSession, error) {
+	row := r.db.QueryRowContext(ctx, `
+		WITH RECURSIVE tree(id) AS (
+		    SELECT id FROM deployed_sessions WHERE id = $1::uuid AND parent_session_id IS NULL
+		    UNION ALL
+		    SELECT c.id FROM deployed_sessions c JOIN tree t ON c.parent_session_id = t.id
+		)
+		SELECT `+deployedSessionCols+` FROM deployed_sessions
+		WHERE id = $2::uuid AND id <> $1::uuid AND id IN (SELECT id FROM tree)
+	`, rootID, childID)
+	sess, err := scanDeployedSession(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, types.ErrNotFound
+	}
+	return sess, err
+}
