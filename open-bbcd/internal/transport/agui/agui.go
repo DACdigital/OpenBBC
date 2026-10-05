@@ -125,13 +125,19 @@ func (s *sink) translate(ev transport.Event) (events.Event, error) {
 		return events.NewTextMessageEndEvent(e.MessageID), nil
 
 	case transport.ToolCallStartEvent:
-		return events.NewToolCallStartEvent(e.ToolCallID, e.Name), nil
+		ev := events.NewToolCallStartEvent(childToolCallID(e.ChildSessionID, e.ToolCallID), e.Name)
+		withChildRaw(ev.BaseEvent, e.ChildSessionID)
+		return ev, nil
 
 	case transport.ToolCallArgsEvent:
-		return events.NewToolCallArgsEvent(e.ToolCallID, e.ArgsJSON), nil
+		ev := events.NewToolCallArgsEvent(childToolCallID(e.ChildSessionID, e.ToolCallID), e.ArgsJSON)
+		withChildRaw(ev.BaseEvent, e.ChildSessionID)
+		return ev, nil
 
 	case transport.ToolCallEndEvent:
-		return events.NewToolCallEndEvent(e.ToolCallID), nil
+		ev := events.NewToolCallEndEvent(childToolCallID(e.ChildSessionID, e.ToolCallID))
+		withChildRaw(ev.BaseEvent, e.ChildSessionID)
+		return ev, nil
 
 	case transport.ToolResultEvent:
 		// Serialize result + is_error flag as JSON content string.
@@ -142,7 +148,28 @@ func (s *sink) translate(ev transport.Event) (events.Event, error) {
 		// NewToolCallResultEvent(messageID, toolCallID, content): the AG-UI spec
 		// requires a non-empty messageID to associate the result with the assistant
 		// turn. We use the toolCallID as a proxy — it uniquely identifies the call.
-		return events.NewToolCallResultEvent(e.ToolCallID, e.ToolCallID, string(payload)), nil
+		id := childToolCallID(e.ChildSessionID, e.ToolCallID)
+		ev := events.NewToolCallResultEvent(id, id, string(payload))
+		withChildRaw(ev.BaseEvent, e.ChildSessionID)
+		return ev, nil
+
+	case transport.StepStartedEvent:
+		// ToolCallID is already the parent agent call's wire id; never prefixed.
+		ev := events.NewStepStartedEvent(e.StepName + ":" + e.ToolCallID)
+		ev.RawEvent = map[string]any{
+			"childSessionId":   e.ChildSessionID,
+			"parentToolCallId": e.ToolCallID,
+			"description":      e.Description,
+		}
+		return ev, nil
+
+	case transport.StepFinishedEvent:
+		ev := events.NewStepFinishedEvent(e.StepName + ":" + e.ToolCallID)
+		ev.RawEvent = map[string]any{
+			"childSessionId": e.ChildSessionID,
+			"isError":        e.IsError,
+		}
+		return ev, nil
 
 	case transport.ArtifactRefEvent:
 		var filename any // null when unknown
@@ -171,6 +198,24 @@ func (s *sink) translate(ev transport.Event) (events.Event, error) {
 	}
 
 	return nil, fmt.Errorf("agui: unhandled internal event type %T", ev)
+}
+
+// childToolCallID applies the once-only child prefix (spec § AG-UI mapping):
+// "<ChildSessionID>:<tool_use id>" for child events, the raw id otherwise.
+func childToolCallID(childSessionID, toolCallID string) string {
+	if childSessionID == "" {
+		return toolCallID
+	}
+	return childSessionID + ":" + toolCallID
+}
+
+// withChildRaw tags a child event with rawEvent {childSessionId}. Root events
+// (empty id) keep a nil RawEvent, which the SDK omits, so their bytes are
+// unchanged.
+func withChildRaw(b *events.BaseEvent, childSessionID string) {
+	if childSessionID != "" {
+		b.RawEvent = map[string]any{"childSessionId": childSessionID}
+	}
 }
 
 // Compile-time interface conformance.

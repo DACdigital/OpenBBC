@@ -68,6 +68,10 @@ func serialize(ev transport.Event) (string, any) {
 		return "tool_call_end", e
 	case transport.ToolResultEvent:
 		return "tool_call_result", e
+	case transport.StepStartedEvent:
+		return "step_started", e
+	case transport.StepFinishedEvent:
+		return "step_finished", e
 	case transport.ArtifactRefEvent:
 		var filename any
 		if e.Filename != "" {
