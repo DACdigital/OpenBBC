@@ -520,3 +520,118 @@ func TestAgentVersion_ListSubAgentBindings(t *testing.T) {
 		t.Fatalf("no bindings = %#v, %v", empty, err)
 	}
 }
+
+// seedChildVersion inserts a version of agentID chained to parentID with the
+// given status and returns its id.
+func seedChildVersion(t *testing.T, db *sql.DB, agentID, parentID string, status types.AgentStatus) string {
+	t.Helper()
+	var id string
+	if err := db.QueryRow(`
+		INSERT INTO agent_versions (agent_id, parent_version_id, status, flow_map_config)
+		VALUES ($1::uuid, $2::uuid, $3, '{}'::jsonb) RETURNING id::text`,
+		agentID, parentID, string(status)).Scan(&id); err != nil {
+		t.Fatalf("seedChildVersion: %v", err)
+	}
+	return id
+}
+
+func setAgentName(t *testing.T, db *sql.DB, agentID, name string) {
+	t.Helper()
+	if _, err := db.Exec(`UPDATE agents SET name = $2 WHERE id = $1::uuid`, agentID, name); err != nil {
+		t.Fatalf("setAgentName: %v", err)
+	}
+}
+
+func TestSubAgent_ListBindableTargets(t *testing.T) {
+	db := openTestDB(t)
+	r := NewSubAgentRepository(db)
+	ctx := context.Background()
+
+	// Caller's agent "zeta": v1 READY, v2 DEPLOYED, v3 DRAFT (the caller).
+	zeta, zv1 := seedVersionWithStatus(t, db, types.AgentStatusReady)
+	setAgentName(t, db, zeta, "zeta")
+	zv2 := seedChildVersion(t, db, zeta, zv1, types.AgentStatusDeployed)
+	caller := seedChildVersion(t, db, zeta, zv2, types.AgentStatusDraft)
+
+	// Agent "alpha": v1 READY, v2 TRAINING, v3 READY, v4 PENDING,
+	// v5 INITIALIZING — only v1 and v3 are runnable.
+	alpha, av1 := seedVersionWithStatus(t, db, types.AgentStatusReady)
+	setAgentName(t, db, alpha, "alpha")
+	av2 := seedChildVersion(t, db, alpha, av1, types.AgentStatusTraining)
+	av3 := seedChildVersion(t, db, alpha, av2, types.AgentStatusReady)
+	av4 := seedChildVersion(t, db, alpha, av3, types.AgentStatusPending)
+	_ = seedChildVersion(t, db, alpha, av4, types.AgentStatusInitializing)
+
+	// Agent "beta": only a DRAFT version → no entries.
+	beta, _ := seedVersionWithStatus(t, db, types.AgentStatusDraft)
+	setAgentName(t, db, beta, "beta")
+
+	got, err := r.ListBindableTargets(ctx, caller)
+	if err != nil {
+		t.Fatalf("ListBindableTargets: %v", err)
+	}
+	type row struct {
+		agent, version string
+		num            int
+		status         string
+	}
+	want := []row{
+		{"alpha", av1, 1, "READY"},
+		{"alpha", av3, 3, "READY"},
+		{"zeta", zv1, 1, "READY"},
+		{"zeta", zv2, 2, "DEPLOYED"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d targets, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		g := got[i]
+		if g.AgentName != w.agent || g.VersionID != w.version || g.VersionNum != w.num || g.Status != w.status {
+			t.Fatalf("row %d = %+v, want %+v", i, g, w)
+		}
+		if g.VersionID == caller {
+			t.Fatal("caller listed as its own target")
+		}
+	}
+	if got[0].AgentID != alpha || got[0].Label() != "alpha · v1 · READY" {
+		t.Fatalf("row 0 agent/label = %q %q", got[0].AgentID, got[0].Label())
+	}
+
+	// A READY/DEPLOYED caller is excluded from its own picker too.
+	got, err = r.ListBindableTargets(ctx, zv2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range got {
+		if g.VersionID == zv2 {
+			t.Fatal("READY/DEPLOYED caller listed as its own target")
+		}
+	}
+}
+
+func TestSubAgent_ListBindingsWithLabels(t *testing.T) {
+	db := openTestDB(t)
+	r := NewSubAgentRepository(db)
+	ctx := context.Background()
+	_, caller := seedVersionWithStatus(t, db, types.AgentStatusDraft)
+	ta, tv1 := seedVersionWithStatus(t, db, types.AgentStatusReady)
+	setAgentName(t, db, ta, "helper")
+	tv2 := seedChildVersion(t, db, ta, tv1, types.AgentStatusDeployed)
+	rawBind(t, db, caller, "b_second", tv2)
+	rawBind(t, db, caller, "a_first", tv1)
+
+	got, err := r.ListBindingsWithLabels(ctx, caller)
+	if err != nil {
+		t.Fatalf("ListBindingsWithLabels: %v", err)
+	}
+	if len(got) != 2 || got[0].Name != "a_first" || got[1].Name != "b_second" {
+		t.Fatalf("got %+v", got)
+	}
+	if got[0].TargetLabel != "helper · v1 · READY" || got[1].TargetLabel != "helper · v2 · DEPLOYED" {
+		t.Fatalf("labels = %q, %q", got[0].TargetLabel, got[1].TargetLabel)
+	}
+	empty, err := r.ListBindingsWithLabels(ctx, tv1)
+	if err != nil || empty == nil || len(empty) != 0 {
+		t.Fatalf("empty = %#v, %v", empty, err)
+	}
+}
