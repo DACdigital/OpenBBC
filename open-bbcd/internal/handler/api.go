@@ -187,6 +187,8 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	orchestrator.Model = cfg.Anthropic.DefaultModel
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
+	orchestrator.MaxDepth = cfg.Chat.AgentToolMaxDepth
+	orchestrator.MaxParallel = cfg.Chat.AgentToolMaxParallel
 
 	feedbackRepo := repository.NewFeedbackRepository(db)
 	feedbackHandler, err := NewFeedbackHandler(feedbackRepo, web.Assets)
@@ -237,6 +239,8 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	deployedOrchestrator.Model = cfg.Anthropic.DefaultModel
 	deployedOrchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
+	deployedOrchestrator.MaxDepth = cfg.Chat.AgentToolMaxDepth
+	deployedOrchestrator.MaxParallel = cfg.Chat.AgentToolMaxParallel
 	// Deployed parity with BO: claimed refs render natively and MCP tool
 	// results are normalised into tool_result artifacts.
 	if artifactRegistry != nil {

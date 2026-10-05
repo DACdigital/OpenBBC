@@ -18,6 +18,10 @@ import (
 // binding follows it.
 const agentToolDescriptionHead = "Delegate a self-contained task to a specialised sub-agent. The sub-agent starts with NO access to this conversation or its files — put everything it needs in `prompt`. It returns its final answer as text.\n\nAvailable sub-agents:\n"
 
+// skillToolName is the Skill meta-tool's name (tools.Composite); the agent
+// tool is listed right after it.
+const skillToolName = "Skill"
+
 // agentToolError is an agent-tool failure surfaced to the calling LLM as an
 // is_error tool result "<code>: <details>" (spec § LLM tool contract).
 type agentToolError struct {
@@ -117,4 +121,27 @@ func parseAgentInput(raw json.RawMessage) (agentInput, error) {
 		}
 	}
 	return in, nil
+}
+
+// insertAgentToolDef places def immediately after the Skill tool, or first
+// when there is no Skill tool.
+func insertAgentToolDef(defs []llm.ToolDef, def llm.ToolDef) []llm.ToolDef {
+	at := 0
+	for i, d := range defs {
+		if d.Name == skillToolName {
+			at = i + 1
+			break
+		}
+	}
+	out := make([]llm.ToolDef, 0, len(defs)+1)
+	out = append(out, defs[:at]...)
+	out = append(out, def)
+	return append(out, defs[at:]...)
+}
+
+// agentErrorResult is the is_error tool result for a failed agent call:
+// content is the JSON string "<code>: <details>".
+func agentErrorResult(toolUseID string, err error) llm.ToolResultBlock {
+	msg, _ := json.Marshal(err.Error())
+	return llm.ToolResultBlock{ToolUseID: toolUseID, Result: msg, IsError: true}
 }

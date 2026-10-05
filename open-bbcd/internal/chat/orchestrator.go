@@ -32,6 +32,9 @@ type ToolHandlerBuilder interface {
 // its owning agent (for the architecture blob). One trip via GetWithAgent.
 type AgentReader interface {
 	GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error)
+	// ListSubAgentBindings returns the version's agent-tool bindings
+	// (pinned target version, tool-facing name, note).
+	ListSubAgentBindings(ctx context.Context, versionID string) ([]types.SubAgentBinding, error)
 }
 
 // ChatStore is the narrow chat-repo interface the orchestrator needs.
@@ -56,6 +59,11 @@ type ChatStore interface {
 	// transaction. refs may be empty.
 	AppendToolMessage(ctx context.Context, agentVersionID string, msg types.ChatMessage, refs []llm.ArtifactRefBlock) error
 	NextSeq(ctx context.Context, sessionID string) (int, error)
+	// CreateChildSession inserts a sub-agent child session under parentID
+	// in rootID's tree, pinned to targetVersionID, and returns its id.
+	// parentToolCallID is the raw tool_use id. types.ErrSessionLocked when
+	// the (BO) root is locked.
+	CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error)
 }
 
 // ArtifactFetcherResolver resolves an llm.ArtifactFetcher for a given
@@ -86,6 +94,14 @@ type Orchestrator struct {
 	Model         string
 	MaxTokens     int
 	MaxToolRounds int
+	// Agent-tool caps: a call from a session at depth MaxDepth is refused
+	// (root is depth 0); at most MaxParallel agent calls of one assistant
+	// step run concurrently.
+	MaxDepth    int
+	MaxParallel int
+
+	// runner executes agent calls as child turns; tests may replace it.
+	runner subAgentRunner
 }
 
 // WithArtifacts wires a resolver for looking up ArtifactFetchers by
@@ -120,7 +136,7 @@ func NewOrchestrator(agents AgentReader, chats ChatStore, l llm.LLM, b ToolHandl
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Orchestrator{
+	o := &Orchestrator{
 		agents:        agents,
 		chats:         chats,
 		llm:           l,
@@ -129,7 +145,11 @@ func NewOrchestrator(agents AgentReader, chats ChatStore, l llm.LLM, b ToolHandl
 		Model:         "claude-sonnet-4-6",
 		MaxTokens:     4096,
 		MaxToolRounds: 10,
+		MaxDepth:      3,
+		MaxParallel:   4,
 	}
+	o.runner = &turnRunner{o: o}
+	return o
 }
 
 // TurnOpts carries the sub-agent tree position of a turn. The zero value is
@@ -244,6 +264,29 @@ func (o *Orchestrator) Turn(
 	toolDefs, err := toolHandler.Tools(agent.Architecture)
 	if err != nil {
 		return "", failTurn("tools_init", "build_tool_defs", err)
+	}
+	// The built-in agent tool: exposed right after Skill when the version
+	// enables it and has bindings. bindingsByName stays nil when it is not
+	// exposed, so a stray agent call then goes through toolHandler.Call.
+	var bindingsByName map[string]types.SubAgentBinding
+	if version.AgentToolEnabled {
+		bindings, err := o.agents.ListSubAgentBindings(ctx, version.ID)
+		if err != nil {
+			return "", failTurn("tools_init", "list_subagents", err)
+		}
+		if len(bindings) > 0 {
+			if tools.ArchitectureHasEndpointTool(agent.Architecture, tools.AgentToolName) {
+				// Config-time checks refuse this; an INITIALIZING version can
+				// still enable the tool before its architecture lands.
+				o.logger.Warn("agent tool omitted: endpoint tool name collision", logAttrs...)
+			} else {
+				toolDefs = insertAgentToolDef(toolDefs, agentToolDef(bindings))
+				bindingsByName = make(map[string]types.SubAgentBinding, len(bindings))
+				for _, b := range bindings {
+					bindingsByName[b.Name] = b
+				}
+			}
+		}
 	}
 
 	// 5. Persist the user message NOW (before the LLM call), claiming every
@@ -434,10 +477,22 @@ func (o *Orchestrator) Turn(
 		// order), then every artifact_ref (tool-call order, then item
 		// order). Anthropic rejects a user message answering tool_use
 		// whose content does not start with the tool_result blocks.
-		toolResults := make([]llm.Block, 0, len(pendingToolUses))
+		//
+		// Non-agent calls run first, sequentially, in tool_use order. Then
+		// the step's agent calls run concurrently (bounded by MaxParallel)
+		// as child turns; each result lands in its tool_use slot. Every
+		// sink event of the step goes through one lockedSink, which the
+		// children share.
+		shared := newLockedSink(sink)
+		results := make([]llm.ToolResultBlock, len(pendingToolUses))
+		var agentIdx []int
 		var toolRefs []llm.ArtifactRefBlock
 		var refEvents []transport.ArtifactRefEvent
-		for _, tu := range pendingToolUses {
+		for i, tu := range pendingToolUses {
+			if bindingsByName != nil && tu.Name == tools.AgentToolName {
+				agentIdx = append(agentIdx, i)
+				continue
+			}
 			res, err := toolHandler.Call(ctx, agent.Architecture, tools.Call{
 				ID:    tu.ID,
 				Name:  tu.Name,
@@ -469,16 +524,23 @@ func (o *Orchestrator) Turn(
 					})
 				}
 			}
-			_ = sink.Send(ctx, transport.ToolResultEvent{
+			_ = shared.Send(ctx, transport.ToolResultEvent{
 				ToolCallID: tu.ID,
 				Result:     res.Output,
 				IsError:    res.IsError,
 			})
-			toolResults = append(toolResults, llm.ToolResultBlock{
+			results[i] = llm.ToolResultBlock{
 				ToolUseID: tu.ID,
 				Result:    res.Output,
 				IsError:   res.IsError,
-			})
+			}
+		}
+		if len(agentIdx) > 0 {
+			o.runAgentCalls(ctx, pendingToolUses, agentIdx, results, bindingsByName, sessionID, opts, shared)
+		}
+		toolResults := make([]llm.Block, 0, len(results))
+		for _, r := range results {
+			toolResults = append(toolResults, r)
 		}
 		toolBlocks := toolResults
 		for _, r := range toolRefs {
