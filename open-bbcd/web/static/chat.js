@@ -717,6 +717,10 @@
 
   function startToolCall(id, name, container) {
     if (!currentAssistantTurn) startAssistantBubble();
+    // Root text emitted before this call may still sit in the typewriter
+    // buffer; paint it first so the call (and any card placed after it)
+    // lands below it, as in the reloaded history view.
+    if (!container) flushDisplayBuf();
     const parent = container || currentAssistantTurn.content;
     const details = document.createElement('details');
     details.className = 'tool-call';
@@ -747,6 +751,7 @@
 
   function appendToolResult(id, content, container) {
     if (!currentAssistantTurn) return;
+    if (!container) flushDisplayBuf();
     const parent = container || currentAssistantTurn.content;
     const details = document.createElement('details');
     details.className = 'tool-result';
