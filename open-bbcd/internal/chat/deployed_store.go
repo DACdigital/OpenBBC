@@ -17,6 +17,7 @@ type DeployedRepositoryAPI interface {
 	AppendToolMessage(ctx context.Context, m types.DeployedMessage, refs []llm.ArtifactRefBlock) error
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.DeployedMessage, error)
 	NextSeq(ctx context.Context, sessionID string) (int, error)
+	CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error)
 }
 
 // DeployedChatStore adapts DeployedRepository to the orchestrator's ChatStore
@@ -97,4 +98,10 @@ func toDeployedMessage(agentVersionID string, m types.ChatMessage) types.Deploye
 
 func (s *DeployedChatStore) NextSeq(ctx context.Context, sessionID string) (int, error) {
 	return s.repo.NextSeq(ctx, sessionID)
+}
+
+// CreateChildSession delegates to the repository: the child carries the
+// root's agent_id and user_id and is pinned to targetVersionID.
+func (s *DeployedChatStore) CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error) {
+	return s.repo.CreateChildSession(ctx, rootID, parentID, parentToolCallID, targetVersionID)
 }

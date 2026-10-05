@@ -150,6 +150,14 @@ func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID str
 	return v, a, nil
 }
 
+// ListSubAgentBindings returns the version's sub-agent bindings ordered by
+// name (empty, non-nil when there are none). The orchestrator reads it once
+// per turn to build the agent tool; same query as
+// SubAgentRepository.ListBindings.
+func (r *AgentVersionRepository) ListSubAgentBindings(ctx context.Context, versionID string) ([]types.SubAgentBinding, error) {
+	return listBindings(ctx, r.db, versionID)
+}
+
 // Deploy promotes versionID to DEPLOYED, demoting any other DEPLOYED version of
 // the same agent. Returns the previously-deployed version ID (or nil).
 func (r *AgentVersionRepository) Deploy(ctx context.Context, versionID string) (*string, error) {

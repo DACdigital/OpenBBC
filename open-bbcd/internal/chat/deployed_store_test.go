@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,8 @@ type fakeDeployedRepo struct {
 	sessions map[string]*types.DeployedSession
 	messages map[string][]*types.DeployedMessage // by session id
 	toolRefs []llm.ArtifactRefBlock
+	// childArgs: the last CreateChildSession arguments.
+	childArgs []string
 }
 
 func newFakeDeployedRepo() *fakeDeployedRepo {
@@ -53,6 +56,11 @@ func (f *fakeDeployedRepo) AppendToolMessage(ctx context.Context, m types.Deploy
 	f.messages[m.SessionID] = append(f.messages[m.SessionID], &mc)
 	f.toolRefs = append(f.toolRefs, refs...)
 	return nil
+}
+
+func (f *fakeDeployedRepo) CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error) {
+	f.childArgs = []string{rootID, parentID, parentToolCallID, targetVersionID}
+	return "child-1", nil
 }
 
 func (f *fakeDeployedRepo) LoadMessages(ctx context.Context, sessionID string) ([]*types.DeployedMessage, error) {
@@ -145,5 +153,17 @@ func TestDeployedChatStore_NewAppends_PassIDAndVersion(t *testing.T) {
 	got := f.messages["s1"]
 	if got[0].ID != "m1" || got[0].AgentVersionID != "v-7" || got[1].ID != "m2" || len(f.toolRefs) != 1 {
 		t.Fatalf("got %+v refs %+v", got, f.toolRefs)
+	}
+}
+
+func TestDeployedChatStore_CreateChildSessionDelegates(t *testing.T) {
+	f := newFakeDeployedRepo()
+	store := NewDeployedChatStore(f)
+	id, err := store.CreateChildSession(context.Background(), "root", "parent", "tu_1", "v-9")
+	if err != nil || id != "child-1" {
+		t.Fatalf("CreateChildSession = %q, %v", id, err)
+	}
+	if got := strings.Join(f.childArgs, ","); got != "root,parent,tu_1,v-9" {
+		t.Fatalf("repo args = %s", got)
 	}
 }
