@@ -343,10 +343,14 @@ func TestDeployedRepository_RootOnly_DeleteSession(t *testing.T) {
 		}
 	}
 	var msgs, arts int
-	_ = tr.db.QueryRow(`SELECT COUNT(*) FROM deployed_messages WHERE session_id = ANY($1::uuid[])`,
-		"{"+tr.child+","+tr.grandkid+"}").Scan(&msgs)
-	_ = tr.db.QueryRow(`SELECT COUNT(*) FROM deployed_session_artifacts WHERE session_id = ANY($1::uuid[])`,
-		"{"+tr.child+","+tr.grandkid+"}").Scan(&arts)
+	if err := tr.db.QueryRow(`SELECT COUNT(*) FROM deployed_messages WHERE session_id = ANY($1::uuid[])`,
+		"{"+tr.child+","+tr.grandkid+"}").Scan(&msgs); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if err := tr.db.QueryRow(`SELECT COUNT(*) FROM deployed_session_artifacts WHERE session_id = ANY($1::uuid[])`,
+		"{"+tr.child+","+tr.grandkid+"}").Scan(&arts); err != nil {
+		t.Fatalf("count artifacts: %v", err)
+	}
 	if msgs != 0 || arts != 0 {
 		t.Fatalf("descendant rows survived: messages=%d artifacts=%d", msgs, arts)
 	}
