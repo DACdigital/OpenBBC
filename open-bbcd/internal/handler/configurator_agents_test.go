@@ -176,7 +176,10 @@ func TestAgentsTab_GetDraftEditable(t *testing.T) {
 		`helper · v1 · READY`,
 		`<optgroup label="other">`,
 		`other · v1 · DEPLOYED`,
-		`pattern="[a-z][a-z0-9_-]{0,39}"`,
+		// "-" escaped: pattern compiles with the v flag, where an
+		// unescaped trailing "-" in a class is a SyntaxError and the
+		// browser silently drops the constraint.
+		`pattern="[a-z][a-z0-9_\-]{0,39}"`,
 		`/architecture/agents/researcher/delete`,
 	} {
 		if !strings.Contains(body, want) {
