@@ -207,3 +207,47 @@ func TestAgentDelete_CascadesDeployedTree(t *testing.T) {
 		t.Fatalf("Delete(B) after: %v", err)
 	}
 }
+
+func TestAgentDelete_NotFound(t *testing.T) {
+	db := openTestDB(t)
+	arepo := NewAgentRepository(db)
+	a, v := seedVersionWithStatus(t, db, types.AgentStatusReady)
+	var before int
+	if err := db.QueryRow(`SELECT count(*) FROM agents`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := arepo.Delete(context.Background(), "00000000-0000-0000-0000-000000000000"); !errors.Is(err, types.ErrNotFound) {
+		t.Fatalf("Delete = %v, want ErrNotFound", err)
+	}
+	var after int
+	if err := db.QueryRow(`SELECT count(*) FROM agents`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || !rowExists(t, db, "agents", a) || !rowExists(t, db, "agent_versions", v) {
+		t.Fatalf("rows changed: agents %d -> %d", before, after)
+	}
+}
+
+func TestAgentDelete_DeployedVersionInUse(t *testing.T) {
+	db := openTestDB(t)
+	arepo := NewAgentRepository(db)
+	a, v1 := seedVersionWithStatus(t, db, types.AgentStatusReady)
+	v2 := addVersion(t, db, a, &v1, types.AgentStatusDeployed)
+	rawBind(t, db, v2, "older", v1)
+	dRoot := deployedRoot(t, db, a)
+
+	if err := arepo.Delete(context.Background(), a); !errors.Is(err, types.ErrAgentInUse) {
+		t.Fatalf("Delete = %v, want ErrAgentInUse", err)
+	}
+	// The guard must fire before the pre-deletes: nothing is removed.
+	if !rowExists(t, db, "agents", a) || !rowExists(t, db, "agent_versions", v1) || !rowExists(t, db, "agent_versions", v2) {
+		t.Fatal("agent or versions were deleted")
+	}
+	if n := countBindings(t, db, v2); n != 1 {
+		t.Fatalf("bindings = %d, want 1", n)
+	}
+	if !rowExists(t, db, "deployed_sessions", dRoot) {
+		t.Fatal("deployed session was deleted")
+	}
+}
