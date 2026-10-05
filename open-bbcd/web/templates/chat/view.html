@@ -72,34 +72,7 @@
 
 <div id="chat-log" class="chat-log" data-version-id="{{.VersionID}}" data-session-id="{{.SessionID}}">
   {{range .Messages}}
-    <div class="chat-bubble {{.Role}}">
-      <div class="bubble-header">
-        <div class="avatar avatar-{{.Role}}">{{slice .Role 0 1}}</div>
-        <div class="role-name">{{.Role}}</div>
-      </div>
-      <div class="content">
-        {{range .Blocks}}
-          {{if eq .Kind "text"}}
-            <div class="md" data-raw="{{.Text}}">{{.Text}}</div>
-          {{else if eq .Kind "tool_call"}}
-            <details class="tool-call">
-              <summary>▸ {{.ToolName}}(…)</summary>
-              <pre class="args">{{.ToolArgs}}</pre>
-            </details>
-          {{else if eq .Kind "tool_result"}}
-            <details class="tool-result{{if .ToolIsError}} is-error{{end}}">
-              <summary{{if .ToolIsMocked}} class="mocked"{{end}}>▸ result{{if .ToolIsMocked}} (mocked){{end}}</summary>
-              <pre>{{.ToolResult}}</pre>
-            </details>
-          {{else if eq .Kind "artifact_ref"}}
-            {{if .ArtifactHref}}<a class="artifact-link" href="{{.ArtifactHref}}" title="{{.ArtifactLabel}}" target="_blank" rel="noopener">📎 {{.ArtifactLabel}}</a>{{else}}<span class="artifact-link artifact-link-disabled" title="{{.ArtifactLabel}}">📎 {{.ArtifactLabel}}</span>{{end}}
-          {{end}}
-        {{end}}
-      </div>
-      {{if eq .Role "assistant"}}
-        {{template "feedback_footer" (dict "MessageID" .ID "Feedback" (index $.Feedback .ID) "Locked" $.Locked "VersionID" $.VersionID "SessionID" $.SessionID)}}
-      {{end}}
-    </div>
+    {{template "message_bubble" (dict "M" . "Footer" true "Feedback" (index $.Feedback .ID) "Locked" $.Locked "VersionID" $.VersionID "SessionID" $.SessionID)}}
   {{else}}
     <p class="empty-state">No messages yet — type below to start.</p>
   {{end}}

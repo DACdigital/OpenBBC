@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"log/slog"
@@ -42,6 +43,19 @@ type ChatSessionStore interface {
 	IsChildSession(ctx context.Context, sessionID string) (bool, error)
 	// HasPendingArtifacts is true when the session has >=1 pending artifact (empty-turn rule).
 	HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error)
+	// GetDescendant returns childID iff it strictly descends from the root
+	// session rootID; ErrNotFound otherwise (child transcript route).
+	GetDescendant(ctx context.Context, rootID, childID string) (*types.ChatSession, error)
+	// ChildByParentToolCall returns the child spawned by the raw agent
+	// tool_use id toolCallID in session parentID; ErrNotFound when none.
+	ChildByParentToolCall(ctx context.Context, parentID, toolCallID string) (string, error)
+}
+
+// versionNumReader is optionally implemented by the ChatAgentReader
+// (*repository.AgentVersionRepository does) to label a child transcript's
+// pinned version with its ordinal.
+type versionNumReader interface {
+	GetVersionNum(ctx context.Context, versionID string) (int, error)
 }
 
 // PendingArtifactLister lists a session's pending artifacts for the BO chat
@@ -97,6 +111,7 @@ type ChatHandler struct {
 	logger       *slog.Logger
 	sessionsTmpl *template.Template
 	viewTmpl     *template.Template
+	childTmpl    *template.Template
 	headersTmpl  *template.Template
 	pending      PendingArtifactLister
 }
@@ -142,8 +157,18 @@ func NewChatHandler(
 	viewTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
 		"templates/chat/view.html",
+		"templates/chat/bubble.html",
 		"templates/chat/feedback_footer.html",
 		"templates/chat/assign_dataset_modal.html",
+	)
+	if err != nil {
+		return nil, err
+	}
+	childTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/layout.html",
+		"templates/chat/child.html",
+		"templates/chat/bubble.html",
+		"templates/chat/feedback_footer.html",
 	)
 	if err != nil {
 		return nil, err
@@ -157,7 +182,7 @@ func NewChatHandler(
 	return &ChatHandler{
 		agents: agents, chats: chats, headerOvr: headerOvr, backends: backends,
 		orch: orch, transport: tf, feedbackRepo: feedbackRepo, datasetRepo: datasetRepo,
-		logger: logger, sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl, headersTmpl: headersTmpl,
+		logger: logger, sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl, childTmpl: childTmpl, headersTmpl: headersTmpl,
 	}, nil
 }
 
@@ -315,7 +340,7 @@ type messageView struct {
 }
 
 type blockView struct {
-	Kind         string // "text" | "tool_call" | "tool_result" | "artifact_ref"
+	Kind         string // "text" | "tool_call" | "tool_result" | "artifact_ref" | "subagent"
 	Text         string
 	ToolName     string
 	ToolArgs     string
@@ -328,7 +353,20 @@ type blockView struct {
 	ArtifactURI     string
 	ArtifactLabel   string
 	ArtifactHref    string // empty: not safely linkable, render as plain label
+
+	// subagent: an `agent` tool_use paired with its tool_result.
+	SubagentName        string
+	SubagentDescription string
+	SubagentPrompt      string
+	SubagentState       string // "done" | "error" | "interrupted"
+	SubagentResult      string
+	SubagentHref        string // child transcript; empty when no child row
 }
+
+// childLinker returns the child-transcript href for the child spawned by
+// the raw agent tool_use id in the session being rendered, or "" when there
+// is none. nil renders every card without a link.
+type childLinker func(toolCallID string) string
 
 // buildMessageViews turns persisted ChatMessage rows into UI bubbles. Each
 // user message is its own bubble; every non-user message (assistant text +
@@ -336,7 +374,19 @@ type blockView struct {
 // a single assistant bubble per turn, so the history matches the in-stream
 // rendering (one bubble per assistant turn, regardless of how many DB rows
 // the orchestrator split it across).
-func buildMessageViews(msgs []*types.ChatMessage, artifactBase string) []messageView {
+//
+// An `agent` tool_use in an assistant row renders as a sub-agent card paired
+// with the tool_result carrying the same tool_use_id in the immediately
+// following message (spec § AG-UI stream → BO history view): done/error from
+// is_error, or "interrupted" when there is none. The paired tool_result is
+// not rendered separately. link resolves the card's child transcript.
+func buildMessageViews(msgs []*types.ChatMessage, artifactBase string, link childLinker) []messageView {
+	raws := make([][]json.RawMessage, len(msgs))
+	ok := make([]bool, len(msgs))
+	for i, m := range msgs {
+		ok[i] = json.Unmarshal(m.Content, &raws[i]) == nil
+	}
+
 	out := make([]messageView, 0, len(msgs))
 	var pending *messageView // open assistant bubble waiting for more blocks
 	flush := func() {
@@ -345,12 +395,36 @@ func buildMessageViews(msgs []*types.ChatMessage, artifactBase string) []message
 			pending = nil
 		}
 	}
-	for _, m := range msgs {
-		var raw []json.RawMessage
-		if err := json.Unmarshal(m.Content, &raw); err != nil {
+	consumed := map[string]bool{} // tool_use ids whose result is paired into a card, for row i
+	for i, m := range msgs {
+		if !ok[i] {
+			consumed = map[string]bool{}
 			continue
 		}
-		blocks := decodeBlocks(raw, artifactBase)
+		var next []json.RawMessage
+		if i+1 < len(msgs) && ok[i+1] {
+			next = raws[i+1]
+		}
+		blocks := make([]blockView, 0, len(raws[i]))
+		nextConsumed := map[string]bool{}
+		for _, r := range raws[i] {
+			if m.Role == types.ChatRoleAssistant {
+				if card, id, isAgent := subagentCard(r, next, link); isAgent {
+					blocks = append(blocks, card)
+					if card.SubagentState != "interrupted" {
+						nextConsumed[id] = true
+					}
+					continue
+				}
+			}
+			if id, isResult := toolResultID(r); isResult && consumed[id] {
+				continue
+			}
+			if b, ok := decodeBlock(r, artifactBase); ok {
+				blocks = append(blocks, b)
+			}
+		}
+		consumed = nextConsumed
 		if m.Role == types.ChatRoleUser {
 			flush()
 			out = append(out, messageView{ID: m.ID, Role: string(types.ChatRoleUser), Blocks: blocks})
@@ -368,11 +442,82 @@ func buildMessageViews(msgs []*types.ChatMessage, artifactBase string) []message
 	return out
 }
 
+// subagentCard builds the card for r when it is an `agent` tool_use,
+// pairing it with the matching tool_result in next. Returns the raw
+// tool_use id and isAgent=false for any other block.
+func subagentCard(r json.RawMessage, next []json.RawMessage, link childLinker) (blockView, string, bool) {
+	var tu struct {
+		Type  string          `json:"type"`
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(r, &tu); err != nil || tu.Type != "tool_use" || tu.Name != tools.AgentToolName {
+		return blockView{}, "", false
+	}
+	var in struct {
+		Subagent    string `json:"subagent"`
+		Description string `json:"description"`
+		Prompt      string `json:"prompt"`
+	}
+	_ = json.Unmarshal(tu.Input, &in)
+	card := blockView{
+		Kind:                "subagent",
+		SubagentName:        in.Subagent,
+		SubagentDescription: in.Description,
+		SubagentPrompt:      in.Prompt,
+		SubagentState:       "interrupted",
+	}
+	if tu.ID != "" {
+		for _, nr := range next {
+			var res struct {
+				Type      string          `json:"type"`
+				ToolUseID string          `json:"tool_use_id"`
+				Content   json.RawMessage `json:"content"`
+				IsError   bool            `json:"is_error"`
+			}
+			if json.Unmarshal(nr, &res) != nil || res.Type != "tool_result" || res.ToolUseID != tu.ID {
+				continue
+			}
+			card.SubagentState = "done"
+			if res.IsError {
+				card.SubagentState = "error"
+			}
+			var text string
+			if json.Unmarshal(res.Content, &text) == nil {
+				card.SubagentResult = text
+			} else {
+				card.SubagentResult = prettyJSON(res.Content)
+			}
+			break
+		}
+		if link != nil {
+			card.SubagentHref = link(tu.ID)
+		}
+	}
+	return card, tu.ID, true
+}
+
+// toolResultID returns the tool_use_id of a tool_result block.
+func toolResultID(r json.RawMessage) (string, bool) {
+	var b struct {
+		Type      string `json:"type"`
+		ToolUseID string `json:"tool_use_id"`
+	}
+	if json.Unmarshal(r, &b) != nil || b.Type != "tool_result" {
+		return "", false
+	}
+	return b.ToolUseID, true
+}
+
 // artifactHref builds the BO retrieval URL for a persisted ref, escaping each
 // path segment. It returns "" (render without a link) when the store id or
 // any uri segment could retarget the link: '/' in the store id, or an empty,
-// "." or ".." uri segment.
+// "." or ".." uri segment — and always for an empty base.
 func artifactHref(base, storeID, uri string) string {
+	if base == "" { // no retrieval route (child transcripts): label only
+		return ""
+	}
 	if strings.Contains(storeID, "/") || storeID == "." || storeID == ".." {
 		return ""
 	}
@@ -386,69 +531,67 @@ func artifactHref(base, storeID, uri string) string {
 	return base + url.PathEscape(storeID) + "/" + strings.Join(segs, "/")
 }
 
-func decodeBlocks(raw []json.RawMessage, artifactBase string) []blockView {
-	blocks := make([]blockView, 0, len(raw))
-	for _, r := range raw {
-		var head struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(r, &head); err != nil {
-			continue
-		}
-		switch head.Type {
-		case "text":
-			var b struct {
-				Text string `json:"text"`
-			}
-			_ = json.Unmarshal(r, &b)
-			blocks = append(blocks, blockView{Kind: "text", Text: b.Text})
-		case "tool_use":
-			var b struct {
-				Name  string          `json:"name"`
-				Input json.RawMessage `json:"input"`
-			}
-			_ = json.Unmarshal(r, &b)
-			blocks = append(blocks, blockView{
-				Kind:     "tool_call",
-				ToolName: b.Name,
-				ToolArgs: prettyJSON(b.Input),
-			})
-		case "tool_result":
-			var b struct {
-				Content json.RawMessage `json:"content"`
-				IsError bool            `json:"is_error"`
-			}
-			_ = json.Unmarshal(r, &b)
-			blocks = append(blocks, blockView{
-				Kind:         "tool_result",
-				ToolResult:   prettyJSON(b.Content),
-				ToolIsError:  b.IsError,
-				ToolIsMocked: strings.Contains(string(b.Content), `"_mocked":true`),
-			})
-		case "artifact_ref":
-			var b types.ArtifactRefContent
-			_ = json.Unmarshal(r, &b)
-			if b.StoreID == "" || b.URI == "" {
-				continue
-			}
-			name := b.Filename
-			if name == "" {
-				name = "file"
-			}
-			mime := b.MIME
-			if mime == "" {
-				mime = "unknown"
-			}
-			blocks = append(blocks, blockView{
-				Kind:            "artifact_ref",
-				ArtifactHref:    artifactHref(artifactBase, b.StoreID, b.URI),
-				ArtifactStoreID: b.StoreID,
-				ArtifactURI:     b.URI,
-				ArtifactLabel:   name + " (" + mime + ", " + llm.HumanBytes(b.SizeBytes) + ")",
-			})
-		}
+// decodeBlock projects one persisted content block; ok=false skips it.
+func decodeBlock(r json.RawMessage, artifactBase string) (blockView, bool) {
+	var head struct {
+		Type string `json:"type"`
 	}
-	return blocks
+	if err := json.Unmarshal(r, &head); err != nil {
+		return blockView{}, false
+	}
+	switch head.Type {
+	case "text":
+		var b struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(r, &b)
+		return blockView{Kind: "text", Text: b.Text}, true
+	case "tool_use":
+		var b struct {
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}
+		_ = json.Unmarshal(r, &b)
+		return blockView{
+			Kind:     "tool_call",
+			ToolName: b.Name,
+			ToolArgs: prettyJSON(b.Input),
+		}, true
+	case "tool_result":
+		var b struct {
+			Content json.RawMessage `json:"content"`
+			IsError bool            `json:"is_error"`
+		}
+		_ = json.Unmarshal(r, &b)
+		return blockView{
+			Kind:         "tool_result",
+			ToolResult:   prettyJSON(b.Content),
+			ToolIsError:  b.IsError,
+			ToolIsMocked: strings.Contains(string(b.Content), `"_mocked":true`),
+		}, true
+	case "artifact_ref":
+		var b types.ArtifactRefContent
+		_ = json.Unmarshal(r, &b)
+		if b.StoreID == "" || b.URI == "" {
+			return blockView{}, false
+		}
+		name := b.Filename
+		if name == "" {
+			name = "file"
+		}
+		mime := b.MIME
+		if mime == "" {
+			mime = "unknown"
+		}
+		return blockView{
+			Kind:            "artifact_ref",
+			ArtifactHref:    artifactHref(artifactBase, b.StoreID, b.URI),
+			ArtifactStoreID: b.StoreID,
+			ArtifactURI:     b.URI,
+			ArtifactLabel:   name + " (" + mime + ", " + llm.HumanBytes(b.SizeBytes) + ")",
+		}, true
+	}
+	return blockView{}, false
 }
 
 func prettyJSON(raw json.RawMessage) string {
@@ -544,7 +687,7 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		AgentName:    agent.Name,
 		SessionID:    sessionID,
 		SessionTitle: sessionTitle,
-		Messages:     buildMessageViews(msgs, "/agent_versions/"+url.PathEscape(versionID)+"/chat/"+url.PathEscape(sessionID)+"/artifacts/"),
+		Messages:     buildMessageViews(msgs, "/agent_versions/"+url.PathEscape(versionID)+"/chat/"+url.PathEscape(sessionID)+"/artifacts/", h.childLinker(r.Context(), versionID, sessionID, sessionID)),
 		HasBundle:    len(agent.Architecture) > 0 && len(version.Prompts) > 0,
 		Feedback:     feedback,
 		Locked:       locked,
@@ -577,6 +720,100 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	renderTemplate(w, h.viewTmpl, "layout", data)
+}
+
+// childLinker resolves sub-agent cards rendered for session parentID to
+// child-transcript hrefs. The path always goes through the root (rootID of
+// root version versionID), whatever the card's depth. Lookup failures other
+// than "no child" are logged and render the card without a link.
+func (h *ChatHandler) childLinker(ctx context.Context, versionID, rootID, parentID string) childLinker {
+	base := "/agent_versions/" + url.PathEscape(versionID) + "/chat/" + url.PathEscape(rootID) + "/children/"
+	return func(toolCallID string) string {
+		childID, err := h.chats.ChildByParentToolCall(ctx, parentID, toolCallID)
+		if err != nil {
+			if !errors.Is(err, types.ErrNotFound) {
+				h.logger.Warn("chat history: resolve sub-agent child failed",
+					slog.String("session_id", parentID), slog.String("tool_call_id", toolCallID), slog.Any("err", err))
+			}
+			return ""
+		}
+		return base + url.PathEscape(childID)
+	}
+}
+
+// childTranscriptPageData feeds chat/child.html.
+type childTranscriptPageData struct {
+	Active       string
+	VersionID    string // the ROOT's version (URL path)
+	SessionID    string // the root session
+	ChildID      string
+	RootTitle    string
+	AgentLabel   string // the child's pinned agent/version
+	ChildVersion string // the child's pinned version id
+	Depth        int
+	Messages     []messageView
+}
+
+// ChildTranscript handles GET
+// /agent_versions/{version_id}/chat/{session_id}/children/{child_id}: a
+// read-only transcript of a sub-agent child session, scoped through its
+// root (spec § REST — child transcripts). 404 unless session_id is a root of
+// version_id and child_id descends from it. Child artifact_ref blocks render
+// as labels (no retrieval route serves a child id); nested cards link via
+// the root.
+func (h *ChatHandler) ChildTranscript(w http.ResponseWriter, r *http.Request) {
+	versionID := r.PathValue("version_id")
+	rootID := r.PathValue("session_id")
+	childID := r.PathValue("child_id")
+	if !validUUID(versionID) || !validUUID(rootID) || !validUUID(childID) {
+		http.NotFound(w, r)
+		return
+	}
+	ctx := r.Context()
+	notFoundOr := func(err error) {
+		if errors.Is(err, types.ErrNotFound) || errors.Is(err, types.ErrSessionAgentMismatch) {
+			http.NotFound(w, r)
+			return
+		}
+		Error(w, err)
+	}
+	root, err := h.chats.GetSession(ctx, rootID, versionID)
+	if err != nil {
+		notFoundOr(err)
+		return
+	}
+	child, err := h.chats.GetDescendant(ctx, rootID, childID)
+	if err != nil {
+		notFoundOr(err)
+		return
+	}
+	_, childAgent, err := h.agents.GetWithAgent(ctx, child.AgentVersionID)
+	if err != nil {
+		notFoundOr(err)
+		return
+	}
+	label := childAgent.Name
+	if vn, ok := h.agents.(versionNumReader); ok {
+		if n, err := vn.GetVersionNum(ctx, child.AgentVersionID); err == nil {
+			label = fmt.Sprintf("%s · v%d", childAgent.Name, n)
+		}
+	}
+	msgs, err := h.chats.LoadMessages(ctx, childID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	renderTemplate(w, h.childTmpl, "layout", childTranscriptPageData{
+		Active:       "agents",
+		VersionID:    versionID,
+		SessionID:    rootID,
+		ChildID:      childID,
+		RootTitle:    root.Title,
+		AgentLabel:   label,
+		ChildVersion: child.AgentVersionID,
+		Depth:        child.Depth,
+		Messages:     buildMessageViews(msgs, "", h.childLinker(ctx, versionID, rootID, childID)),
+	})
 }
 
 // UpdateSessionTitle accepts a JSON body {"title": "..."} and updates the

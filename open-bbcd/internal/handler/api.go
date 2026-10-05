@@ -337,6 +337,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/sessions", chatHandler.NewSession)
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat", chatHandler.SessionList)
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}", chatHandler.ChatView)
+	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/children/{child_id}", chatHandler.ChildTranscript)
 	mux.HandleFunc("PATCH /agent_versions/{version_id}/chat/{session_id}/title", chatHandler.UpdateSessionTitle)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/turn", chatHandler.Turn)
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.ShowHeaderOverridesModal)
