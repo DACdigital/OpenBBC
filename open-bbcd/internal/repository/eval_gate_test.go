@@ -119,7 +119,7 @@ func TestEvalGate_CreateRefusedWhenToolEnabled(t *testing.T) {
 
 // TestEvalGate_CreateRacesEnable runs EvalRepository.Create against
 // SubAgentRepository.SetAgentToolEnabled(true) on separate connections. The
-// FOR SHARE (create) / FOR UPDATE (config write) locks on the version row
+// FOR SHARE (create) / FOR NO KEY UPDATE (config write) locks on the version row
 // must serialise them into exactly one of the two legal outcomes.
 func TestEvalGate_CreateRacesEnable(t *testing.T) {
 	db := openTestDB(t)

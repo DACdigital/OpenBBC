@@ -411,7 +411,7 @@ func TestSubAgent_InvalidName(t *testing.T) {
 
 // TestSubAgent_BindRacesFinalize runs AddBinding on one connection against
 // Finalize's INITIALIZING→PENDING update on another. The caller-row FOR
-// UPDATE lock must serialise them: either the bind commits first (row exists,
+// NO KEY UPDATE lock must serialise them: either the bind commits first (row exists,
 // status then moves to PENDING) or Finalize commits first and the bind sees
 // PENDING and is refused with no row written.
 func TestSubAgent_BindRacesFinalize(t *testing.T) {
@@ -462,4 +462,31 @@ func TestSubAgent_BindRacesFinalize(t *testing.T) {
 		}
 	}
 	t.Logf("bind-first=%d finalize-first=%d", bound, refused)
+}
+
+// TestSubAgent_LockDoesNotBlockFKInserts proves the config lock is FOR NO KEY
+// UPDATE, not FOR UPDATE: while a tx holds lockVersions on caller and target,
+// an FK insert referencing the target (a new chat session — the same
+// FOR KEY SHARE live traffic takes) on another connection must not block.
+func TestSubAgent_LockDoesNotBlockFKInserts(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	_, caller := seedVersionWithStatus(t, db, types.AgentStatusDraft)
+	target := seedVersionStatusOnly(t, db, types.AgentStatusReady)
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := lockVersions(ctx, tx, caller, target); err != nil {
+		t.Fatalf("lockVersions: %v", err)
+	}
+
+	insCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if _, err := db.ExecContext(insCtx,
+		`INSERT INTO chat_sessions (id, agent_version_id) VALUES (gen_random_uuid(), $1::uuid)`, target); err != nil {
+		t.Fatalf("FK insert blocked or failed while config lock held: %v", err)
+	}
 }

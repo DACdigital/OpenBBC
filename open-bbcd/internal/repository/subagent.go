@@ -17,9 +17,12 @@ import (
 // SubAgentRepository owns agent-tool config on a caller version: the
 // agent_tool_enabled flag and agent_version_subagent bindings (spec §
 // Repository invariants). Every write runs in one transaction that first
-// locks the caller row (and, for an add, the target row) FOR UPDATE in
+// locks the caller row (and, for an add, the target row) FOR NO KEY UPDATE in
 // ascending id order, which serialises the status checks against Finalize,
-// Land, deploy and undeploy, and against eval/training create (FOR SHARE).
+// Land, deploy and undeploy (status UPDATEs), and against eval/training create
+// (FOR SHARE). NO KEY UPDATE rather than UPDATE: it does not conflict with the
+// FOR KEY SHARE taken by FK inserts referencing these rows (sessions, deployed
+// messages, child spawns), so live traffic on a bound target is not blocked.
 type SubAgentRepository struct{ db *sql.DB }
 
 func NewSubAgentRepository(db *sql.DB) *SubAgentRepository { return &SubAgentRepository{db: db} }
@@ -34,16 +37,17 @@ var bindingNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
 // 400 without a new public sentinel.
 var errInvalidBindingName = fmt.Errorf("%w: sub-agent name must match ^[a-z][a-z0-9_-]{0,39}$", types.ErrNameRequired)
 
-// lockVersions locks the given agent_versions rows FOR UPDATE in ascending id
-// order (LockRows runs above the sort, so rows are locked in that order — two
-// concurrent adds over the same pair cannot deadlock) and returns id→status.
+// lockVersions locks the given agent_versions rows FOR NO KEY UPDATE in
+// ascending id order (LockRows runs above the sort, so rows are locked in that
+// order — two concurrent adds over the same pair cannot deadlock) and returns
+// id→status.
 // Any id without a row yields ErrNotFound.
 func lockVersions(ctx context.Context, tx *sql.Tx, ids ...string) (map[string]string, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id::text, status FROM agent_versions
 		WHERE id = ANY($1::uuid[])
 		ORDER BY id
-		FOR UPDATE
+		FOR NO KEY UPDATE
 	`, pq.Array(ids))
 	if err != nil {
 		return nil, err

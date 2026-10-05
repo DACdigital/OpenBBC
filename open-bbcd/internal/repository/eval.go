@@ -113,9 +113,9 @@ func (r *EvalRepository) Create(ctx context.Context, agentVersionID, datasetVers
 }
 
 // versionAgentToolEnabledTx reads agent_tool_enabled for versionID under
-// FOR SHARE, so a concurrent agent-tool config write (FOR UPDATE on the same
-// row) serialises with the caller's insert (spec § REST — eval and training
-// gate). Returns ErrNotFound when the version does not exist.
+// FOR SHARE, so a concurrent agent-tool config write (FOR NO KEY UPDATE on
+// the same row) serialises with the caller's insert (spec § REST — eval and
+// training gate). Returns ErrNotFound when the version does not exist.
 func versionAgentToolEnabledTx(ctx context.Context, tx *sql.Tx, versionID string) (bool, error) {
 	var enabled bool
 	err := tx.QueryRowContext(ctx,
@@ -126,15 +126,16 @@ func versionAgentToolEnabledTx(ctx context.Context, tx *sql.Tx, versionID string
 	return enabled, err
 }
 
-// lockEvalGateTx locks the eval row FOR UPDATE and returns its status plus
-// its version's current agent_tool_enabled. ErrNotFound when the eval is
-// missing.
+// lockEvalGateTx locks the eval row FOR NO KEY UPDATE (enough to serialise
+// status transitions without blocking FK inserts that reference the eval) and
+// returns its status plus its version's current agent_tool_enabled.
+// ErrNotFound when the eval is missing.
 func lockEvalGateTx(ctx context.Context, tx *sql.Tx, evalID string) (status string, enabled bool, err error) {
 	err = tx.QueryRowContext(ctx, `
 		SELECT e.status, v.agent_tool_enabled
 		FROM evals e JOIN agent_versions v ON v.id = e.agent_version_id
 		WHERE e.id = $1::uuid
-		FOR UPDATE OF e
+		FOR NO KEY UPDATE OF e
 	`, evalID).Scan(&status, &enabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, types.ErrNotFound

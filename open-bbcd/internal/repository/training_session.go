@@ -129,7 +129,7 @@ func (r *TrainingSessionRepository) Start(ctx context.Context, id string, epochs
 		JOIN evals e ON e.id = ts.source_eval_id
 		JOIN agent_versions v ON v.id = e.agent_version_id
 		WHERE ts.id = $1::uuid
-		FOR UPDATE OF ts
+		FOR NO KEY UPDATE OF ts
 	`, id).Scan(&status, &enabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return types.ErrNotFound
