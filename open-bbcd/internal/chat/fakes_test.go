@@ -224,6 +224,7 @@ func (f *fakeTools) Call(ctx context.Context, bundle json.RawMessage, c tools.Ca
 // recordingSink collects all sent events (without writing them anywhere).
 type recordingSink struct {
 	events []transport.Event
+	closes int
 }
 
 func (r *recordingSink) Send(_ context.Context, e transport.Event) error {
@@ -231,7 +232,7 @@ func (r *recordingSink) Send(_ context.Context, e transport.Event) error {
 	return nil
 }
 
-func (r *recordingSink) Close() error { return nil }
+func (r *recordingSink) Close() error { r.closes++; return nil }
 
 // mmFakeLLM is a scripted fakeLLM that also renders image/png natively
 // with a configurable budget.

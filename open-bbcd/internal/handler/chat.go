@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -78,7 +79,7 @@ type VersionBackendLister interface {
 // TurnRunner is the orchestrator dependency. Implemented by *chat.Orchestrator.
 // Defined here (not in chat package) so handler tests can substitute a stub.
 type TurnRunner interface {
-	Turn(ctx context.Context, agentID, sessionID string, input []llm.Block, sink transport.Sink) error
+	Turn(ctx context.Context, agentID, sessionID string, input []llm.Block, sink transport.Sink, opts chat.TurnOpts) (string, error)
 }
 
 // Compile-time check that *chat.Orchestrator satisfies TurnRunner.
@@ -714,10 +715,19 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
+	// The handler owns the sink; the orchestrator never closes it.
+	defer sink.Close()
 
 	// Status code emitted explicitly (200 OK) so the response body starts
-	// streaming. Defer-closing the sink is owned here, NOT by the orchestrator.
+	// streaming.
 	w.WriteHeader(http.StatusOK)
+
+	// Multi-agent turns routinely outlive the server-wide WriteTimeout;
+	// clear the per-connection deadline for this stream only (spec § Scope,
+	// SSE write-deadline fix). Non-streaming routes keep the 30s timeout.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		h.logger.Warn("chat turn: clear write deadline failed", slog.Any("err", err))
+	}
 
 	// Build the base context with forwarded FE headers.
 	ctx := tools.WithForwardedHeaders(r.Context(), r.Header)
@@ -745,7 +755,7 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 
 	// orch.Turn's first scope-id param is still named `agentID` (orchestrator
 	// legacy — see Task 6 notes). It expects a version row's ID.
-	if err := h.orch.Turn(ctx, versionID, sessionID, input, sink); err != nil {
+	if _, err := h.orch.Turn(ctx, versionID, sessionID, input, sink, chat.TurnOpts{}); err != nil {
 		h.logger.Error("chat turn failed",
 			slog.String("version_id", versionID),
 			slog.String("session_id", sessionID),

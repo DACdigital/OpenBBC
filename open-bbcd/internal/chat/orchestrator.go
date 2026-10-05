@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -131,32 +132,62 @@ func NewOrchestrator(agents AgentReader, chats ChatStore, l llm.LLM, b ToolHandl
 	}
 }
 
-// Turn runs one chat turn end-to-end. Caller owns the Sink + HTTP
-// connection. Stream-level errors are emitted as ErrorEvent and don't
-// abort the function; only unrecoverable errors (bundle missing, session
-// mismatch, persistence failures, an empty turn — types.ErrEmptyTurn)
-// return non-nil error.
+// TurnOpts carries the sub-agent tree position of a turn. The zero value is
+// a root turn; Turn normalises RootSessionID to the session id when empty.
+type TurnOpts struct {
+	Depth            int    // 0 for root turns
+	ParentSessionID  string // empty for root turns
+	ParentToolCallID string // raw tool_use id from the parent's persisted message (never prefixed)
+	RootSessionID    string // id of the tree's root session; equals the session id for root turns
+}
+
+// Turn runs one chat turn end-to-end. The caller owns the Sink (and closes
+// it) and the HTTP connection; Turn never closes the sink. Stream-level
+// errors are emitted as ErrorEvent and don't abort the function; only
+// unrecoverable errors (bundle missing, session mismatch, persistence
+// failures, an empty turn — types.ErrEmptyTurn) return non-nil error.
 //
 // The inner loop runs the LLM, executes any tool calls it emits, and
 // re-runs the LLM with the results appended — up to MaxToolRounds times.
 // On cap, stopReason is set to "max_tool_rounds" and the turn ends cleanly.
+//
+// The returned stop reason is the provider's last non-tool_use stop reason
+// (end_turn, max_tokens, …) or "max_tool_rounds"; it is empty on error.
+// The tool handler returned by Build is closed when Turn returns if it
+// implements io.Closer.
 func (o *Orchestrator) Turn(
 	ctx context.Context,
 	agentID, sessionID string,
 	userInput []llm.Block,
 	sink transport.Sink,
-) error {
+	opts TurnOpts,
+) (string, error) {
+	if opts.RootSessionID == "" {
+		opts.RootSessionID = sessionID
+	}
+	// Base log attributes shared by failTurn and the completion line. Child
+	// turns also carry their parent's ids.
+	logAttrs := []any{
+		slog.String("agent_id", agentID),
+		slog.String("session_id", sessionID),
+	}
+	if opts.ParentSessionID != "" {
+		logAttrs = append(logAttrs,
+			slog.String("parent_session_id", opts.ParentSessionID),
+			slog.String("parent_tool_call_id", opts.ParentToolCallID),
+		)
+	}
+
 	// failTurn logs the error with context and emits a RUN_ERROR event via
 	// the sink so the chat UI sees the message in-band. Returns err so
-	// callers can `return failTurn(...)`.
+	// callers can `return "", failTurn(...)`.
 	failTurn := func(code, stage string, err error) error {
-		o.logger.Error("chat turn failed",
-			slog.String("agent_id", agentID),
-			slog.String("session_id", sessionID),
+		attrs := append(append([]any{}, logAttrs...),
 			slog.String("stage", stage),
 			slog.String("code", code),
 			slog.Any("err", err),
 		)
+		o.logger.Error("chat turn failed", attrs...)
 		_ = sink.Send(ctx, transport.ErrorEvent{Code: code, Message: err.Error()})
 		return err
 	}
@@ -168,23 +199,23 @@ func (o *Orchestrator) Turn(
 	// frozen architecture (endpoints + metadata).
 	version, agent, err := o.agents.GetWithAgent(ctx, agentID)
 	if err != nil {
-		return failTurn("agent_load", "load_agent", err)
+		return "", failTurn("agent_load", "load_agent", err)
 	}
 	if len(agent.Architecture) == 0 || len(version.Prompts) == 0 {
-		return failTurn("agent_not_runnable", "verify_finalized", types.ErrAgentNotRunnable)
+		return "", failTurn("agent_not_runnable", "verify_finalized", types.ErrAgentNotRunnable)
 	}
 
 	// 2. Ensure session row exists (lazy-create). The ChatStore impl decides
 	// how to interpret the second arg (version-id for BO chat,
 	// per-agent-id for deployed runtime).
 	if err := o.chats.EnsureSession(ctx, sessionID, agentID); err != nil {
-		return failTurn("session_error", "ensure_session", err)
+		return "", failTurn("session_error", "ensure_session", err)
 	}
 
 	// 3. Load history.
 	history, err := o.chats.LoadMessages(ctx, sessionID)
 	if err != nil {
-		return failTurn("history_load", "load_messages", err)
+		return "", failTurn("history_load", "load_messages", err)
 	}
 
 	// 4. Build LLM request. Main prompt lives on the version's prompts blob;
@@ -193,17 +224,26 @@ func (o *Orchestrator) Turn(
 		MainPrompt string `json:"main_prompt"`
 	}
 	if err := json.Unmarshal(version.Prompts, &promptsHead); err != nil {
-		return failTurn("prompts_parse", "parse_prompts", err)
+		return "", failTurn("prompts_parse", "parse_prompts", err)
 	}
 
 	toolHandler, err := o.builder.Build(ctx, agent.ID, version.ID, agent.Architecture)
 	if err != nil {
-		return failTurn("tool_handler_init", "build_tool_handler", err)
+		return "", failTurn("tool_handler_init", "build_tool_handler", err)
+	}
+	// Every turn, root or child, releases what its handler holds (MCP
+	// sessions) whether it succeeds or fails.
+	if c, ok := toolHandler.(io.Closer); ok {
+		defer func() {
+			if err := c.Close(); err != nil {
+				o.logger.Warn("tool handler close failed", append(append([]any{}, logAttrs...), slog.Any("err", err))...)
+			}
+		}()
 	}
 
 	toolDefs, err := toolHandler.Tools(agent.Architecture)
 	if err != nil {
-		return failTurn("tools_init", "build_tool_defs", err)
+		return "", failTurn("tools_init", "build_tool_defs", err)
 	}
 
 	// 5. Persist the user message NOW (before the LLM call), claiming every
@@ -219,11 +259,11 @@ func (o *Orchestrator) Turn(
 	userMsgID := uuid.NewString()
 	userContent, err := blocksToJSON(textInput)
 	if err != nil {
-		return failTurn("encode_user_msg", "serialize_user_blocks", err)
+		return "", failTurn("encode_user_msg", "serialize_user_blocks", err)
 	}
 	userSeq, err := o.chats.NextSeq(ctx, sessionID)
 	if err != nil {
-		return failTurn("seq_assign", "next_seq_user", err)
+		return "", failTurn("seq_assign", "next_seq_user", err)
 	}
 	claimed, err := o.chats.AppendUserTurn(ctx, version.ID, types.ChatMessage{
 		ID:        userMsgID,
@@ -236,15 +276,15 @@ func (o *Orchestrator) Turn(
 		// Handlers normally reject empty turns with 400 before the stream
 		// opens; reaching here means the pending queue emptied between
 		// their check and the claim (e.g. a racing DELETE).
-		return failTurn("empty_turn", "claim_pending_artifacts", err)
+		return "", failTurn("empty_turn", "claim_pending_artifacts", err)
 	}
 	if errors.Is(err, types.ErrSessionLocked) {
 		// A dataset close locked the BO session after the handler's check;
 		// the claim re-reads locked_at and refuses, persisting nothing.
-		return failTurn("session_locked", "claim_pending_artifacts", err)
+		return "", failTurn("session_locked", "claim_pending_artifacts", err)
 	}
 	if err != nil {
-		return failTurn("persist_user_msg", "append_user_msg", err)
+		return "", failTurn("persist_user_msg", "append_user_msg", err)
 	}
 	userBlocks := textInput
 	for _, ref := range claimed {
@@ -293,7 +333,7 @@ func (o *Orchestrator) Turn(
 		// that could be persisted.
 		rendered, renderErr := renderArtifactsForLLM(ctx, req.Messages, o.llm, o.artifactResolver, renderCache, o.logger)
 		if renderErr != nil {
-			return failTurn("artifact_render", "render_artifacts", renderErr)
+			return "", failTurn("artifact_render", "render_artifacts", renderErr)
 		}
 		callReq := req
 		callReq.Messages = rendered
@@ -303,7 +343,7 @@ func (o *Orchestrator) Turn(
 
 		for ev, err := range o.llm.Generate(ctx, callReq) {
 			if err != nil {
-				return failTurn("llm_error", "llm_generate", err)
+				return "", failTurn("llm_error", "llm_generate", err)
 			}
 			switch e := ev.(type) {
 			case llm.TextDeltaEvent:
@@ -362,11 +402,11 @@ func (o *Orchestrator) Turn(
 		// Persist assistant message for this round.
 		assistantContent, err := blocksToJSON(assistantBlocks)
 		if err != nil {
-			return failTurn("encode_assistant_msg", "serialize_assistant_blocks", err)
+			return "", failTurn("encode_assistant_msg", "serialize_assistant_blocks", err)
 		}
 		assistantSeq, err := o.chats.NextSeq(ctx, sessionID)
 		if err != nil {
-			return failTurn("seq_assign", "next_seq_assistant", err)
+			return "", failTurn("seq_assign", "next_seq_assistant", err)
 		}
 		if err := o.chats.AppendMessages(ctx, version.ID, []types.ChatMessage{{
 			ID:        assistantMsgID,
@@ -375,7 +415,7 @@ func (o *Orchestrator) Turn(
 			Content:   assistantContent,
 			Seq:       assistantSeq,
 		}}); err != nil {
-			return failTurn("persist_assistant_msg", "append_assistant_msg", err)
+			return "", failTurn("persist_assistant_msg", "append_assistant_msg", err)
 		}
 
 		stopReason = stopReasonThisRound
@@ -450,11 +490,11 @@ func (o *Orchestrator) Turn(
 		toolMsgID := uuid.NewString()
 		toolContent, err := blocksToJSON(toolBlocks)
 		if err != nil {
-			return failTurn("encode_tool_msg", "serialize_tool_blocks", err)
+			return "", failTurn("encode_tool_msg", "serialize_tool_blocks", err)
 		}
 		toolSeq, err := o.chats.NextSeq(ctx, sessionID)
 		if err != nil {
-			return failTurn("seq_assign", "next_seq_tool", err)
+			return "", failTurn("seq_assign", "next_seq_tool", err)
 		}
 		if err := o.chats.AppendToolMessage(ctx, version.ID, types.ChatMessage{
 			ID:        toolMsgID,
@@ -463,7 +503,7 @@ func (o *Orchestrator) Turn(
 			Content:   toolContent,
 			Seq:       toolSeq,
 		}, toolRefs); err != nil {
-			return failTurn("persist_tool_msg", "append_tool_msg", err)
+			return "", failTurn("persist_tool_msg", "append_tool_msg", err)
 		}
 		for _, ev := range refEvents {
 			_ = sink.Send(ctx, ev)
@@ -477,22 +517,19 @@ func (o *Orchestrator) Turn(
 		toolRounds++
 	}
 
-	// 8. Turn-end + close sink.
+	// 8. Turn-end. The caller owns and closes the sink.
 	_ = sink.Send(ctx, transport.TurnEndEvent{
 		StopReason: stopReason,
 		UsageIn:    usageIn,
 		UsageOut:   usageOut,
 	})
-	_ = sink.Close()
 
-	o.logger.Info("turn completed",
-		slog.String("agent_id", agentID),
-		slog.String("session_id", sessionID),
+	o.logger.Info("turn completed", append(append([]any{}, logAttrs...),
 		slog.String("stop_reason", stopReason),
 		slog.Int("tokens_in", usageIn),
 		slog.Int("tokens_out", usageOut),
-	)
-	return nil
+	)...)
+	return stopReason, nil
 }
 
 // historyToLLM converts persisted ChatMessage rows to llm.Message values.

@@ -15,6 +15,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/jsonl"
@@ -96,18 +97,33 @@ func (s *stubChatStore) HasPendingArtifacts(ctx context.Context, sessionID strin
 type stubTurnRunner struct {
 	capturedAgentID, capturedSessionID string
 	capturedInput                      []llm.Block
+	capturedOpts                       chat.TurnOpts
 	calls                              int
+	// err, when set, is returned after an in-band ErrorEvent (as the
+	// orchestrator's failTurn does).
+	err error
+	// onTurn, when set, replaces the default event script.
+	onTurn func(ctx context.Context, sink transport.Sink)
 }
 
-func (s *stubTurnRunner) Turn(ctx context.Context, agentID, sessionID string, input []llm.Block, sink transport.Sink) error {
+// Turn never closes the sink: the handlers own it (spec § Scope).
+func (s *stubTurnRunner) Turn(ctx context.Context, agentID, sessionID string, input []llm.Block, sink transport.Sink, opts chat.TurnOpts) (string, error) {
 	s.calls++
 	s.capturedAgentID = agentID
 	s.capturedSessionID = sessionID
 	s.capturedInput = input
+	s.capturedOpts = opts
+	if s.err != nil {
+		_ = sink.Send(ctx, transport.ErrorEvent{Code: "agent_not_runnable", Message: s.err.Error()})
+		return "", s.err
+	}
+	if s.onTurn != nil {
+		s.onTurn(ctx, sink)
+		return "end_turn", nil
+	}
 	_ = sink.Send(ctx, transport.TextDeltaEvent{MessageID: "m1", Delta: "ok"})
 	_ = sink.Send(ctx, transport.TurnEndEvent{StopReason: "end_turn"})
-	_ = sink.Close()
-	return nil
+	return "end_turn", nil
 }
 
 // minimal FS with empty templates so NewChatHandler can parse without exploding.
