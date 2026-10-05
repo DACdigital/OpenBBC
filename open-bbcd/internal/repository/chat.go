@@ -353,8 +353,8 @@ func (r *ChatRepository) insertChatMessageTx(ctx context.Context, tx *sql.Tx, m 
 // ErrSessionLocked when the root is locked. The child is pinned to
 // targetVersionID, has depth = parent.depth + 1, and copies the root's
 // backend_header_overrides. parentToolCallID is the raw tool_use id.
-// ErrNotFound when rootID is not a root session, parentID does not exist, or
-// targetVersionID does not exist. A duplicate (parentID, parentToolCallID)
+// ErrNotFound when rootID is not a root session, parentID is neither rootID
+// nor a descendant of it, or targetVersionID does not exist. A duplicate (parentID, parentToolCallID)
 // returns the raw unique-violation error.
 func (r *ChatRepository) CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -377,10 +377,15 @@ func (r *ChatRepository) CreateChildSession(ctx context.Context, rootID, parentI
 	}
 	var id string
 	err = tx.QueryRowContext(ctx, `
+		WITH RECURSIVE tree(id) AS (
+		    SELECT id FROM chat_sessions WHERE id = $1::uuid
+		    UNION ALL
+		    SELECT c.id FROM chat_sessions c JOIN tree t ON c.parent_session_id = t.id
+		)
 		INSERT INTO chat_sessions (id, agent_version_id, parent_session_id, parent_tool_call_id, depth, backend_header_overrides)
 		SELECT gen_random_uuid(), $4::uuid, p.id, $3, p.depth + 1, root.backend_header_overrides
 		FROM chat_sessions p, chat_sessions root
-		WHERE p.id = $2::uuid AND root.id = $1::uuid
+		WHERE p.id = $2::uuid AND root.id = $1::uuid AND p.id IN (SELECT id FROM tree)
 		RETURNING id::text`, rootID, parentID, parentToolCallID, targetVersionID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", types.ErrNotFound
@@ -391,7 +396,10 @@ func (r *ChatRepository) CreateChildSession(ctx context.Context, rootID, parentI
 		}
 		return "", err
 	}
-	return id, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // GetDescendant returns childID iff it is a strict descendant of the root

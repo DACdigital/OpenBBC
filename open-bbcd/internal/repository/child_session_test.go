@@ -494,3 +494,62 @@ func TestCloseDraft_ChildSpawnInterleavings(t *testing.T) {
 		}
 	})
 }
+
+// TestChatRepository_CreateChildSession_ParentOutsideRootTree: the parent
+// must be rootID itself or one of its descendants; a parent in another tree
+// (child or root) is ErrNotFound and writes nothing.
+func TestChatRepository_CreateChildSession_ParentOutsideRootTree(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	v := seedAgentVersion(t, db)
+	repo := NewChatRepository(db)
+	r1 := insertChatRoot(t, db, v)
+	r2 := insertChatRoot(t, db, v)
+	c2, err := repo.CreateChildSession(ctx, r2, r2, "tu_1", v)
+	if err != nil {
+		t.Fatalf("CreateChildSession(R2): %v", err)
+	}
+	if _, err := repo.CreateChildSession(ctx, r1, c2, "tu_x", v); !errors.Is(err, types.ErrNotFound) {
+		t.Fatalf("parent in other tree err = %v, want ErrNotFound", err)
+	}
+	if n := countChatChildren(t, db, c2); n != 0 {
+		t.Fatalf("children of C2 = %d, want 0", n)
+	}
+	if _, err := repo.CreateChildSession(ctx, r1, r2, "tu_y", v); !errors.Is(err, types.ErrNotFound) {
+		t.Fatalf("other root as parent err = %v, want ErrNotFound", err)
+	}
+	if n := countChatChildren(t, db, r2); n != 1 {
+		t.Fatalf("children of R2 = %d, want 1", n)
+	}
+}
+
+func TestDeployedRepository_CreateChildSession_ParentOutsideRootTree(t *testing.T) {
+	repo, _, agentID := newDeployedRepoTest(t)
+	ctx := context.Background()
+	target := seedAgentVersion(t, repo.db)
+	r1, err := repo.CreateSession(ctx, agentID, "user-A", "r1")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	r2, err := repo.CreateSession(ctx, agentID, "user-B", "r2")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	c2, err := repo.CreateChildSession(ctx, r2.ID, r2.ID, "tu_1", target)
+	if err != nil {
+		t.Fatalf("CreateChildSession(R2): %v", err)
+	}
+	if _, err := repo.CreateChildSession(ctx, r1.ID, c2, "tu_x", target); !errors.Is(err, types.ErrNotFound) {
+		t.Fatalf("parent in other tree err = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.CreateChildSession(ctx, r1.ID, r2.ID, "tu_y", target); !errors.Is(err, types.ErrNotFound) {
+		t.Fatalf("other root as parent err = %v, want ErrNotFound", err)
+	}
+	var n int
+	if err := repo.db.QueryRow(`SELECT count(*) FROM deployed_sessions WHERE parent_session_id IN ($1::uuid, $2::uuid)`, c2, r2.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("children under R2's tree = %d, want 1", n)
+	}
+}

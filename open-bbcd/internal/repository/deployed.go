@@ -278,9 +278,10 @@ func insertDeployedMessageTx(ctx context.Context, tx *sql.Tx, m types.DeployedMe
 // SHARE (deployed sessions have no locked_at, so there is no lock check). The
 // child carries the root's agent_id and user_id, is pinned to
 // targetVersionID, and has depth = parent.depth + 1. parentToolCallID is the
-// raw tool_use id. ErrNotFound when rootID is not a root session, parentID
-// does not exist, or targetVersionID does not exist. A duplicate
-// (parentID, parentToolCallID) returns the raw unique-violation error.
+// raw tool_use id. ErrNotFound when rootID is not a root session, parentID is
+// neither rootID nor a descendant of it, or targetVersionID does not exist.
+// A duplicate (parentID, parentToolCallID) returns the raw unique-violation
+// error.
 func (r *DeployedRepository) CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -299,10 +300,15 @@ func (r *DeployedRepository) CreateChildSession(ctx context.Context, rootID, par
 	}
 	var id string
 	err = tx.QueryRowContext(ctx, `
+		WITH RECURSIVE tree(id) AS (
+		    SELECT id FROM deployed_sessions WHERE id = $1::uuid
+		    UNION ALL
+		    SELECT c.id FROM deployed_sessions c JOIN tree t ON c.parent_session_id = t.id
+		)
 		INSERT INTO deployed_sessions (agent_id, user_id, parent_session_id, parent_tool_call_id, depth, agent_version_id)
 		SELECT root.agent_id, root.user_id, p.id, $3, p.depth + 1, $4::uuid
 		FROM deployed_sessions p, deployed_sessions root
-		WHERE p.id = $2::uuid AND root.id = $1::uuid
+		WHERE p.id = $2::uuid AND root.id = $1::uuid AND p.id IN (SELECT id FROM tree)
 		RETURNING id::text`, rootID, parentID, parentToolCallID, targetVersionID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", types.ErrNotFound
@@ -313,7 +319,10 @@ func (r *DeployedRepository) CreateChildSession(ctx context.Context, rootID, par
 		}
 		return "", err
 	}
-	return id, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // GetDescendant returns childID iff it is a strict descendant of the root
