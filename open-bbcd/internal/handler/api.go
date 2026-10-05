@@ -15,6 +15,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/artifacts"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/anthropic"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
@@ -69,6 +70,12 @@ func (s *configStore) Delete(ctx context.Context, versionID string) error {
 }
 
 func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
+	return newAPI(db, cfg, logger, anthropic.New(cfg.Anthropic))
+}
+
+// newAPI is NewAPI with the LLM client injected, so DB-backed tests can run
+// real turns against a scripted model.
+func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.LLM) http.Handler {
 	fatal := func(msg string, err error) {
 		logger.Error(msg, slog.Any("error", err))
 		os.Exit(1)
@@ -100,7 +107,6 @@ func NewAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger) http.Handler {
 	resourceHandler := NewResourceHandler(resourceRepo)
 
 	chatRepo := repository.NewChatRepository(db)
-	llmClient := anthropic.New(cfg.Anthropic)
 
 	// Artifact-store registry: env-driven, feature-gated. When the deployer
 	// hasn't configured any ARTIFACT_STORE_<ID>_* group, Load returns

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"iter"
 	"sync"
-	"time"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat/chattest"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport"
@@ -393,176 +393,22 @@ func bind(name, target, note string) types.SubAgentBinding {
 	return types.SubAgentBinding{Name: name, TargetVersionID: target, Note: note}
 }
 
-// llmStep produces one assistant round; it sees the request so a worker can
-// answer from its prompt. Steps generate fresh tool_use ids per call.
-type llmStep func(req llm.Request) []llm.Event
+// The scripted multi-agent LLM lives in chattest (shared with the handler
+// integration tests); these aliases keep the chat tests terse.
+type (
+	llmStep      = chattest.Step
+	routedLLM    = chattest.RoutedLLM
+	toolCallSpec = chattest.ToolCall
+)
 
-// llmRoute scripts one system prompt (one version). The step used is picked
-// by how many assistant messages the request already holds (i.e. per
-// session); past the end the last step repeats.
-type llmRoute struct {
-	steps  []llmStep
-	delay  time.Duration // honours ctx
-	failAt map[int]error // assistant-count index → error
-}
-
-// routedLLM is a concurrency-safe fake LLM keyed by req.System.
-type routedLLM struct {
-	mu          sync.Mutex
-	routes      map[string]*llmRoute
-	requests    map[string][]llm.Request
-	inFlight    map[string]int
-	maxInFlight map[string]int
-	// onCall runs at the start of every Generate (outside the lock).
-	onCall func(system string)
-}
-
-func newRoutedLLM() *routedLLM {
-	return &routedLLM{
-		routes:      map[string]*llmRoute{},
-		requests:    map[string][]llm.Request{},
-		inFlight:    map[string]int{},
-		maxInFlight: map[string]int{},
-	}
-}
-
-func (f *routedLLM) route(system string, steps ...llmStep) *llmRoute {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	r := &llmRoute{steps: steps}
-	f.routes[system] = r
-	return r
-}
-
-func (f *routedLLM) reqs(system string) []llm.Request {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]llm.Request(nil), f.requests[system]...)
-}
-
-func (f *routedLLM) max(system string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.maxInFlight[system]
-}
-
-func (f *routedLLM) Name() string { return "routed" }
-
-func (f *routedLLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event, error] {
-	return func(yield func(llm.Event, error) bool) {
-		if f.onCall != nil {
-			f.onCall(req.System)
-		}
-		f.mu.Lock()
-		f.requests[req.System] = append(f.requests[req.System], req)
-		r := f.routes[req.System]
-		f.inFlight[req.System]++
-		if f.inFlight[req.System] > f.maxInFlight[req.System] {
-			f.maxInFlight[req.System] = f.inFlight[req.System]
-		}
-		f.mu.Unlock()
-		defer func() {
-			f.mu.Lock()
-			f.inFlight[req.System]--
-			f.mu.Unlock()
-		}()
-		if r == nil {
-			yield(nil, fmt.Errorf("routedLLM: no route for system %q", req.System))
-			return
-		}
-		if err := ctx.Err(); err != nil {
-			yield(nil, err)
-			return
-		}
-		if r.delay > 0 {
-			t := time.NewTimer(r.delay)
-			select {
-			case <-ctx.Done():
-				t.Stop()
-				yield(nil, ctx.Err())
-				return
-			case <-t.C:
-			}
-		}
-		n := 0
-		for _, m := range req.Messages {
-			if m.Role == llm.RoleAssistant {
-				n++
-			}
-		}
-		if err, ok := r.failAt[n]; ok {
-			yield(nil, err)
-			return
-		}
-		if len(r.steps) == 0 {
-			return
-		}
-		i := n
-		if i >= len(r.steps) {
-			i = len(r.steps) - 1
-		}
-		for _, ev := range r.steps[i](req) {
-			if !yield(ev, nil) {
-				return
-			}
-		}
-	}
-}
-
-// textStep ends the turn with text.
-func textStep(text string) llmStep {
-	return func(llm.Request) []llm.Event {
-		return []llm.Event{llm.TextDeltaEvent{Delta: text}, llm.MessageStopEvent{StopReason: "end_turn"}}
-	}
-}
-
-// echoStep ends the turn with prefix + the request's first user text.
-func echoStep(prefix string) llmStep {
-	return func(req llm.Request) []llm.Event {
-		return []llm.Event{llm.TextDeltaEvent{Delta: prefix + firstUserText(req)}, llm.MessageStopEvent{StopReason: "end_turn"}}
-	}
-}
-
-func firstUserText(req llm.Request) string {
-	for _, m := range req.Messages {
-		if m.Role != llm.RoleUser {
-			continue
-		}
-		for _, b := range m.Content {
-			if tb, ok := b.(llm.TextBlock); ok {
-				return tb.Text
-			}
-		}
-	}
-	return ""
-}
-
-type toolCallSpec struct{ Name, Input string }
-
-func agentCall(subagent, description, prompt string) toolCallSpec {
-	in, _ := json.Marshal(map[string]string{"subagent": subagent, "description": description, "prompt": prompt})
-	return toolCallSpec{Name: tools.AgentToolName, Input: string(in)}
-}
-
-// callsStep emits optional text then one tool_use per spec, each with a
-// fresh "tu_<uuid>" id, and stops with tool_use.
-func callsStep(text string, calls ...toolCallSpec) llmStep {
-	return func(llm.Request) []llm.Event {
-		var evs []llm.Event
-		if text != "" {
-			evs = append(evs, llm.TextDeltaEvent{Delta: text})
-		}
-		for _, c := range calls {
-			id := "tu_" + uuid.NewString()
-			evs = append(evs,
-				llm.ToolUseStartEvent{ID: id, Name: c.Name},
-				llm.ToolUseInputEvent{ID: id, JSONFragment: c.Input},
-				llm.ToolUseEndEvent{ID: id},
-			)
-		}
-		return append(evs, llm.MessageStopEvent{StopReason: "tool_use"})
-	}
-}
+var (
+	newRoutedLLM  = chattest.NewRoutedLLM
+	textStep      = chattest.TextStep
+	echoStep      = chattest.EchoStep
+	firstUserText = chattest.FirstUserText
+	agentCall     = chattest.AgentCall
+	callsStep     = chattest.CallsStep
+)
 
 // multiBuilder builds a fresh closable handler per Build call and records
 // the build contexts. Concurrency-safe.

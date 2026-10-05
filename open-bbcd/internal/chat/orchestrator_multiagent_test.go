@@ -186,7 +186,7 @@ func (e *maEnv) standardRoot() {
 func TestMultiAgent_Exposure(t *testing.T) {
 	agentDef := func(t *testing.T, e *maEnv) (int, *llm.ToolDef) {
 		t.Helper()
-		reqs := e.llm.reqs(sysRoot)
+		reqs := e.llm.Requests(sysRoot)
 		if len(reqs) == 0 {
 			t.Fatal("root LLM never called")
 		}
@@ -207,7 +207,7 @@ func TestMultiAgent_Exposure(t *testing.T) {
 	}
 	run := func(t *testing.T, e *maEnv) {
 		t.Helper()
-		e.llm.route(sysRoot, textStep("hi"))
+		e.llm.Route(sysRoot, textStep("hi"))
 		if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 			t.Fatalf("Turn: %v", err)
 		}
@@ -239,7 +239,7 @@ func TestMultiAgent_Exposure(t *testing.T) {
 		if idx != 1 {
 			t.Fatalf("agent def at index %d, want 1 (right after Skill)", idx)
 		}
-		if e.llm.reqs(sysRoot)[0].Tools[0].Name != "Skill" {
+		if e.llm.Requests(sysRoot)[0].Tools[0].Name != "Skill" {
 			t.Fatal("Skill is not first")
 		}
 		var schema struct {
@@ -296,8 +296,8 @@ func (s *syncBuffer) String() string {
 func TestMultiAgent_RootDelegation(t *testing.T) {
 	e := newMAEnv(t)
 	e.standardRoot()
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "look up", "P")), textStep("root done"))
-	e.llm.route(sysW, textStep("W says hi"))
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "look up", "P")), textStep("root done"))
+	e.llm.Route(sysW, textStep("W says hi"))
 
 	stop, err := e.turn(context.Background(), &syncRecordingSink{})
 	if err != nil || stop != "end_turn" {
@@ -321,7 +321,7 @@ func TestMultiAgent_RootDelegation(t *testing.T) {
 	if len(childMsgs) == 0 || childMsgs[0].Role != types.ChatRoleUser || string(childMsgs[0].Content) != `[{"text":"P","type":"text"}]` {
 		t.Fatalf("child first message = %+v", childMsgs)
 	}
-	wReqs := e.llm.reqs(sysW)
+	wReqs := e.llm.Requests(sysW)
 	if len(wReqs) != 1 || len(wReqs[0].Messages) != 1 || firstUserText(wReqs[0]) != "P" {
 		t.Fatalf("worker request must hold only the prompt: %+v", wReqs)
 	}
@@ -355,9 +355,9 @@ func nestedEnv(t *testing.T) *maEnv {
 	e.repo.add("vR", sysRoot, bind("researcher", "vW", ""))
 	e.repo.add("vW", sysW, bind("x", "vX", ""))
 	e.repo.add("vX", sysX)
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "do W")), textStep("root done"))
-	e.llm.route(sysW, callsStep("", agentCall("x", "d", "do X")), textStep("W done"))
-	e.llm.route(sysX, textStep("X done"))
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "do W")), textStep("root done"))
+	e.llm.Route(sysW, callsStep("", agentCall("x", "d", "do X")), textStep("W done"))
+	e.llm.Route(sysX, textStep("X done"))
 	return e
 }
 
@@ -404,10 +404,10 @@ func TestMultiAgent_DepthCap(t *testing.T) {
 	e.repo.add("vW", sysW, bind("x", "vX", ""))
 	e.repo.add("vX", sysX, bind("y", "vY", ""))
 	e.repo.add("vY", sysY)
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "do W")), textStep("root done"))
-	e.llm.route(sysW, callsStep("", agentCall("x", "d", "do X")), textStep("W done"))
-	e.llm.route(sysX, callsStep("", agentCall("y", "d", "do Y")), textStep("X final"))
-	e.llm.route(sysY, textStep("never"))
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "do W")), textStep("root done"))
+	e.llm.Route(sysW, callsStep("", agentCall("x", "d", "do X")), textStep("W done"))
+	e.llm.Route(sysX, callsStep("", agentCall("y", "d", "do Y")), textStep("X final"))
+	e.llm.Route(sysY, textStep("never"))
 
 	if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 		t.Fatal(err)
@@ -415,10 +415,10 @@ func TestMultiAgent_DepthCap(t *testing.T) {
 	if n := len(e.childCalls()); n != 2 {
 		t.Fatalf("children = %d, want 2 (no session for the refused call)", n)
 	}
-	if len(e.llm.reqs(sysY)) != 0 {
+	if len(e.llm.Requests(sysY)) != 0 {
 		t.Fatal("refused sub-agent ran")
 	}
-	xReqs := e.llm.reqs(sysX)
+	xReqs := e.llm.Requests(sysX)
 	if len(xReqs) != 2 {
 		t.Fatalf("X LLM calls = %d, want 2 (continues after the error)", len(xReqs))
 	}
@@ -447,15 +447,15 @@ func TestMultiAgent_UnknownAndInvalid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newMAEnv(t)
 			e.standardRoot()
-			e.llm.route(sysRoot, callsStep("", toolCallSpec{Name: tools.AgentToolName, Input: tc.input}), textStep("root done"))
-			e.llm.route(sysW, textStep("never"))
+			e.llm.Route(sysRoot, callsStep("", toolCallSpec{Name: tools.AgentToolName, Input: tc.input}), textStep("root done"))
+			e.llm.Route(sysW, textStep("never"))
 			if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 				t.Fatal(err)
 			}
 			if n := len(e.childCalls()); n != 0 {
 				t.Fatalf("children = %d", n)
 			}
-			reqs := e.llm.reqs(sysRoot)
+			reqs := e.llm.Requests(sysRoot)
 			if len(reqs) != 2 {
 				t.Fatalf("root LLM calls = %d", len(reqs))
 			}
@@ -483,13 +483,13 @@ func TestMultiAgent_ParallelFanOut(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		specs = append(specs, agentCall("researcher", "d", "P"+string(rune('0'+i))))
 	}
-	e.llm.route(sysRoot, callsStep("", specs...), textStep("root done"))
-	e.llm.route(sysW, echoStep("echo:")).delay = 50 * time.Millisecond
+	e.llm.Route(sysRoot, callsStep("", specs...), textStep("root done"))
+	e.llm.Route(sysW, echoStep("echo:")).Delay = 50 * time.Millisecond
 
 	if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 		t.Fatal(err)
 	}
-	if m := e.llm.max(sysW); m > 4 || m < 2 {
+	if m := e.llm.MaxInFlight(sysW); m > 4 || m < 2 {
 		t.Fatalf("max concurrent children = %d, want 2..4", m)
 	}
 	if n := len(e.childCalls()); n != 6 {
@@ -525,17 +525,17 @@ func TestMultiAgent_MixedStep(t *testing.T) {
 		log = append(log, v+":"+name)
 		mu.Unlock()
 	}
-	e.llm.onCall = func(system string) {
+	e.llm.OnCall = func(system string) {
 		mu.Lock()
 		log = append(log, "llm:"+system)
 		mu.Unlock()
 	}
-	e.llm.route(sysRoot, callsStep("",
+	e.llm.Route(sysRoot, callsStep("",
 		toolCallSpec{Name: "Skill", Input: `{"name":"s"}`},
 		agentCall("researcher", "d", "P"),
 		toolCallSpec{Name: "search", Input: `{"q":"x"}`},
 	), textStep("root done"))
-	e.llm.route(sysW, textStep("W"))
+	e.llm.Route(sysW, textStep("W"))
 
 	if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 		t.Fatal(err)
@@ -563,8 +563,8 @@ func TestMultiAgent_MixedStep(t *testing.T) {
 func TestMultiAgent_ChildFailure(t *testing.T) {
 	e := newMAEnv(t)
 	e.standardRoot()
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
-	e.llm.route(sysW, textStep("x")).failAt = map[int]error{0: errors.New("boom")}
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
+	e.llm.Route(sysW, textStep("x")).FailAt = map[int]error{0: errors.New("boom")}
 
 	if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 		t.Fatal(err)
@@ -586,8 +586,8 @@ func TestMultiAgent_ChildRoundCap(t *testing.T) {
 	e := newMAEnv(t)
 	e.o.MaxToolRounds = 2
 	e.standardRoot()
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
-	e.llm.route(sysW, callsStep("thinking", toolCallSpec{Name: "search", Input: `{}`}))
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
+	e.llm.Route(sysW, callsStep("thinking", toolCallSpec{Name: "search", Input: `{}`}))
 
 	if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 		t.Fatal(err)
@@ -610,12 +610,12 @@ func TestMultiAgent_SessionLocked(t *testing.T) {
 		e := newMAEnv(t)
 		e.standardRoot()
 		e.chats.childErr = types.ErrSessionLocked
-		e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
-		e.llm.route(sysW, textStep("never"))
+		e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
+		e.llm.Route(sysW, textStep("never"))
 		if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 			t.Fatal(err)
 		}
-		if len(e.llm.reqs(sysW)) != 0 {
+		if len(e.llm.Requests(sysW)) != 0 {
 			t.Fatal("child turn ran")
 		}
 		rs := resultsOf(e.toolMsgs("R")[0])
@@ -632,8 +632,8 @@ func TestMultiAgent_SessionLocked(t *testing.T) {
 			}
 			return nil
 		}
-		e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
-		e.llm.route(sysW, textStep("never"))
+		e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
+		e.llm.Route(sysW, textStep("never"))
 		if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 			t.Fatal(err)
 		}
@@ -653,11 +653,11 @@ func TestMultiAgent_Cancellation(t *testing.T) {
 
 	e := newMAEnv(t)
 	e.standardRoot()
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "P1"), agentCall("researcher", "d", "P2")), textStep("root done"))
-	e.llm.route(sysW, textStep("late")).delay = 10 * time.Second
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "P1"), agentCall("researcher", "d", "P2")), textStep("root done"))
+	e.llm.Route(sysW, textStep("late")).Delay = 10 * time.Second
 
 	started := make(chan struct{}, 2)
-	e.llm.onCall = func(system string) {
+	e.llm.OnCall = func(system string) {
 		if system == sysW {
 			started <- struct{}{}
 		}
@@ -716,8 +716,8 @@ func TestMultiAgent_ToolHandlerClose(t *testing.T) {
 	t.Run("child fails", func(t *testing.T) {
 		e := newMAEnv(t)
 		e.standardRoot()
-		e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
-		e.llm.route(sysW, textStep("x")).failAt = map[int]error{0: errors.New("boom")}
+		e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
+		e.llm.Route(sysW, textStep("x")).FailAt = map[int]error{0: errors.New("boom")}
 		if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 			t.Fatal(err)
 		}
@@ -771,8 +771,8 @@ func rawField(ev map[string]any, k string) any {
 func TestMultiAgent_EventOrderDepth1(t *testing.T) {
 	e := newMAEnv(t)
 	e.standardRoot()
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "look up", "P")), textStep("root done"))
-	e.llm.route(sysW, callsStep("", toolCallSpec{Name: "search", Input: `{"q":1}`}), textStep("W done"))
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "look up", "P")), textStep("root done"))
+	e.llm.Route(sysW, callsStep("", toolCallSpec{Name: "search", Input: `{"q":1}`}), textStep("W done"))
 
 	evs := aguiRun(t, e)
 	var types_ []string
@@ -815,7 +815,7 @@ func TestMultiAgent_EventOrderDepth1(t *testing.T) {
 // 14. Event order at depth 2 (AG-UI).
 func TestMultiAgent_EventOrderDepth2(t *testing.T) {
 	e := nestedEnv(t)
-	e.llm.route(sysX, callsStep("", toolCallSpec{Name: "search", Input: `{}`}), textStep("X done"))
+	e.llm.Route(sysX, callsStep("", toolCallSpec{Name: "search", Input: `{}`}), textStep("X done"))
 	evs := aguiRun(t, e)
 
 	calls := e.childCalls()
@@ -874,8 +874,8 @@ func TestMultiAgent_EventOrderDepth2(t *testing.T) {
 func TestMultiAgent_DistinctStepNames(t *testing.T) {
 	e := newMAEnv(t)
 	e.standardRoot()
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "a", "P1"), agentCall("researcher", "b", "P2")), textStep("root done"))
-	e.llm.route(sysW, echoStep(""))
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "a", "P1"), agentCall("researcher", "b", "P2")), textStep("root done"))
+	e.llm.Route(sysW, echoStep(""))
 	evs := aguiRun(t, e)
 	names := map[string]bool{}
 	for _, ev := range evs {
@@ -909,8 +909,8 @@ func TestMultiAgent_HeaderInheritance(t *testing.T) {
 		[]tools.HTTPEndpointDef{{ID: "orders.create", Name: "orders_create", Method: "POST", Path: "/api/orders"}},
 		map[string]string{"orders.create": "backend-1"})
 	e.builder.override = map[string]tools.Handler{"vW": tools.NewComposite([]tools.Backend{backend})}
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
-	e.llm.route(sysW, callsStep("", toolCallSpec{Name: "orders_create", Input: `{}`}), textStep("W done"))
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
+	e.llm.Route(sysW, callsStep("", toolCallSpec{Name: "orders_create", Input: `{}`}), textStep("W done"))
 
 	ctx := tools.WithForwardedHeaders(context.Background(), http.Header{"X-User": {"u1"}})
 	ctx = tools.WithBackendHeaderRouting(ctx, tools.BackendHeaderRouting{ByName: map[string]tools.BackendRoutingBlock{"api": {All: true}}})
@@ -952,8 +952,8 @@ func TestMultiAgent_Artifacts(t *testing.T) {
 			}
 			return tools.Result{ToolUseID: c.ID, Output: []byte(`{}`)}
 		}
-		e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
-		e.llm.route(sysW, callsStep("", toolCallSpec{Name: "search", Input: `{}`}), textStep("seen"))
+		e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
+		e.llm.Route(sysW, callsStep("", toolCallSpec{Name: "search", Input: `{}`}), textStep("seen"))
 		rec := &syncRecordingSink{}
 		if _, err := e.turn(context.Background(), rec); err != nil {
 			t.Fatal(err)
@@ -987,8 +987,8 @@ func TestMultiAgent_Artifacts(t *testing.T) {
 		e.o.WithArtifactUploader(&stubUploader{})
 		e.standardRoot()
 		ref := `{"store_id":"S","uri":"u"}`
-		e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "use "+ref)), textStep("root done"))
-		e.llm.route(sysW, callsStep("", toolCallSpec{Name: "search", Input: `{"ref":` + ref + `}`}), textStep("ok"))
+		e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "use "+ref)), textStep("root done"))
+		e.llm.Route(sysW, callsStep("", toolCallSpec{Name: "search", Input: `{"ref":` + ref + `}`}), textStep("ok"))
 		if _, err := e.turn(context.Background(), &syncRecordingSink{}); err != nil {
 			t.Fatal(err)
 		}
@@ -1033,8 +1033,8 @@ func TestMultiAgent_ChildPanicRecovered(t *testing.T) {
 	e.o.MaxParallel = 1 // a leaked semaphore slot would deadlock the sibling
 	e.standardRoot()
 	e.o.runner = &panicRunner{inner: e.spy, panicOn: "BOOM"}
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "BOOM"), agentCall("researcher", "d", "P2")), textStep("root done"))
-	e.llm.route(sysW, echoStep("echo:"))
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "BOOM"), agentCall("researcher", "d", "P2")), textStep("root done"))
+	e.llm.Route(sysW, echoStep("echo:"))
 
 	sink := &syncRecordingSink{}
 	done := make(chan error, 1)
@@ -1086,8 +1086,8 @@ func TestMultiAgent_ChildPanicRecovered(t *testing.T) {
 func TestMultiAgent_ChildTurnPanicClosesStep(t *testing.T) {
 	e := newMAEnv(t)
 	e.standardRoot()
-	e.llm.route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
-	e.llm.route(sysW, func(llm.Request) []llm.Event { panic("llm client bug") })
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "d", "P")), textStep("root done"))
+	e.llm.Route(sysW, func(llm.Request) []llm.Event { panic("llm client bug") })
 
 	sink := &syncRecordingSink{}
 	if _, err := e.turn(context.Background(), sink); err != nil {
@@ -1118,7 +1118,7 @@ func TestMultiAgent_ChildTurnPanicClosesStep(t *testing.T) {
 func TestMultiAgent_UnparsableToolInput(t *testing.T) {
 	e := newMAEnv(t)
 	e.standardRoot()
-	e.llm.route(sysRoot, callsStep("", toolCallSpec{Name: "search", Input: `{bad`}, toolCallSpec{Name: "search", Input: `{"q":1}`}), textStep("root done"))
+	e.llm.Route(sysRoot, callsStep("", toolCallSpec{Name: "search", Input: `{bad`}, toolCallSpec{Name: "search", Input: `{"q":1}`}), textStep("root done"))
 
 	stop, err := e.turn(context.Background(), &syncRecordingSink{})
 	if err != nil || stop != "end_turn" {
@@ -1138,7 +1138,7 @@ func TestMultiAgent_UnparsableToolInput(t *testing.T) {
 	if len(uses) != 2 || string(uses[0].Input) != `{}` {
 		t.Fatalf("persisted tool_use = %+v, want input {}", uses)
 	}
-	reqs := e.llm.reqs(sysRoot)
+	reqs := e.llm.Requests(sysRoot)
 	if len(reqs) != 2 {
 		t.Fatalf("root LLM calls = %d", len(reqs))
 	}
