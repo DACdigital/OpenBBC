@@ -18,10 +18,6 @@ import (
 // binding follows it.
 const agentToolDescriptionHead = "Delegate a self-contained task to a specialised sub-agent. The sub-agent starts with NO access to this conversation or its files — put everything it needs in `prompt`. It returns its final answer as text.\n\nAvailable sub-agents:\n"
 
-// skillToolName is the Skill meta-tool's name (tools.Composite); the agent
-// tool is listed right after it.
-const skillToolName = "Skill"
-
 // agentToolError is an agent-tool failure surfaced to the calling LLM as an
 // is_error tool result "<code>: <details>" (spec § LLM tool contract).
 type agentToolError struct {
@@ -128,7 +124,7 @@ func parseAgentInput(raw json.RawMessage) (agentInput, error) {
 func insertAgentToolDef(defs []llm.ToolDef, def llm.ToolDef) []llm.ToolDef {
 	at := 0
 	for i, d := range defs {
-		if d.Name == skillToolName {
+		if d.Name == tools.SkillToolName {
 			at = i + 1
 			break
 		}

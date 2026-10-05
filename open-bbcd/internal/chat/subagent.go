@@ -128,7 +128,7 @@ type subAgentRequest struct {
 	Binding          types.SubAgentBinding
 	Description      string
 	Prompt           string
-	ParentSink       transport.Sink // the step's shared lockedSink
+	ParentSink       *lockedSink // the step's shared sink
 }
 
 type subAgentResult struct {
@@ -153,17 +153,13 @@ func (r *turnRunner) Run(ctx context.Context, req subAgentRequest) (subAgentResu
 		return subAgentResult{}, r.spawnError(ctx, req, err)
 	}
 
-	parent, ok := req.ParentSink.(*lockedSink)
-	if !ok {
-		parent = newLockedSink(req.ParentSink)
-	}
 	// The wire id of the parent's agent call: a root's own tool calls are
 	// unprefixed on the stream, a child's carry its session id.
 	wireID := req.ParentToolCallID
 	if req.ParentDepth > 0 {
 		wireID = req.ParentSessionID + ":" + req.ParentToolCallID
 	}
-	sink := newChildSink(parent, childID, req.Binding.Name, wireID, req.Description)
+	sink := newChildSink(req.ParentSink, childID, req.Binding.Name, wireID, req.Description)
 	_ = sink.start(ctx)
 	// A panic in the child turn propagates to runAgentCallRecovered; close
 	// the step first so the stream never holds an unmatched STEP_STARTED.

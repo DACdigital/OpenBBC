@@ -44,7 +44,7 @@ func (c *Composite) Tools(bundle json.RawMessage) ([]llm.ToolDef, error) {
 }
 
 func (c *Composite) Call(ctx context.Context, bundle json.RawMessage, call Call) (Result, error) {
-	if call.Name == "Skill" {
+	if call.Name == SkillToolName {
 		return callSkillMetaTool(bundle, call)
 	}
 	for _, be := range c.backends {
@@ -124,7 +124,7 @@ func buildSkillToolDef(bundle json.RawMessage) (llm.ToolDef, error) {
 		return llm.ToolDef{}, err
 	}
 	return llm.ToolDef{
-		Name:        "Skill",
+		Name:        SkillToolName,
 		Description: "Load the prompt for a named skill into your working context. Use when the user's intent matches a skill in skills_index.",
 		InputSchema: schema,
 	}, nil
