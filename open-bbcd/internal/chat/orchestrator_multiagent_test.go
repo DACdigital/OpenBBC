@@ -1157,3 +1157,83 @@ func TestMultiAgent_UnparsableToolInput(t *testing.T) {
 		t.Fatal("root did not continue")
 	}
 }
+
+// truncatedCallStep emits text (optional), then a tool_use whose input is cut
+// off, and stops with max_tokens.
+func truncatedCallStep(text string) llmStep {
+	return func(llm.Request) []llm.Event {
+		var evs []llm.Event
+		if text != "" {
+			evs = append(evs, llm.TextDeltaEvent{Delta: text})
+		}
+		return append(evs,
+			llm.ToolUseStartEvent{ID: "tu_trunc", Name: tools.AgentToolName},
+			llm.ToolUseInputEvent{ID: "tu_trunc", JSONFragment: `{"subagent":"res`},
+			llm.ToolUseEndEvent{ID: "tu_trunc"},
+			llm.MessageStopEvent{StopReason: "max_tokens"},
+		)
+	}
+}
+
+// A tool call truncated by max_tokens is not persisted: the round gets no
+// tool_result, and an unanswered tool_use would break every later turn.
+func TestMultiAgent_TruncatedToolUseDropped(t *testing.T) {
+	for _, text := range []string{"partial answer", ""} {
+		t.Run("text="+text, func(t *testing.T) {
+			e := newMAEnv(t)
+			e.standardRoot()
+			// Steps are picked by assistant count, which the empty-text case
+			// leaves at 0: branch on the user-message count instead.
+			e.llm.Route(sysRoot, func(req llm.Request) []llm.Event {
+				users := 0
+				for _, m := range req.Messages {
+					if m.Role == llm.RoleUser {
+						users++
+					}
+				}
+				if users == 1 {
+					return truncatedCallStep(text)(req)
+				}
+				return textStep("second")(req)
+			})
+
+			stop, err := e.turn(context.Background(), &syncRecordingSink{})
+			if err != nil || stop != "max_tokens" {
+				t.Fatalf("Turn = %q, %v", stop, err)
+			}
+			if uses := e.toolUses("R"); len(uses) != 0 {
+				t.Fatalf("persisted tool_use = %+v, want none", uses)
+			}
+			if n := len(e.toolMsgs("R")); n != 0 {
+				t.Fatalf("tool messages = %d", n)
+			}
+			if got := e.lastText("R"); got != text {
+				t.Fatalf("assistant text = %q, want %q", got, text)
+			}
+			for _, m := range e.msgs("R") {
+				if m.Role == types.ChatRoleAssistant && len(blocksOf(m)) == 0 {
+					t.Fatal("empty assistant message persisted")
+				}
+			}
+
+			stop, err = e.turn(context.Background(), &syncRecordingSink{})
+			if err != nil || stop != "end_turn" {
+				t.Fatalf("second Turn = %q, %v", stop, err)
+			}
+			reqs := e.llm.Requests(sysRoot)
+			if len(reqs) != 2 {
+				t.Fatalf("root LLM calls = %d", len(reqs))
+			}
+			for _, m := range reqs[1].Messages {
+				for _, b := range m.Content {
+					if tu, ok := b.(llm.ToolUseBlock); ok {
+						t.Fatalf("second request replays tool_use %+v", tu)
+					}
+				}
+			}
+			if e.lastText("R") != "second" {
+				t.Fatal("second turn did not answer")
+			}
+		})
+	}
+}

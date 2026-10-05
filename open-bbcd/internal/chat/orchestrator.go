@@ -456,6 +456,27 @@ func (o *Orchestrator) Turn(
 
 		_ = sink.Send(ctx, transport.TextEndEvent{MessageID: assistantMsgID})
 
+		// A round that did not stop for tool_use (max_tokens mid-call, …)
+		// gets no tool_result message, so a truncated tool_use must not be
+		// persisted: replaying it unanswered would make the provider reject
+		// every later turn of the session. If nothing else is left the
+		// round persists nothing (an empty assistant message is rejected
+		// on replay too).
+		if stopReasonThisRound != "tool_use" && len(invalidInput) > 0 {
+			kept := assistantBlocks[:0]
+			for _, b := range assistantBlocks {
+				if tu, ok := b.(llm.ToolUseBlock); ok && invalidInput[tu.ID] {
+					continue
+				}
+				kept = append(kept, b)
+			}
+			assistantBlocks = kept
+			if len(assistantBlocks) == 0 {
+				stopReason = stopReasonThisRound
+				break
+			}
+		}
+
 		// Persist assistant message for this round.
 		assistantContent, err := blocksToJSON(assistantBlocks)
 		if err != nil {
