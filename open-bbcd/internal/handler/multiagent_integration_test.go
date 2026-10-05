@@ -170,13 +170,15 @@ func TestMultiAgent_BORootOnlyRoutes(t *testing.T) {
 		{http.MethodDelete, bo + child + "/assign-dataset", "", ""},
 		// Feedback for the child's message: under the child's path and under the root's.
 		{http.MethodGet, bo + child + "/messages/" + childMsg + "/feedback", "", ""},
-		{http.MethodPost, bo + child + "/messages/" + childMsg + "/feedback", formCT, "rating=down&comment=x"},
+		{http.MethodPost, bo + child + "/messages/" + childMsg + "/feedback", formCT, "rating=down&comment=x&judge_criteria_json=%5B%22ok%22%5D"},
 		{http.MethodDelete, bo + child + "/messages/" + childMsg + "/feedback", "", ""},
 		{http.MethodGet, bo + root + "/messages/" + childMsg + "/feedback", "", ""},
-		{http.MethodPost, bo + root + "/messages/" + childMsg + "/feedback", formCT, "rating=down&comment=x"},
+		{http.MethodPost, bo + root + "/messages/" + childMsg + "/feedback", formCT, "rating=down&comment=x&judge_criteria_json=%5B%22ok%22%5D"},
 		{http.MethodDelete, bo + root + "/messages/" + childMsg + "/feedback", "", ""},
 		// Another root's message under this root's path.
-		{http.MethodPost, bo + root + "/messages/" + otherMsg + "/feedback", formCT, "rating=up"},
+		{http.MethodGet, bo + root + "/messages/" + otherMsg + "/feedback", "", ""},
+		{http.MethodDelete, bo + root + "/messages/" + otherMsg + "/feedback", "", ""},
+		{http.MethodPost, bo + root + "/messages/" + otherMsg + "/feedback", formCT, "rating=up&judge_criteria_json=%5B%22ok%22%5D"},
 		// Artifact routes (registry enabled).
 		{http.MethodGet, bo + child + "/pending-artifacts", "", ""},
 		{http.MethodDelete, bo + child + "/pending-artifacts/" + uuid.NewString(), "", ""},
