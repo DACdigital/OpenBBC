@@ -177,3 +177,5 @@ Config is env-driven (`internal/config/config.go`, `caarlos0/env` + `joho/godote
 | `OPENBBC_MAX_TOKENS` | `4096` | No | Per-response cap. |
 | `OPENBBC_CHAT_TRANSPORT` | `agui` | No | Chat transport selector. |
 | `OPENBBC_MAX_TOOL_ROUNDS` | `10` | No | Per-turn tool-call loop bound. |
+| `AGENT_TOOL_MAX_DEPTH` | `3` | No | Max sub-agent nesting depth (root = 0); integer >= 1. |
+| `AGENT_TOOL_MAX_PARALLEL` | `4` | No | Max concurrent `agent` tool calls per assistant step per session node; integer >= 1. |
