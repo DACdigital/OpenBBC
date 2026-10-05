@@ -438,8 +438,8 @@ func TestMultiAgent_UnknownAndInvalid(t *testing.T) {
 	}{
 		{"unknown", mustAgentInput("nobody", "d", "p"), "unknown_subagent: "},
 		{"missing prompt", `{"subagent":"researcher","description":"d"}`, "invalid_input: "},
-		{"unparsable", `{bad`, "invalid_input: tool input is not valid JSON"},
-		{"truncated", `{"subagent":"researcher","descr`, "invalid_input: tool input is not valid JSON"},
+		{"unparsable", `{bad`, "invalid_input: tool input is not a JSON object"},
+		{"truncated", `{"subagent":"researcher","descr`, "invalid_input: tool input is not a JSON object"},
 		{"not an object", `["researcher"]`, "invalid_input: "},
 		{"unknown property", `{"subagent":"researcher","description":"d","prompt":"p","x":1}`, "invalid_input: "},
 	}
@@ -1114,47 +1114,56 @@ func TestMultiAgent_ChildTurnPanicClosesStep(t *testing.T) {
 	}
 }
 
-// Unparsable input on a non-agent tool is an error result, not a failed turn.
+// Input that is not a JSON object (unparsable, null, array, scalar) on a
+// non-agent tool is an error result, not a failed turn, and is never
+// replayed as tool_use input.
 func TestMultiAgent_UnparsableToolInput(t *testing.T) {
-	e := newMAEnv(t)
-	e.standardRoot()
-	e.llm.Route(sysRoot, callsStep("", toolCallSpec{Name: "search", Input: `{bad`}, toolCallSpec{Name: "search", Input: `{"q":1}`}), textStep("root done"))
+	for _, input := range []string{`{bad`, `null`, `[]`, `"x"`, `1`, ` [1] `} {
+		t.Run(input, func(t *testing.T) {
+			e := newMAEnv(t)
+			e.standardRoot()
+			e.llm.Route(sysRoot, callsStep("", toolCallSpec{Name: "search", Input: input}, toolCallSpec{Name: "search", Input: `{"q":1}`}), textStep("root done"))
 
-	stop, err := e.turn(context.Background(), &syncRecordingSink{})
-	if err != nil || stop != "end_turn" {
-		t.Fatalf("Turn = %q, %v", stop, err)
-	}
-	if n := len(e.childCalls()); n != 0 {
-		t.Fatalf("children = %d", n)
-	}
-	var calls []tools.Call
-	for _, h := range e.builder.allHandlers() {
-		calls = append(calls, h.calls...)
-	}
-	if len(calls) != 1 || string(calls[0].Input) != `{"q":1}` {
-		t.Fatalf("handler calls = %+v, want only the valid one", calls)
-	}
-	uses := e.toolUses("R")
-	if len(uses) != 2 || string(uses[0].Input) != `{}` {
-		t.Fatalf("persisted tool_use = %+v, want input {}", uses)
-	}
-	reqs := e.llm.Requests(sysRoot)
-	if len(reqs) != 2 {
-		t.Fatalf("root LLM calls = %d", len(reqs))
-	}
-	for _, m := range reqs[1].Messages {
-		for _, b := range m.Content {
-			if tu, ok := b.(llm.ToolUseBlock); ok && !json.Valid(tu.Input) {
-				t.Fatalf("next request carries invalid tool_use input %q", tu.Input)
+			stop, err := e.turn(context.Background(), &syncRecordingSink{})
+			if err != nil || stop != "end_turn" {
+				t.Fatalf("Turn = %q, %v", stop, err)
 			}
-		}
-	}
-	rs := requestToolResults(reqs[1])
-	if len(rs) != 2 || !rs[0].IsError || string(rs[0].Result) != `{"error":"tool input is not valid JSON"}` || rs[1].IsError {
-		t.Fatalf("results = %+v", rs)
-	}
-	if e.lastText("R") != "root done" {
-		t.Fatal("root did not continue")
+			if n := len(e.childCalls()); n != 0 {
+				t.Fatalf("children = %d", n)
+			}
+			var calls []tools.Call
+			for _, h := range e.builder.allHandlers() {
+				calls = append(calls, h.calls...)
+			}
+			if len(calls) != 1 || string(calls[0].Input) != `{"q":1}` {
+				t.Fatalf("handler calls = %+v, want only the valid one", calls)
+			}
+			uses := e.toolUses("R")
+			if len(uses) != 2 || string(uses[0].Input) != `{}` {
+				t.Fatalf("persisted tool_use = %+v, want input {}", uses)
+			}
+			reqs := e.llm.Requests(sysRoot)
+			if len(reqs) != 2 {
+				t.Fatalf("root LLM calls = %d", len(reqs))
+			}
+			for _, m := range reqs[1].Messages {
+				for _, b := range m.Content {
+					if tu, ok := b.(llm.ToolUseBlock); ok {
+						var obj map[string]any
+						if err := json.Unmarshal(tu.Input, &obj); err != nil || obj == nil {
+							t.Fatalf("next request carries non-object tool_use input %q", tu.Input)
+						}
+					}
+				}
+			}
+			rs := requestToolResults(reqs[1])
+			if len(rs) != 2 || !rs[0].IsError || string(rs[0].Result) != `{"error":"tool input is not a JSON object"}` || rs[1].IsError {
+				t.Fatalf("results = %+v", rs)
+			}
+			if e.lastText("R") != "root done" {
+				t.Fatal("root did not continue")
+			}
+		})
 	}
 }
 

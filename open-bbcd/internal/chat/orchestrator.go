@@ -368,9 +368,9 @@ func (o *Orchestrator) Turn(
 			pendingToolUses     []llm.ToolUseBlock
 			inputBuffers        = map[string]*bytes.Buffer{}
 			stopReasonThisRound string
-			// invalidInput: tool_use ids whose streamed input was not valid
-			// JSON. Their block input is replaced by {} and dispatch answers
-			// them with an error result instead of running them.
+			// invalidInput: tool_use ids whose streamed input was not a
+			// JSON object. Their block input is replaced by {} and dispatch
+			// answers them with an error result instead of running them.
 			invalidInput = map[string]bool{}
 		)
 
@@ -422,12 +422,14 @@ func (o *Orchestrator) Turn(
 				if buf, ok := inputBuffers[e.ID]; ok {
 					inputBytes := buf.Bytes()
 					// The block is persisted and re-sent to the provider,
-					// which requires an object: unparsable input becomes {}
-					// (flagged for dispatch); empty input is a no-argument
-					// call and becomes {} as well.
-					if len(bytes.TrimSpace(inputBytes)) == 0 {
+					// which requires an object: anything else (unparsable,
+					// null, array, scalar) becomes {} (flagged for
+					// dispatch); empty input is a no-argument call and
+					// becomes {} as well.
+					trimmed := bytes.TrimSpace(inputBytes)
+					if len(trimmed) == 0 {
 						inputBytes = []byte(`{}`)
-					} else if !json.Valid(inputBytes) {
+					} else if trimmed[0] != '{' || !json.Valid(trimmed) {
 						inputBytes = []byte(`{}`)
 						invalidInput[e.ID] = true
 					}
@@ -527,9 +529,9 @@ func (o *Orchestrator) Turn(
 			isAgent := bindingsByName != nil && tu.Name == tools.AgentToolName
 			if invalidInput[tu.ID] {
 				if isAgent {
-					results[i] = agentErrorResult(tu.ID, &agentToolError{Code: "invalid_input", Details: "tool input is not valid JSON"})
+					results[i] = agentErrorResult(tu.ID, &agentToolError{Code: "invalid_input", Details: "tool input is not a JSON object"})
 				} else {
-					errMsg, _ := json.Marshal(map[string]string{"error": "tool input is not valid JSON"})
+					errMsg, _ := json.Marshal(map[string]string{"error": "tool input is not a JSON object"})
 					results[i] = llm.ToolResultBlock{ToolUseID: tu.ID, Result: errMsg, IsError: true}
 				}
 				_ = shared.Send(ctx, transport.ToolResultEvent{ToolCallID: tu.ID, Result: results[i].Result, IsError: true})
