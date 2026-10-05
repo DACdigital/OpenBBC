@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -355,8 +356,12 @@ func (r *ChatRepository) insertChatMessageTx(ctx context.Context, tx *sql.Tx, m 
 // backend_header_overrides. parentToolCallID is the raw tool_use id.
 // ErrNotFound when rootID is not a root session, parentID is neither rootID
 // nor a descendant of it, or targetVersionID does not exist. A duplicate (parentID, parentToolCallID)
-// returns the raw unique-violation error.
+// returns the raw unique-violation error. An empty id argument is rejected
+// with a plain error before any SQL runs.
 func (r *ChatRepository) CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error) {
+	if err := validateChildSessionIDs(rootID, parentID, parentToolCallID, targetVersionID); err != nil {
+		return "", err
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
@@ -450,4 +455,22 @@ func (r *ChatRepository) ChildByParentToolCall(ctx context.Context, parentID, to
 		return "", types.ErrNotFound
 	}
 	return id, err
+}
+
+// validateChildSessionIDs rejects empty arguments to CreateChildSession (chat
+// and deployed). The parent_tool_call_id CHECK only tests NULL, so an empty
+// tool-call id would otherwise be stored; empty uuids would surface as a raw
+// cast error. Plain errors — these are caller bugs, not client input.
+func validateChildSessionIDs(rootID, parentID, parentToolCallID, targetVersionID string) error {
+	switch {
+	case rootID == "":
+		return fmt.Errorf("child session: root id is required")
+	case parentID == "":
+		return fmt.Errorf("child session: parent id is required")
+	case parentToolCallID == "":
+		return fmt.Errorf("child session: parent tool call id is required")
+	case targetVersionID == "":
+		return fmt.Errorf("child session: target version id is required")
+	}
+	return nil
 }

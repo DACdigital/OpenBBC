@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -551,5 +552,40 @@ func TestDeployedRepository_CreateChildSession_ParentOutsideRootTree(t *testing.
 	}
 	if n != 1 {
 		t.Fatalf("children under R2's tree = %d, want 1", n)
+	}
+}
+
+// TestCreateChildSession_RejectsEmptyIDs: both repositories refuse an empty
+// root/parent/tool-call/target id before touching the database (nil *sql.DB —
+// reaching BeginTx would panic). Runs without DATABASE_URL.
+func TestCreateChildSession_RejectsEmptyIDs(t *testing.T) {
+	ctx := context.Background()
+	const id = "00000000-0000-0000-0000-000000000001"
+	cases := []struct {
+		name                       string
+		root, parent, call, target string
+		want                       string
+	}{
+		{"root", "", id, "tu_1", id, "root id is required"},
+		{"parent", id, "", "tu_1", id, "parent id is required"},
+		{"tool call", id, id, "", id, "parent tool call id is required"},
+		{"target", id, id, "tu_1", "", "target version id is required"},
+	}
+	repos := map[string]func(ctx context.Context, rootID, parentID, callID, targetID string) (string, error){
+		"chat":     NewChatRepository(nil).CreateChildSession,
+		"deployed": NewDeployedRepository(nil).CreateChildSession,
+	}
+	for repoName, create := range repos {
+		for _, tc := range cases {
+			t.Run(repoName+"/"+tc.name, func(t *testing.T) {
+				got, err := create(ctx, tc.root, tc.parent, tc.call, tc.target)
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("CreateChildSession = (%q, %v), want error containing %q", got, err, tc.want)
+				}
+				if errors.Is(err, types.ErrNotFound) {
+					t.Fatalf("empty id must be a plain error, got sentinel %v", err)
+				}
+			})
+		}
 	}
 }

@@ -281,8 +281,12 @@ func insertDeployedMessageTx(ctx context.Context, tx *sql.Tx, m types.DeployedMe
 // raw tool_use id. ErrNotFound when rootID is not a root session, parentID is
 // neither rootID nor a descendant of it, or targetVersionID does not exist.
 // A duplicate (parentID, parentToolCallID) returns the raw unique-violation
-// error.
+// error. An empty id argument is rejected with a plain error before any SQL
+// runs.
 func (r *DeployedRepository) CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error) {
+	if err := validateChildSessionIDs(rootID, parentID, parentToolCallID, targetVersionID); err != nil {
+		return "", err
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
