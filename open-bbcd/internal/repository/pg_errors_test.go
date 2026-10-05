@@ -29,3 +29,27 @@ func TestTranslateBindingInsertErr(t *testing.T) {
 		t.Fatalf("other check: got %v, want the original error", got)
 	}
 }
+
+func TestTranslateVersionFK(t *testing.T) {
+	for _, c := range []string{
+		"agent_version_subagent_target_version_id_fkey",
+		"deployed_sessions_agent_version_id_fkey",
+	} {
+		if got := translateVersionFK(&pq.Error{Code: "23503", Constraint: c}); !errors.Is(got, types.ErrVersionReferenced) {
+			t.Fatalf("%s: got %v, want ErrVersionReferenced", c, got)
+		}
+	}
+	// RESTRICT FKs from training_sessions / evals and non-FK errors pass through.
+	for _, e := range []*pq.Error{
+		{Code: "23503", Constraint: "training_sessions_parent_version_id_fkey"},
+		{Code: "23503", Constraint: "evals_agent_version_id_fkey"},
+		{Code: "23505", Constraint: "deployed_sessions_agent_version_id_fkey"},
+	} {
+		if got := translateVersionFK(e); got != error(e) {
+			t.Fatalf("%+v: got %v, want the original error", e, got)
+		}
+	}
+	if translateVersionFK(nil) != nil {
+		t.Fatal("nil must stay nil")
+	}
+}

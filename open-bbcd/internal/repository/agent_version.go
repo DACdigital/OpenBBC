@@ -51,7 +51,9 @@ func (r *AgentVersionRepository) GetByID(ctx context.Context, versionID string) 
 // Delete removes a single version row. Refuses if the version is currently
 // DEPLOYED or if a newer version was forked from it (chain integrity — the
 // chain is a linked list via parent_version_id and deleting a middle node
-// would orphan the child).
+// would orphan the child). Also refuses with ErrVersionReferenced when the
+// version is a binding target, pins a deployed child, or pins a locked BO
+// session (spec § Repository invariants, version delete).
 func (r *AgentVersionRepository) Delete(ctx context.Context, versionID string) error {
 	var status string
 	var hasChild bool
@@ -86,8 +88,21 @@ func (r *AgentVersionRepository) Delete(ctx context.Context, versionID string) e
 	if pinned {
 		return types.ErrSessionInDataset
 	}
+	// A binding where the version is the *caller* cascades with it and is not
+	// a reference; neither is an unlocked BO child pinned to it (it cascades).
+	var referenced bool
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM agent_version_subagent WHERE target_version_id = $1::uuid)
+		    OR EXISTS(SELECT 1 FROM deployed_sessions      WHERE agent_version_id  = $1::uuid)
+		    OR EXISTS(SELECT 1 FROM chat_sessions          WHERE agent_version_id  = $1::uuid AND locked_at IS NOT NULL)
+	`, versionID).Scan(&referenced); err != nil {
+		return err
+	}
+	if referenced {
+		return types.ErrVersionReferenced
+	}
 	_, err = r.db.ExecContext(ctx, `DELETE FROM agent_versions WHERE id = $1::uuid`, versionID)
-	return err
+	return translateVersionFK(err)
 }
 
 // GetWithAgent returns both the AgentVersion and its owning Agent via JOIN.
