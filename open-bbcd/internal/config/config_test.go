@@ -81,8 +81,12 @@ func TestLoad_AgentToolLimits(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		t.Setenv("DATABASE_URL", "postgres://localhost/test")
-		os.Unsetenv("AGENT_TOOL_MAX_DEPTH")
-		os.Unsetenv("AGENT_TOOL_MAX_PARALLEL")
+		// t.Setenv records the original value and restores it on cleanup;
+		// the Unsetenv that follows then makes the var truly absent.
+		for _, name := range []string{"AGENT_TOOL_MAX_DEPTH", "AGENT_TOOL_MAX_PARALLEL"} {
+			t.Setenv(name, "")
+			os.Unsetenv(name)
+		}
 		cfg, err := Load()
 		if err != nil {
 			t.Fatalf("Load: %v", err)
@@ -111,8 +115,12 @@ func TestLoad_AgentToolLimits(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			if cfg.Chat.AgentToolMaxDepth < 1 || cfg.Chat.AgentToolMaxParallel < 1 {
-				t.Fatalf("bad cfg %+v", cfg.Chat)
+			got := cfg.Chat.AgentToolMaxDepth
+			if name == "AGENT_TOOL_MAX_PARALLEL" {
+				got = cfg.Chat.AgentToolMaxParallel
+			}
+			if got != 1 {
+				t.Fatalf("%s = %d, want 1 (cfg %+v)", name, got, cfg.Chat)
 			}
 		})
 	}
