@@ -25,9 +25,9 @@ const (
 // when the first version's prompts land; once set, architecture is
 // read-only forever (one-way per agent — re-discovery requires a new agent).
 type Agent struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 	// HasDiscoveryZip is true when the agent has a non-empty discovery_zip
 	// blob stored. Computed at scan time so templates can gate the
 	// download link without hydrating the whole blob on every read.

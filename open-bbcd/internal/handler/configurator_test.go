@@ -24,19 +24,19 @@ import (
 )
 
 type stubConfigStore struct {
-	cfg                types.FlowMapConfig
-	getErr             error
-	parseErr           string
-	updates            int
-	updateFn           func(cfg []byte) error
-	statusFn           func(versionID, expectedFrom, to string) error
-	currentStatus      string // optional override; defaults to "INITIALIZING"
-	architecture       []byte // optional agent-level architecture blob
-	prompts            []byte // optional version-level prompts blob (rendered by the Prompts tab)
-	createVersionFn    func(parentVersionID string, promptsJSON []byte) (string, error)
-	lastPromptsParent  string
-	lastPromptsJSON    []byte
-	lastPromptsStatus  types.AgentStatus
+	cfg               types.FlowMapConfig
+	getErr            error
+	parseErr          string
+	updates           int
+	updateFn          func(cfg []byte) error
+	statusFn          func(versionID, expectedFrom, to string) error
+	currentStatus     string // optional override; defaults to "INITIALIZING"
+	architecture      []byte // optional agent-level architecture blob
+	prompts           []byte // optional version-level prompts blob (rendered by the Prompts tab)
+	createVersionFn   func(parentVersionID string, promptsJSON []byte) (string, error)
+	lastPromptsParent string
+	lastPromptsJSON   []byte
+	lastPromptsStatus types.AgentStatus
 }
 
 func (s *stubConfigStore) GetVersionNum(ctx context.Context, versionID string) (int, error) {
