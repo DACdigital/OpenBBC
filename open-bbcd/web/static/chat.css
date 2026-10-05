@@ -430,3 +430,13 @@
 .subagent-detail > summary { cursor: pointer; color: #8b949e; font-size: 0.8rem; }
 .subagent-detail pre { white-space: pre-wrap; word-break: break-word; margin: 0.25rem 0; }
 .subagent-detail.is-error pre { color: #f85149; }
+
+/* Live sub-agent cards (chat.js): the same card as a collapsible <details>
+   whose body nests the child's tool calls and deeper cards. */
+details.subagent-card > summary.subagent-head { cursor: pointer; list-style: none; }
+details.subagent-card > summary.subagent-head::-webkit-details-marker { display: none; }
+.subagent-card.subagent-running { border-left-color: #d2a8ff; }
+.subagent-running .subagent-state { color: #d2a8ff; }
+.subagent-body { margin: 0.3rem 0 0 0.75rem; padding-left: 0.5rem; border-left: 1px dashed var(--border, #30363d); }
+.subagent-body:empty { display: none; }
+.subagent-body .subagent-card { margin-left: 0; }

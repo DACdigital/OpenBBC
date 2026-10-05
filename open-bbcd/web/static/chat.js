@@ -49,6 +49,9 @@
   // Used post-finalize to fetch the feedback footer for the bubble.
   let currentAssistantMessageID = null;
   const toolCallElements = new Map();
+  // Live sub-agent cards keyed by child session id (spec § AG-UI → BO live
+  // card). Entries: { card, body, state }.
+  const subagentCards = new Map();
 
   // ---- Artifacts: attach, pending chips ------------------------------------
   // Server is authoritative: chips are rendered optimistically from upload
@@ -431,7 +434,7 @@
         appendTextDelta(data.delta || '');
         break;
       case 'TOOL_CALL_START':
-        startToolCall(data.toolCallId, data.toolCallName);
+        startToolCall(data.toolCallId, data.toolCallName, childContainer(data));
         break;
       case 'TOOL_CALL_ARGS':
         appendToolArgs(data.toolCallId, data.delta || '');
@@ -440,7 +443,13 @@
         finishToolCall(data.toolCallId);
         break;
       case 'TOOL_CALL_RESULT':
-        appendToolResult(data.toolCallId, data.content);
+        appendToolResult(data.toolCallId, data.content, childContainer(data));
+        break;
+      case 'STEP_STARTED':
+        startSubagentCard(data.stepName, data.rawEvent || {});
+        break;
+      case 'STEP_FINISHED':
+        finishSubagentCard(data.rawEvent || {});
         break;
       case 'RUN_ERROR':
         showError(data.message || 'unknown error');
@@ -591,8 +600,106 @@
     scheduleScroll();
   }
 
-  function startToolCall(id, name) {
+  // ---- Sub-agent cards (live) ---------------------------------------------
+  // Child tool events carry rawEvent.childSessionId; they render inside that
+  // child's card body. Root events (no childSessionId) return null and keep
+  // rendering into the assistant bubble exactly as before.
+  function childContainer(data) {
+    const childID = data && data.rawEvent && data.rawEvent.childSessionId;
+    if (!childID) return null;
+    const entry = subagentCards.get(childID);
+    return entry ? entry.body : null;
+  }
+
+  // Markup mirrors the server-rendered subagent_card (chat/bubble.html), as a
+  // collapsible <details> whose body holds the child's tool calls.
+  function startSubagentCard(stepName, raw) {
+    const childID = raw.childSessionId;
+    if (!childID || subagentCards.has(childID)) return;
     if (!currentAssistantTurn) startAssistantBubble();
+    const parentID = raw.parentToolCallId || '';
+    const name = String(stepName || '').split(':')[0];
+
+    const card = document.createElement('details');
+    card.className = 'subagent-card subagent-running';
+    card.open = true;
+    card.dataset.state = 'running';
+    card.dataset.childSessionId = childID;
+    card.dataset.stepToolCallId = parentID;
+
+    const head = document.createElement('summary');
+    head.className = 'subagent-head';
+    const icon = document.createElement('span');
+    icon.className = 'subagent-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = '\u2937';
+    const nameEl = document.createElement('code');
+    nameEl.className = 'subagent-name';
+    nameEl.textContent = name;
+    const desc = document.createElement('span');
+    desc.className = 'subagent-desc';
+    desc.textContent = raw.description || '';
+    const state = document.createElement('span');
+    state.className = 'subagent-state';
+    state.textContent = 'running';
+    const link = document.createElement('a');
+    link.className = 'subagent-link';
+    link.setAttribute('href', `${chatBase}/children/${encodeURIComponent(childID)}`);
+    link.textContent = 'Open transcript \u2192';
+    head.append(icon, nameEl, desc, state, link);
+
+    const body = document.createElement('div');
+    body.className = 'subagent-body';
+    card.append(head, body);
+
+    placeSubagentCard(card, parentID);
+    subagentCards.set(childID, { card, body, state });
+    scheduleScroll();
+  }
+
+  // Nesting rule: the card goes right after the tool-call element whose wire
+  // id equals parentToolCallId (a root agent call, or a child's prefixed
+  // "<childSessionId>:<tool_use id>" call inside that child's card). If that
+  // element is unknown, fall back to the owning child's card body, then to
+  // the current assistant bubble.
+  function placeSubagentCard(card, parentID) {
+    const parentCall = toolCallElements.get(parentID);
+    if (parentCall && parentCall.details.isConnected) {
+      // Keep sibling cards of parallel calls after any already placed for
+      // this same call, in arrival order.
+      let anchor = parentCall.details;
+      while (anchor.nextElementSibling && anchor.nextElementSibling.matches(
+        `.subagent-card[data-step-tool-call-id="${CSS.escape(parentID)}"]`)) {
+        anchor = anchor.nextElementSibling;
+      }
+      if (parentCall.container === currentAssistantTurn.content) flushDisplayBuf();
+      anchor.after(card);
+      return;
+    }
+    const sep = parentID.indexOf(':');
+    const owner = sep > 0 ? subagentCards.get(parentID.slice(0, sep)) : null;
+    if (owner) {
+      owner.body.appendChild(card);
+      return;
+    }
+    flushDisplayBuf();
+    currentAssistantTurn.content.appendChild(card);
+  }
+
+  function finishSubagentCard(raw) {
+    const entry = subagentCards.get(raw.childSessionId);
+    if (!entry) return;
+    const st = raw.isError ? 'error' : 'done';
+    entry.card.classList.remove('subagent-running');
+    entry.card.classList.add(`subagent-${st}`);
+    entry.card.dataset.state = st;
+    entry.state.textContent = st;
+    entry.card.open = false;
+  }
+
+  function startToolCall(id, name, container) {
+    if (!currentAssistantTurn) startAssistantBubble();
+    const parent = container || currentAssistantTurn.content;
     const details = document.createElement('details');
     details.className = 'tool-call';
     const summary = document.createElement('summary');
@@ -601,8 +708,8 @@
     args.className = 'args';
     details.appendChild(summary);
     details.appendChild(args);
-    currentAssistantTurn.content.appendChild(details);
-    toolCallElements.set(id, { summary, args, name });
+    parent.appendChild(details);
+    toolCallElements.set(id, { summary, args, name, details, container: parent });
     scheduleScroll();
   }
 
@@ -620,8 +727,9 @@
     el.summary.textContent = `▸ ${el.name}(…)`;
   }
 
-  function appendToolResult(id, content) {
+  function appendToolResult(id, content, container) {
     if (!currentAssistantTurn) return;
+    const parent = container || currentAssistantTurn.content;
     const details = document.createElement('details');
     details.className = 'tool-result';
     const summary = document.createElement('summary');
@@ -637,7 +745,7 @@
     }
     details.appendChild(summary);
     details.appendChild(pre);
-    currentAssistantTurn.content.appendChild(details);
+    parent.appendChild(details);
     scheduleScroll();
   }
 
