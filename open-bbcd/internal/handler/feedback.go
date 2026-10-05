@@ -28,6 +28,27 @@ func NewFeedbackHandler(repo *repository.FeedbackRepository, webFS fs.FS) (*Feed
 	return &FeedbackHandler{repo: repo, tmpl: tmpl}, nil
 }
 
+// inRootSession writes 404 and returns false unless messageID belongs to
+// the path's sessionID and that session is a root (spec § root-only rule:
+// feedback is scoped to the path session). Called before Get/Upsert/Delete,
+// which key on message_id alone.
+func (h *FeedbackHandler) inRootSession(w http.ResponseWriter, r *http.Request, sessionID, messageID string) bool {
+	if !validUUID(sessionID) || !validUUID(messageID) {
+		Error(w, types.ErrNotFound)
+		return false
+	}
+	ok, err := h.repo.MessageInRootSession(r.Context(), sessionID, messageID)
+	if err != nil {
+		Error(w, err)
+		return false
+	}
+	if !ok {
+		Error(w, types.ErrNotFound)
+		return false
+	}
+	return true
+}
+
 // Footer handles GET /agent_versions/{version_id}/chat/{session_id}/messages/{message_id}/feedback
 // Returns the feedback_footer HTML fragment (empty or filled) so the
 // streaming chat client can attach a footer to a just-finalized bubble
@@ -38,6 +59,9 @@ func (h *FeedbackHandler) Footer(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
 	messageID := r.PathValue("message_id")
+	if !h.inRootSession(w, r, sessionID, messageID) {
+		return
+	}
 	fb, _ := h.repo.Get(r.Context(), messageID) // nil on ErrNotFound is fine
 	renderTemplate(w, h.tmpl, "feedback_footer", map[string]any{
 		"MessageID": messageID,
@@ -53,6 +77,9 @@ func (h *FeedbackHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
 	messageID := r.PathValue("message_id")
+	if !h.inRootSession(w, r, sessionID, messageID) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		Error(w, err)
 		return
@@ -90,6 +117,9 @@ func (h *FeedbackHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
 	messageID := r.PathValue("message_id")
+	if !h.inRootSession(w, r, sessionID, messageID) {
+		return
+	}
 	if err := h.repo.Delete(r.Context(), messageID); err != nil {
 		Error(w, err)
 		return

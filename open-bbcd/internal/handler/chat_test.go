@@ -45,13 +45,23 @@ type stubChatStore struct {
 	hasPending bool
 	// locked makes GetSession return a session with LockedAt set.
 	locked bool
+	// child makes IsChildSession report every session as a sub-agent child.
+	child bool
+	// calls counts every store method call except IsChildSession.
+	calls int
+}
+
+func (s *stubChatStore) IsChildSession(ctx context.Context, sessionID string) (bool, error) {
+	return s.child, nil
 }
 
 func (s *stubChatStore) EnsureSession(ctx context.Context, sessionID, versionID string) error {
+	s.calls++
 	s.ensured = append(s.ensured, sessionID)
 	return s.err
 }
 func (s *stubChatStore) GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error) {
+	s.calls++
 	if !validUUID(sessionID) { // like Postgres: invalid uuid text is a plain error
 		return nil, errors.New("pq: invalid input syntax for type uuid")
 	}
@@ -63,28 +73,34 @@ func (s *stubChatStore) GetSession(ctx context.Context, sessionID, versionID str
 	return sess, s.err
 }
 func (s *stubChatStore) ListSessions(ctx context.Context, versionID string, limit, offset int) ([]*types.ChatSession, int, error) {
+	s.calls++
 	return s.sessions, len(s.sessions), s.err
 }
 func (s *stubChatStore) LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error) {
+	s.calls++
 	if !validUUID(sessionID) {
 		return nil, errors.New("pq: invalid input syntax for type uuid")
 	}
 	return s.messages, s.err
 }
 func (s *stubChatStore) UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error {
+	s.calls++
 	return s.err
 }
 
 func (s *stubChatStore) HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error) {
+	s.calls++
 	return s.hasPending, nil
 }
 
 type stubTurnRunner struct {
 	capturedAgentID, capturedSessionID string
 	capturedInput                      []llm.Block
+	calls                              int
 }
 
 func (s *stubTurnRunner) Turn(ctx context.Context, agentID, sessionID string, input []llm.Block, sink transport.Sink) error {
+	s.calls++
 	s.capturedAgentID = agentID
 	s.capturedSessionID = sessionID
 	s.capturedInput = input
@@ -530,5 +546,53 @@ func TestChatView_HostileArtifactRefRendersDisabledSpan(t *testing.T) {
 	body := renderChatView(t, store, nil)
 	if !strings.Contains(body, `<span class="artifact-link artifact-link-disabled"`) || strings.Contains(body, `href="../../x`) || strings.Contains(body, `/artifacts/MAIN/..`) {
 		t.Errorf("hostile ref rendered as link:\n%s", body)
+	}
+}
+
+// TestChatHandler_ChildSessionIs404 covers the BO root-only rule at the
+// handler layer: every per-session route answers a child id with 404 before
+// touching the store, the orchestrator or (nil here) the header-override,
+// feedback and dataset repositories.
+func TestChatHandler_ChildSessionIs404(t *testing.T) {
+	store := &stubChatStore{child: true}
+	runner := &stubTurnRunner{}
+	h := newTestChatHandlerWithStore(t, store, runner, emptyTemplateFS())
+	cases := []struct {
+		name, method, body string
+		fn                 http.HandlerFunc
+	}{
+		{"ChatView", "GET", "", h.ChatView},
+		{"UpdateSessionTitle", "PATCH", `{"title":"x"}`, h.UpdateSessionTitle},
+		{"Turn", "POST", `{"input":[{"type":"text","text":"hi"}]}`, h.Turn},
+		{"ShowHeaderOverridesModal", "GET", "", h.ShowHeaderOverridesModal},
+		{"UpdateHeaderOverrides", "POST", "", h.UpdateHeaderOverrides},
+		{"AssignDatasetModal", "GET", "", h.AssignDatasetModal},
+		{"AssignDataset", "POST", "dataset_id=d", h.AssignDataset},
+		{"UnassignDataset", "DELETE", "", h.UnassignDataset},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(c.method, "/", strings.NewReader(c.body))
+			r.SetPathValue("version_id", "v")
+			r.SetPathValue("session_id", testSID)
+			w := httptest.NewRecorder()
+			c.fn(w, r)
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("status %d, want 404: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+	if store.calls != 0 || runner.calls != 0 {
+		t.Fatalf("store calls=%d runner calls=%d, want 0", store.calls, runner.calls)
+	}
+
+	// Malformed ids are a 404 too, not a 500 from the ::uuid cast.
+	r := httptest.NewRequest("GET", "/", nil)
+	r.SetPathValue("version_id", "v")
+	r.SetPathValue("session_id", "not-a-uuid")
+	w := httptest.NewRecorder()
+	h.ShowHeaderOverridesModal(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("malformed id: status %d, want 404", w.Code)
 	}
 }
