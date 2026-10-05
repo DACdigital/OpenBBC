@@ -9,7 +9,13 @@
           {{if lt (deref .Eval.Score) 1.0}}
             <form method="post" action="/training-sessions" style="display:inline">
               <input type="hidden" name="source_eval_id" value="{{.Eval.ID}}">
+              {{if $.AgentToolEnabled}}
+              <button type="button" class="btn-primary" disabled
+                      style="opacity:0.4;cursor:not-allowed"
+                      title="Evaluating multi-agent versions is not supported yet">Train</button>
+              {{else}}
               <button type="submit" class="btn-primary" title="Queue a training session for this eval. New agent version will be created when training completes.">Train</button>
+              {{end}}
             </form>
           {{end}}
         {{end}}

@@ -256,7 +256,7 @@ func (r *AgentRepository) List(ctx context.Context) ([]*types.Agent, error) {
 func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT a.id::text, a.name,
-		       av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.created_at, av.updated_at
+		       av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.agent_tool_enabled, av.created_at, av.updated_at
 		FROM agents a
 		LEFT JOIN agent_versions av ON av.agent_id = a.id
 		ORDER BY a.created_at, av.created_at
@@ -274,8 +274,9 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentGroup, 
 		var vAgentID sql.NullString
 		var vParent sql.NullString
 		var vStatus sql.NullString
+		var vAgentTool sql.NullBool
 		var vCreated, vUpdated sql.NullTime
-		if err := rows.Scan(&aID, &aName, &vID, &vAgentID, &vParent, &vStatus, &vCreated, &vUpdated); err != nil {
+		if err := rows.Scan(&aID, &aName, &vID, &vAgentID, &vParent, &vStatus, &vAgentTool, &vCreated, &vUpdated); err != nil {
 			return nil, err
 		}
 		g, ok := groupsByID[aID]
@@ -288,11 +289,12 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentGroup, 
 			continue // agent with no versions yet
 		}
 		v := &types.AgentVersion{
-			ID:        vID.String,
-			AgentID:   vAgentID.String,
-			Status:    vStatus.String,
-			CreatedAt: vCreated.Time,
-			UpdatedAt: vUpdated.Time,
+			ID:               vID.String,
+			AgentID:          vAgentID.String,
+			Status:           vStatus.String,
+			AgentToolEnabled: vAgentTool.Bool,
+			CreatedAt:        vCreated.Time,
+			UpdatedAt:        vUpdated.Time,
 		}
 		if vParent.Valid {
 			v.ParentVersionID = &vParent.String

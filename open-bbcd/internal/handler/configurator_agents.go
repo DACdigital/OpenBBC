@@ -135,14 +135,15 @@ func (h *ConfiguratorHandler) agentsTabData(ctx context.Context, versionID strin
 	}
 	d := &agentsTabData{
 		configPageData: configPageData{
-			Active:      "agents",
-			VersionID:   version.ID,
-			AgentID:     agent.ID,
-			AgentName:   agent.Name,
-			AgentStatus: version.Status,
-			ReadOnly:    version.Status != string(types.AgentStatusInitializing),
-			HasBundle:   len(agent.Architecture) > 0 && len(version.Prompts) > 0,
-			Tab:         "agents",
+			Active:           "agents",
+			VersionID:        version.ID,
+			AgentID:          agent.ID,
+			AgentName:        agent.Name,
+			AgentStatus:      version.Status,
+			ReadOnly:         version.Status != string(types.AgentStatusInitializing),
+			HasBundle:        len(agent.Architecture) > 0 && len(version.Prompts) > 0,
+			Tab:              "agents",
+			AgentToolEnabled: enabled,
 		},
 		Enabled:     enabled,
 		Bindings:    bindings,

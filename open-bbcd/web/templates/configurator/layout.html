@@ -13,9 +13,15 @@
         <form method="post" action="/agent_versions/{{.VersionID}}/chat/sessions" style="display:inline">
           <button type="submit" class="btn-primary">Run</button>
         </form>
+        {{if .AgentToolEnabled}}
+        <button type="button" class="btn-secondary" disabled
+                style="opacity:0.4;cursor:not-allowed"
+                title="Evaluating multi-agent versions is not supported yet">Evaluate</button>
+        {{else}}
         <button class="btn-secondary"
                 hx-get="/agent_versions/{{.VersionID}}/evals/new"
                 hx-target="body" hx-swap="beforeend">Evaluate</button>
+        {{end}}
         <a href="/agent_versions/{{.VersionID}}/evals" class="btn-secondary">View evals</a>
       {{else}}
         <button type="button" class="btn-secondary" disabled

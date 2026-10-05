@@ -459,6 +459,9 @@ type EvalRowView struct {
 	AgentVersionNum   int
 	DatasetName       string
 	DatasetVersionNum int
+	// AgentToolEnabled is the eval's version's current agent_tool_enabled
+	// (the BO Train button renders disabled when set).
+	AgentToolEnabled bool
 }
 
 // EnrichRows returns one EvalRowView per eval, resolving agent/dataset labels
@@ -484,7 +487,8 @@ func (r *EvalRepository) EnrichRows(ctx context.Context, evals []*types.Eval) ([
 		    a.name,
 		    COALESCE(c.num, 1),
 		    d.name,
-		    dv.version_num
+		    dv.version_num,
+		    av.agent_tool_enabled
 		FROM evals e
 		JOIN agent_versions av ON av.id = e.agent_version_id
 		JOIN agents a ON a.id = av.agent_id
@@ -501,7 +505,7 @@ func (r *EvalRepository) EnrichRows(ctx context.Context, evals []*types.Eval) ([
 	for rows.Next() {
 		var evalID string
 		var v EvalRowView
-		if err := rows.Scan(&evalID, &v.AgentName, &v.AgentVersionNum, &v.DatasetName, &v.DatasetVersionNum); err != nil {
+		if err := rows.Scan(&evalID, &v.AgentName, &v.AgentVersionNum, &v.DatasetName, &v.DatasetVersionNum, &v.AgentToolEnabled); err != nil {
 			return nil, err
 		}
 		labels[evalID] = v

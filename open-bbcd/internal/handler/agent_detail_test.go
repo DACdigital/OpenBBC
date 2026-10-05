@@ -27,6 +27,7 @@ type stubAgentDetailStore struct {
 	versionStatus string // defaults to "INITIALIZING" if empty
 	statusFn      func(versionID, expectedFrom, to string) error
 	deleteErr     error
+	groups        []types.AgentGroup // returned by ListGrouped
 }
 
 func (s *stubAgentDetailStore) rootVersionID() string {
@@ -52,7 +53,7 @@ func (s *stubAgentDetailStore) GetByID(ctx context.Context, agentID string) (*ty
 }
 
 func (s *stubAgentDetailStore) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
-	return nil, nil
+	return s.groups, nil
 }
 
 func (s *stubAgentDetailStore) GetFlowMapConfigForAgent(ctx context.Context, agentID string) ([]byte, string, error) {
