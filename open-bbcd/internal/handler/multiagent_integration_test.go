@@ -118,8 +118,8 @@ func serve(api http.Handler, method, target, contentType, body string) *httptest
 
 const formCT = "application/x-www-form-urlencoded"
 
-// assertNot404Mux fails when a 404 came from the mux (route not registered)
-// rather than from the handler.
+// assertHandler404 wants a 404 written by the handler, not the mux (route not registered)
+// fallback.
 func assertHandler404(t *testing.T, what string, rec *httptest.ResponseRecorder) {
 	t.Helper()
 	if rec.Code != http.StatusNotFound {
