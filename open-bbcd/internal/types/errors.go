@@ -99,4 +99,14 @@ var (
 	ErrEmptyTurn          = errors.New("empty turn: no text and no pending artifacts")
 	ErrPendingArtifactCap = errors.New("session already has ARTIFACT_MAX_PENDING pending artifacts")
 	ErrArtifactConsumed   = errors.New("artifact is already part of the conversation and cannot be removed")
+
+	// Multi-agent (spec: docs/superpowers/specs/2026-10-01-multiagent-feature-design.md).
+	ErrVersionLocked             = errors.New("version: agent-tool config can only change while the version is INITIALIZING or DRAFT")
+	ErrEvalOrTrainingActive      = errors.New("version: agent-tool config cannot change while an eval or training session is pending or in progress")
+	ErrBindingConflict           = errors.New("sub-agent binding: name or target already bound on this version")
+	ErrVersionReferenced         = errors.New("version: cannot delete; it is a sub-agent binding target, runs a deployed sub-agent session, or has locked BO sessions")
+	ErrMultiAgentEvalUnsupported = errors.New("multi-agent eval unsupported: evaluating or training versions with the agent tool enabled is not supported yet")
+	ErrToolNameCollision         = errors.New("agent tool: the agent's architecture already has an endpoint tool named \"agent\"")
+	ErrTargetNotRunnable         = errors.New("sub-agent binding: target version must be READY or DEPLOYED")
+	ErrTopologyCycle             = errors.New("sub-agent binding: would create a cycle")
 )
