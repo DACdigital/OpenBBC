@@ -197,18 +197,19 @@ func (r *AgentRepository) Delete(ctx context.Context, agentID string) error {
 		return types.ErrVersionReferenced
 	}
 
-	// Remove the agent's own NO ACTION references first. Postgres runs the
-	// NO ACTION check for a cascaded agent_versions row as soon as the nested
-	// cascade query ends, so a binding from v2 to an older v1 fails a single
-	// DELETE FROM agents whenever v1's check fires before v2's caller cascade.
+	// Remove the agent's own NO ACTION references first. Postgres runs RI
+	// checks row by row in queue order, so the check for an older version can
+	// fire before a newer version's cascade has removed the binding pointing at
+	// it (row-order dependent; a top-level DELETE FROM agent_versions fails the
+	// same way).
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM agent_version_subagent
 		WHERE caller_version_id IN (SELECT id FROM agent_versions WHERE agent_id = $1::uuid)
 	`, agentID); err != nil {
-		return translateVersionFK(err)
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM deployed_sessions WHERE agent_id = $1::uuid`, agentID); err != nil {
-		return translateVersionFK(err)
+		return err
 	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM agents WHERE id = $1::uuid`, agentID)
 	if err != nil {

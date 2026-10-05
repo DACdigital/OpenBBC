@@ -389,8 +389,8 @@ func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context,
 //
 // MCP attachments, the agent-tool flag and sub-agent bindings are copied
 // forward in the same transaction so the new version inherits its
-// predecessor's per-version wiring without manual re-attachment. Endpoint→backend wiring is agent-keyed and doesn't need
-// copying.
+// predecessor's per-version wiring without manual re-attachment.
+// Endpoint→backend wiring is agent-keyed and doesn't need copying.
 //
 // Returns the new version's id.
 func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
