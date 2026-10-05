@@ -286,14 +286,7 @@ func (r *EvalRepository) FailIfMultiAgent(ctx context.Context, evalID string) er
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE training_sessions
-		SET status = 'FAILED',
-		    completed_at = now(),
-		    error_message = $2,
-		    updated_at = now()
-		WHERE source_eval_id = $1::uuid AND status = 'PENDING'
-	`, evalID, types.ErrMultiAgentEvalUnsupported.Error()); err != nil {
+	if err := failTrainingsFromEvalMultiAgentTx(ctx, tx, evalID); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

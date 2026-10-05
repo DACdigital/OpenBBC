@@ -139,14 +139,7 @@ func (r *TrainingSessionRepository) Start(ctx context.Context, id string, epochs
 	}
 	if enabled {
 		if status == string(types.TrainingSessionStatusPending) {
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE training_sessions
-				SET status = 'FAILED',
-				    completed_at = now(),
-				    error_message = $2,
-				    updated_at = now()
-				WHERE id = $1::uuid AND status = 'PENDING'
-			`, id, types.ErrMultiAgentEvalUnsupported.Error()); err != nil {
+			if err := failTrainingMultiAgentTx(ctx, tx, id); err != nil {
 				return err
 			}
 			if err := tx.Commit(); err != nil {
@@ -170,6 +163,33 @@ func (r *TrainingSessionRepository) Start(ctx context.Context, id string, epochs
 		return err
 	}
 	return tx.Commit()
+}
+
+// trainingFailSQL is the UPDATE … SET head shared by every path that moves
+// training sessions to FAILED ($2 = error_message); callers append the WHERE.
+const trainingFailSQL = `
+	UPDATE training_sessions
+	SET status = 'FAILED',
+	    completed_at = now(),
+	    error_message = $2,
+	    updated_at = now()`
+
+// failTrainingMultiAgentTx fails one PENDING training session forward with
+// the multi-agent gate sentinel text.
+func failTrainingMultiAgentTx(ctx context.Context, tx *sql.Tx, id string) error {
+	_, err := tx.ExecContext(ctx, trainingFailSQL+`
+		WHERE id = $1::uuid AND status = 'PENDING'
+	`, id, types.ErrMultiAgentEvalUnsupported.Error())
+	return err
+}
+
+// failTrainingsFromEvalMultiAgentTx fails every PENDING training session
+// sourced from evalID forward with the multi-agent gate sentinel text.
+func failTrainingsFromEvalMultiAgentTx(ctx context.Context, tx *sql.Tx, evalID string) error {
+	_, err := tx.ExecContext(ctx, trainingFailSQL+`
+		WHERE source_eval_id = $1::uuid AND status = 'PENDING'
+	`, evalID, types.ErrMultiAgentEvalUnsupported.Error())
+	return err
 }
 
 // Complete forks a READY agent_version and marks the session DONE in one tx.
@@ -236,12 +256,7 @@ func (r *TrainingSessionRepository) Complete(
 
 // Fail transitions PENDING or IN_PROGRESS → FAILED with the given message.
 func (r *TrainingSessionRepository) Fail(ctx context.Context, id, errorMessage string) error {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE training_sessions
-		SET status = 'FAILED',
-		    completed_at = now(),
-		    error_message = $2,
-		    updated_at = now()
+	res, err := r.db.ExecContext(ctx, trainingFailSQL+`
 		WHERE id = $1::uuid AND status IN ('PENDING','IN_PROGRESS')
 	`, id, errorMessage)
 	if err != nil {

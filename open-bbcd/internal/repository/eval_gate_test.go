@@ -249,12 +249,16 @@ func TestEvalGate_FailIfMultiAgent(t *testing.T) {
 		_, v := seedVersionWithStatus(t, db, types.AgentStatusReady)
 		setToolFlag(t, db, v, true)
 		e := rawEval(t, db, v, "DONE")
+		ts := rawTraining(t, db, e, v)
 		if err := repo.FailIfMultiAgent(ctx, e); !errors.Is(err, types.ErrMultiAgentEvalUnsupported) {
 			t.Fatalf("FailIfMultiAgent = %v, want ErrMultiAgentEvalUnsupported", err)
 		}
 		if g := evalRow(t, db, e); g.status != "DONE" || g.errMsg.String != "" {
 			t.Fatalf("DONE eval changed: %+v", g)
 		}
+		// The PENDING training sourced from a DONE eval is the normal train
+		// case — it is still failed forward.
+		assertFailedWithSentinel(t, "training", trainingRow(t, db, ts))
 	})
 
 	t.Run("unknown", func(t *testing.T) {
@@ -303,6 +307,21 @@ func TestTrainingGate_StartFailsForward(t *testing.T) {
 		t.Fatalf("Start (gated) = %v, want ErrMultiAgentEvalUnsupported", err)
 	}
 	assertFailedWithSentinel(t, "training", trainingRow(t, db, ts))
+
+	// Gated but not PENDING: refused, nothing written.
+	running := rawTraining(t, db, evalID, v)
+	if _, err := db.Exec(`UPDATE training_sessions SET status='IN_PROGRESS', started_at=now() WHERE id=$1::uuid`, running); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Start(ctx, running, 3, 1); !errors.Is(err, types.ErrMultiAgentEvalUnsupported) {
+		t.Fatalf("Start (gated, IN_PROGRESS) = %v, want ErrMultiAgentEvalUnsupported", err)
+	}
+	if g := trainingRow(t, db, running); g.status != "IN_PROGRESS" || g.errMsg.String != "" || g.completed {
+		t.Fatalf("IN_PROGRESS training changed: %+v", g)
+	}
+	if _, err := db.Exec(`UPDATE training_sessions SET status='FAILED', completed_at=now() WHERE id=$1::uuid`, running); err != nil {
+		t.Fatal(err)
+	}
 
 	setToolFlag(t, db, v, false)
 	ok := rawTraining(t, db, evalID, v)
