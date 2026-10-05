@@ -121,6 +121,8 @@ func TestConvertMessage_ToolResult_JSONStringSentAsPlainText(t *testing.T) {
 		{"json string unwrapped", `"hello \"x\""`, `hello "x"`},
 		{"json object passthrough", `{"a":1}`, `{"a":1}`},
 		{"non-json passthrough", `not json`, `not json`},
+		{"json null passthrough", `null`, `null`},
+		{"leading whitespace json string unwrapped", " \"hi\"", `hi`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

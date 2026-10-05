@@ -4,6 +4,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -251,11 +252,14 @@ func convertMessage(m llm.Message) sdk.MessageParam {
 			// Result is json.RawMessage; NewToolResultBlock expects a string.
 			// A JSON string result (e.g. the agent tool's child text) is sent
 			// as its plain-text value so the LLM never sees JSON quoting;
-			// anything else passes through as-is.
+			// anything else (including `null`, which json.Unmarshal would
+			// accept into a string as "") passes through as-is.
 			content := string(x.Result)
-			var s string
-			if err := json.Unmarshal(x.Result, &s); err == nil {
-				content = s
+			if trimmed := bytes.TrimSpace(x.Result); len(trimmed) > 0 && trimmed[0] == '"' {
+				var s string
+				if err := json.Unmarshal(trimmed, &s); err == nil {
+					content = s
+				}
 			}
 			blocks = append(blocks, sdk.NewToolResultBlock(x.ToolUseID, content, x.IsError))
 		case llm.InlineMediaBlock:
