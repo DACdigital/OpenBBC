@@ -72,7 +72,7 @@ func (b *Builder) Build(ctx context.Context, agentID, versionID string, architec
 		// (^[a-zA-Z0-9_-]{1,128}$). The stable id (t.ID) is preserved
 		// separately for FK lookup against the wiring table.
 		ep := HTTPEndpointDef{
-			ID: t.ID, Name: sanitizeToolName(t.Name), Description: t.Description,
+			ID: t.ID, Name: SanitizeToolName(t.Name), Description: t.Description,
 			Method: t.Method, Path: t.Path,
 			PathParams: t.PathParams, QueryParams: t.QueryParams, BodyShape: t.BodyShape,
 		}

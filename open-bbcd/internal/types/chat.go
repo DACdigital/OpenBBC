@@ -12,6 +12,10 @@ type ChatSession struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	LockedAt       *time.Time `json:"locked_at,omitempty"` // set when the session's dataset version closes
+
+	ParentSessionID  *string `json:"parent_session_id,omitempty"`
+	ParentToolCallID string  `json:"parent_tool_call_id,omitempty"`
+	Depth            int     `json:"depth"`
 }
 
 type ChatRole string

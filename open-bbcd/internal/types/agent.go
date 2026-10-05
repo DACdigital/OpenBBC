@@ -50,6 +50,7 @@ type AgentVersion struct {
 	Prompts           json.RawMessage `json:"prompts,omitempty"`
 	FlowMapConfig     json.RawMessage `json:"flow_map_config,omitempty"`
 	FlowMapParseError string          `json:"flow_map_parse_error,omitempty"`
+	AgentToolEnabled  bool            `json:"agent_tool_enabled"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
 }
