@@ -57,16 +57,39 @@ type agentsFormError struct{ msg string }
 func (e *agentsFormError) Error() string { return e.msg }
 func (e *agentsFormError) Unwrap() error { return errAgentsFormInvalid }
 
+// Error slots an Agents-tab error fragment can replace: the tab's banner,
+// or the one inside the add-sub-agent modal (its form posts
+// error_slot=modal, so a refused add keeps the dialog open).
+const (
+	agentsErrorSlotTab   = "agents-error"
+	agentsErrorSlotModal = "agents-modal-error"
+)
+
+// agentsErrorSlot returns the slot named by the request's error_slot form
+// value; anything other than "modal" means the tab's banner.
+func agentsErrorSlot(r *http.Request) string {
+	if r.FormValue("error_slot") == "modal" {
+		return agentsErrorSlotModal
+	}
+	return agentsErrorSlotTab
+}
+
 // renderAgentsError writes statusFor(err) and the #agents-error fragment.
 // 5xx errors are logged and rendered as a generic "internal error".
 func (h *ConfiguratorHandler) renderAgentsError(w http.ResponseWriter, err error) {
-	h.renderAgentsErrorWith(w, err, nil)
+	h.renderAgentsErrorIn(w, err, agentsErrorSlotTab, nil)
 }
 
 // renderAgentsErrorWith is renderAgentsError followed by extra (already
 // rendered) out-of-band fragments; extra is dropped if the error fragment
 // itself fails to render.
 func (h *ConfiguratorHandler) renderAgentsErrorWith(w http.ResponseWriter, err error, extra []byte) {
+	h.renderAgentsErrorIn(w, err, agentsErrorSlotTab, extra)
+}
+
+// renderAgentsErrorIn renders the error fragment with the given slot id (the
+// fragment replaces that element via outerHTML, so it must keep its id).
+func (h *ConfiguratorHandler) renderAgentsErrorIn(w http.ResponseWriter, err error, slot string, extra []byte) {
 	status := statusFor(err)
 	msg := err.Error()
 	if status >= http.StatusInternalServerError {
@@ -74,10 +97,10 @@ func (h *ConfiguratorHandler) renderAgentsErrorWith(w http.ResponseWriter, err e
 		msg = "internal error"
 	}
 	var buf bytes.Buffer
-	if terr := h.agentsTmpl.ExecuteTemplate(&buf, "agents_error", map[string]any{"Message": msg, "OOB": false}); terr != nil {
+	if terr := h.agentsTmpl.ExecuteTemplate(&buf, "agents_error", map[string]any{"Message": msg, "OOB": false, "ID": slot}); terr != nil {
 		slog.Error("template execution failed", slog.String("template", "agents_error"), slog.Any("error", terr))
 		buf.Reset()
-		buf.WriteString(`<div id="agents-error" role="alert">internal error</div>`)
+		buf.WriteString(`<div id="` + slot + `" role="alert">internal error</div>`)
 	} else {
 		buf.Write(extra)
 	}
@@ -200,17 +223,22 @@ func (h *ConfiguratorHandler) AgentsTab(w http.ResponseWriter, r *http.Request) 
 // agentsWrite runs the shared write preamble: version id check, form parse,
 // repo presence. Returns false after rendering an error.
 func (h *ConfiguratorHandler) agentsWritePreamble(w http.ResponseWriter, r *http.Request) (string, bool) {
+	return h.agentsWritePreambleIn(w, r, agentsErrorSlotTab)
+}
+
+// agentsWritePreambleIn is agentsWritePreamble rendering errors into slot.
+func (h *ConfiguratorHandler) agentsWritePreambleIn(w http.ResponseWriter, r *http.Request, slot string) (string, bool) {
 	versionID, err := agentsVersionID(r)
 	if err != nil {
-		h.renderAgentsError(w, err)
+		h.renderAgentsErrorIn(w, err, slot, nil)
 		return "", false
 	}
 	if err := r.ParseForm(); err != nil {
-		h.renderAgentsError(w, errAgentsBadForm("invalid form"))
+		h.renderAgentsErrorIn(w, errAgentsBadForm("invalid form"), slot, nil)
 		return "", false
 	}
 	if h.subAgents == nil {
-		h.renderAgentsError(w, errors.New("sub-agent repository not configured"))
+		h.renderAgentsErrorIn(w, errors.New("sub-agent repository not configured"), slot, nil)
 		return "", false
 	}
 	return versionID, true
@@ -267,21 +295,49 @@ func (h *ConfiguratorHandler) renderRefusedToggle(w http.ResponseWriter, ctx con
 	h.renderAgentsErrorWith(w, cause, buf.Bytes())
 }
 
+// AddSubAgentModal handles GET …/architecture/agents/new: the add-sub-agent
+// dialog, appended to <body> by the tab's "+ Add sub-agent" button. A
+// version whose agent-tool config can't change answers with the tab error
+// fragment instead (409), so no dialog opens.
+func (h *ConfiguratorHandler) AddSubAgentModal(w http.ResponseWriter, r *http.Request) {
+	versionID, err := agentsVersionID(r)
+	if err != nil {
+		h.renderAgentsError(w, err)
+		return
+	}
+	if h.subAgents == nil {
+		h.renderAgentsError(w, errors.New("sub-agent repository not configured"))
+		return
+	}
+	if err := h.subAgents.ConfigWriteBlock(r.Context(), versionID); err != nil {
+		h.renderAgentsError(w, err)
+		return
+	}
+	data, err := h.agentsTabData(r.Context(), versionID)
+	if err != nil {
+		h.renderAgentsError(w, err)
+		return
+	}
+	renderTemplate(w, h.agentsTmpl, "agents_add_modal", data)
+}
+
 // AddSubAgentBinding handles POST …/architecture/agents (form name,
-// target_version_id, note) and answers with the bindings table.
+// target_version_id, note) and answers with the bindings table. Errors go to
+// the slot named by error_slot (the modal posts "modal").
 func (h *ConfiguratorHandler) AddSubAgentBinding(w http.ResponseWriter, r *http.Request) {
-	versionID, ok := h.agentsWritePreamble(w, r)
+	slot := agentsErrorSlot(r)
+	versionID, ok := h.agentsWritePreambleIn(w, r, slot)
 	if !ok {
 		return
 	}
 	target := r.PostFormValue("target_version_id")
 	if !validUUID(target) {
-		h.renderAgentsError(w, errAgentsBadForm("choose a target version"))
+		h.renderAgentsErrorIn(w, errAgentsBadForm("choose a target version"), slot, nil)
 		return
 	}
 	name := strings.TrimSpace(r.PostFormValue("name"))
 	if err := h.subAgents.AddBinding(r.Context(), versionID, name, target, r.PostFormValue("note")); err != nil {
-		h.renderAgentsError(w, err)
+		h.renderAgentsErrorIn(w, err, slot, nil)
 		return
 	}
 	h.renderAgentsAfterWrite(w, r.Context(), versionID, "agents_table", false)

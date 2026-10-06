@@ -296,6 +296,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	// HTML fragments (errors included) for the response-targets extension.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/agents", configuratorHandler.AgentsTab)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents/toggle", configuratorHandler.ToggleAgentTool)
+	mux.HandleFunc("GET /agent_versions/{version_id}/architecture/agents/new", configuratorHandler.AddSubAgentModal)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents", configuratorHandler.AddSubAgentBinding)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents/notes", configuratorHandler.UpdateSubAgentNotes)
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents/{name}/delete", configuratorHandler.DeleteSubAgentBinding)

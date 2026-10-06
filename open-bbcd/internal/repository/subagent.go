@@ -400,7 +400,10 @@ func (r *SubAgentRepository) ListBindableTargets(ctx context.Context, callerID s
 // LabeledBinding is a binding plus its target's display label.
 type LabeledBinding struct {
 	types.SubAgentBinding
-	TargetLabel string
+	TargetLabel      string // `<agent name> · v<n> · <status>`
+	TargetAgentName  string
+	TargetVersionNum int
+	TargetStatus     string
 }
 
 // ListBindingsWithLabels returns the caller's bindings ordered by name, each
@@ -430,6 +433,7 @@ func (r *SubAgentRepository) ListBindingsWithLabels(ctx context.Context, callerI
 			return nil, err
 		}
 		b.TargetLabel = targetLabel(agentName, num, status)
+		b.TargetAgentName, b.TargetVersionNum, b.TargetStatus = agentName, num, status
 		out = append(out, b)
 	}
 	return out, rows.Err()

@@ -172,30 +172,112 @@ func TestAgentsTab_GetDraftEditable(t *testing.T) {
 		`researcher`,
 		`finds facts`,
 		`name="note[researcher]"`,
-		`<optgroup label="helper">`,
-		`helper · v1 · READY`,
-		`<optgroup label="other">`,
-		`other · v1 · DEPLOYED`,
-		// "-" escaped: pattern compiles with the v flag, where an
-		// unescaped trailing "-" in a class is a SyntaxError and the
-		// browser silently drops the constraint.
-		`pattern="[a-z][a-z0-9_\-]{0,39}"`,
+		// Target cell: agent name, version chip and status badge.
+		`<span class="agents-target-name">helper</span>`,
+		`<span class="agents-target-version">v1</span>`,
+		`<span class="badge badge-ready">READY</span>`,
+		`hx-get="/agent_versions/` + caller + `/architecture/agents/new"`,
 		`/architecture/agents/researcher/delete`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
 		}
 	}
-	if strings.Contains(body, `label="wip"`) || strings.Contains(body, `label="boss"`) {
-		t.Error("picker lists a non-runnable agent")
+	if strings.Contains(body, `id="agents-add-form"`) {
+		t.Error("add form is inline; it belongs in the modal")
 	}
 	if !emptyAgentsError.MatchString(body) {
 		t.Error("missing empty #agents-error slot")
 	}
-	posts := strings.Count(body, "hx-post=")
+	// Writes plus the add button (the layout header has other hx-gets).
+	writes := strings.Count(body, "hx-post=") + strings.Count(body, `/architecture/agents/new"`)
 	targets := strings.Count(body, `hx-target-error="#agents-error"`)
-	if posts < 4 || posts != targets {
-		t.Errorf("hx-post=%d, hx-target-error=%d; want ≥4 and equal", posts, targets)
+	if writes < 4 || writes != targets {
+		t.Errorf("hx-post+hx-get=%d, hx-target-error=%d; want ≥4 and equal", writes, targets)
+	}
+}
+
+func agentsModalGET(t *testing.T, h *handler.ConfiguratorHandler, versionID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/architecture/agents/new", nil)
+	req.SetPathValue("version_id", versionID)
+	rec := httptest.NewRecorder()
+	h.AddSubAgentModal(rec, req)
+	return rec
+}
+
+func TestAgentsTab_AddModal(t *testing.T) {
+	db := openConfiguratorTestDB(t)
+	_, caller := seedAgentsVersion(t, db, "boss", types.AgentStatusDraft)
+	_, _ = seedAgentsVersion(t, db, "helper", types.AgentStatusReady)
+	_, _ = seedAgentsVersion(t, db, "other", types.AgentStatusDeployed)
+	_, _ = seedAgentsVersion(t, db, "wip", types.AgentStatusDraft)
+
+	rec := agentsModalGET(t, newConfigHandlerWithDB(t, db), caller)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`class="modal agents-modal"`,
+		`hx-ext="response-targets"`,
+		`id="agents-add-form"`,
+		`hx-post="/agent_versions/` + caller + `/architecture/agents"`,
+		`hx-target-error="#agents-modal-error"`,
+		`name="error_slot" value="modal"`,
+		`id="agents-modal-error"`,
+		`<optgroup label="helper">`,
+		`helper · v1 · READY`,
+		`<optgroup label="other">`,
+		`other · v1 · DEPLOYED`,
+		`data-agent="helper"`,
+		// "-" escaped: pattern compiles with the v flag, where an
+		// unescaped trailing "-" in a class is a SyntaxError and the
+		// browser silently drops the constraint.
+		`pattern="[a-z][a-z0-9_\-]{0,39}"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("modal missing %q", want)
+		}
+	}
+	if strings.Contains(body, `label="wip"`) || strings.Contains(body, `label="boss"`) {
+		t.Error("picker lists a non-runnable agent")
+	}
+}
+
+func TestAgentsTab_AddModalRefusedWhenLocked(t *testing.T) {
+	db := openConfiguratorTestDB(t)
+	_, caller := seedAgentsVersion(t, db, "boss", types.AgentStatusReady)
+	rec := agentsModalGET(t, newConfigHandlerWithDB(t, db), caller)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `id="agents-error"`) || strings.Contains(body, "agents-add-form") {
+		t.Errorf("want the tab error fragment and no dialog: %s", body)
+	}
+}
+
+func TestAgentsTab_AddErrorGoesToModalSlot(t *testing.T) {
+	db := openConfiguratorTestDB(t)
+	_, caller := seedAgentsVersion(t, db, "boss", types.AgentStatusDraft)
+	_, wip := seedAgentsVersion(t, db, "wip", types.AgentStatusDraft)
+	h := newConfigHandlerWithDB(t, db)
+
+	modal := addWrite("researcher", wip, "")
+	modal.form.Set("error_slot", "modal")
+	rec := agentsPOST(t, h, caller, modal)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `id="agents-modal-error"`) || strings.Contains(body, `id="agents-error"`) {
+		t.Errorf("modal add error should replace #agents-modal-error: %s", body)
+	}
+
+	// Without error_slot the tab banner is used, as before.
+	rec = agentsPOST(t, h, caller, addWrite("researcher", wip, ""))
+	if body := rec.Body.String(); !strings.Contains(body, `id="agents-error"`) {
+		t.Errorf("tab add error should replace #agents-error: %s", body)
 	}
 }
 
@@ -222,8 +304,8 @@ func TestAgentsTab_GetReadOnly(t *testing.T) {
 				t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 			}
 			body := rec.Body.String()
-			if strings.Contains(body, "hx-post=") {
-				t.Error("read-only tab has write controls (hx-post)")
+			if strings.Contains(body, "hx-post=") || strings.Contains(body, "/architecture/agents/new") {
+				t.Error("read-only tab has write controls (hx-post / add button)")
 			}
 			if strings.Contains(body, `id="agents-add-form"`) {
 				t.Error("read-only tab has the add form")

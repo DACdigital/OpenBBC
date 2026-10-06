@@ -12,7 +12,15 @@
 
   {{template "agents_toggle" .}}
 
-  <h3 class="config-agents-heading">Sub-agents</h3>
+  <div class="config-agents-heading-row">
+    <h3 class="config-agents-heading">Sub-agents</h3>
+    {{if not .Locked}}
+    <button type="button" class="btn-primary config-agents-add-btn"
+            hx-get="/agent_versions/{{.VersionID}}/architecture/agents/new"
+            hx-target="body" hx-swap="beforeend"
+            hx-target-error="#agents-error">+ Add sub-agent</button>
+    {{end}}
+  </div>
   {{template "agents_table" .}}
 
   {{if not .Locked}}
@@ -25,8 +33,6 @@
     {{if .Saved}}<span class="config-mcp-note-saved">Saved ✓</span>{{end}}
   </form>
 
-  <h3 class="config-agents-heading">Add a sub-agent</h3>
-  {{template "agents_add_form" .}}
   {{end}}
 </div>
 {{end}}

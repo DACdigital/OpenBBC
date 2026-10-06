@@ -42,7 +42,7 @@
      stays unchanged. Success fragments carry an out-of-band empty
      #agents-error to clear a previous error. */}}
 
-{{define "agents_error"}}<div id="agents-error" class="config-banner config-banner-error config-agents-error" role="alert"{{if .OOB}} hx-swap-oob="true"{{end}}>{{.Message}}</div>{{end}}
+{{define "agents_error"}}<div id="{{if .ID}}{{.ID}}{{else}}agents-error{{end}}" class="config-banner config-banner-error config-agents-error" role="alert"{{if .OOB}} hx-swap-oob="true"{{end}}>{{.Message}}</div>{{end}}
 
 {{define "agents_toggle"}}
 {{if .Locked}}
@@ -81,7 +81,13 @@
       {{range .Bindings}}
       <tr id="agents-row-{{.Name}}">
         <td><code>{{.Name}}</code></td>
-        <td><a href="/agent_versions/{{.TargetVersionID}}/configure/prompts">{{.TargetLabel}}</a></td>
+        <td class="agents-target-cell">
+          <a class="agents-target" href="/agent_versions/{{.TargetVersionID}}/configure/prompts" title="Open {{.TargetLabel}}">
+            <span class="agents-target-name">{{.TargetAgentName}}</span>
+            <span class="agents-target-version">v{{.TargetVersionNum}}</span>
+          </a>
+          <span class="badge badge-{{statusClass .TargetStatus}}">{{.TargetStatus}}</span>
+        </td>
         <td class="config-mcp-note">
           {{if $.Locked}}{{.Note}}{{else}}
           <textarea name="note[{{.Name}}]" form="agents-notes-form" rows="2"
@@ -107,30 +113,79 @@
 </div>
 {{end}}
 
-{{define "agents_add_form"}}
-<form id="agents-add-form" class="config-agents-add"
-      hx-post="/agent_versions/{{.VersionID}}/architecture/agents"
-      hx-target="#agents-table" hx-swap="outerHTML"
-      hx-target-error="#agents-error">
-  <label>Name
-    <input type="text" name="name" required maxlength="40"
-           pattern="[a-z][a-z0-9_\-]{0,39}" placeholder="researcher"
-           title="lowercase letter first, then lowercase letters, digits, _ or -">
-  </label>
-  <label>Target version
-    <select name="target_version_id" required>
-      <option value="">Select a READY or DEPLOYED version…</option>
-      {{range .TargetGroups}}
-      <optgroup label="{{.AgentName}}">
-        {{range .Targets}}<option value="{{.VersionID}}">{{.Label}}</option>{{end}}
-      </optgroup>
-      {{end}}
-    </select>
-  </label>
-  <label>Note
-    <textarea name="note" rows="2" placeholder="When should the caller delegate to this sub-agent?"></textarea>
-  </label>
-  <button type="submit" class="btn-primary">Add sub-agent</button>
-  {{if not .TargetGroups}}<p class="hint muted">No READY or DEPLOYED versions of other agents to bind yet.</p>{{end}}
-</form>
+{{define "agents_add_modal"}}
+{{/* Appended to <body> by the tab's "+ Add sub-agent" button. hx-ext is
+     repeated here: the dialog sits outside #agents-tab. A refused add swaps
+     its error into #agents-modal-error (error_slot=modal) and keeps the
+     dialog open; a successful one swaps #agents-table and closes it. The
+     close checks the HTTP status, not detail.successful: response-targets
+     clears isError on the 4xx it retargets, so "successful" is true there. */}}
+<div class="modal agents-modal" hx-ext="response-targets"
+     onclick="if(event.target===this)this.remove()"
+     onkeydown="if(event.key==='Escape')this.remove()">
+  <div class="modal-content agents-modal-content" role="dialog" aria-modal="true" aria-labelledby="agents-add-title">
+    <div class="agents-modal-head">
+      <h2 id="agents-add-title">Add a sub-agent</h2>
+      <button type="button" class="agents-modal-close" aria-label="Close" onclick="this.closest('.modal').remove()">×</button>
+    </div>
+    <p class="agents-modal-intro">Bind a pinned READY or DEPLOYED version of another agent. This version can then delegate to it with <code>agent(subagent: "name")</code>.</p>
+    {{template "agents_error" (dict "Message" "" "OOB" false "ID" "agents-modal-error")}}
+    {{if .TargetGroups}}
+    <form id="agents-add-form" class="agents-modal-form"
+          hx-post="/agent_versions/{{.VersionID}}/architecture/agents"
+          hx-target="#agents-table" hx-swap="outerHTML"
+          hx-target-error="#agents-modal-error"
+          hx-on::after-request="if (event.detail.xhr.status < 300) this.closest('.modal').remove()">
+      <input type="hidden" name="error_slot" value="modal">
+      <label class="agents-field">
+        <span class="agents-field-label">Target version</span>
+        <select name="target_version_id" class="field-input" required autofocus
+                onchange="agentsSuggestName(this)">
+          <option value="">Select a READY or DEPLOYED version…</option>
+          {{range .TargetGroups}}
+          <optgroup label="{{.AgentName}}">
+            {{range .Targets}}<option value="{{.VersionID}}" data-agent="{{.AgentName}}">{{.Label}}</option>{{end}}
+          </optgroup>
+          {{end}}
+        </select>
+        <span class="agents-field-hint">The binding always runs this exact version, even after the target agent ships newer ones.</span>
+      </label>
+      <label class="agents-field">
+        <span class="agents-field-label">Name</span>
+        <input type="text" name="name" class="field-input" required maxlength="40"
+               pattern="[a-z][a-z0-9_\-]{0,39}" placeholder="researcher" autocomplete="off"
+               oninput="this.dataset.touched='1'"
+               title="lowercase letter first, then lowercase letters, digits, _ or -">
+        <span class="agents-field-hint">What the calling agent passes as <code>subagent</code>. Lowercase letters, digits, <code>_</code> or <code>-</code>; starts with a letter.</span>
+      </label>
+      <label class="agents-field">
+        <span class="agents-field-label">Note <span class="agents-field-optional">optional</span></span>
+        <textarea name="note" class="field-input" rows="3"
+                  placeholder="e.g. Use for questions that need facts from the product catalogue."></textarea>
+        <span class="agents-field-hint">Shown to the calling agent in the tool description: say when it should delegate here.</span>
+      </label>
+      <div class="modal-actions">
+        <button type="submit">Add sub-agent</button>
+        <button type="button" onclick="this.closest('.modal').remove()">Cancel</button>
+      </div>
+    </form>
+    <script>
+      // Pre-fill the name from the picked agent until the user types one.
+      function agentsSuggestName(sel) {
+        const name = sel.form.elements.name;
+        const opt = sel.selectedOptions[0];
+        if (!opt || !opt.dataset.agent || name.dataset.touched) return;
+        const slug = opt.dataset.agent.toLowerCase()
+          .replace(/[^a-z0-9_-]+/g, '-').replace(/^[^a-z]+/, '').replace(/-+$/, '');
+        name.value = slug.slice(0, 40);
+      }
+    </script>
+    {{else}}
+    <p class="empty-state">No READY or DEPLOYED versions of other agents to bind yet.</p>
+    <div class="modal-actions">
+      <button type="button" onclick="this.closest('.modal').remove()">Close</button>
+    </div>
+    {{end}}
+  </div>
+</div>
 {{end}}
