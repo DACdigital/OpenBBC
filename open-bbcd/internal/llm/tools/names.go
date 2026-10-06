@@ -2,6 +2,10 @@ package tools
 
 import "encoding/json"
 
+// SkillToolName is the LLM-visible name of the built-in Skill meta-tool
+// (Composite, MockHandler). The agent tool is listed right after it.
+const SkillToolName = "Skill"
+
 // AgentToolName is the LLM-visible name of the built-in sub-agent tool.
 const AgentToolName = "agent"
 

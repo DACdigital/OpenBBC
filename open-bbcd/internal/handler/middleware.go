@@ -28,6 +28,10 @@ func (r *responseRecorder) Flush() {
 	}
 }
 
+// Unwrap exposes the wrapped ResponseWriter so http.ResponseController
+// (e.g. SetWriteDeadline on streaming turns) reaches the real connection.
+func (r *responseRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
 // RequestLogger is HTTP middleware that logs every request after it completes.
 func RequestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

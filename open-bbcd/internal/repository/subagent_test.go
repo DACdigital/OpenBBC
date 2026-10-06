@@ -490,3 +490,33 @@ func TestSubAgent_LockDoesNotBlockFKInserts(t *testing.T) {
 		t.Fatalf("FK insert blocked or failed while config lock held: %v", err)
 	}
 }
+
+// AgentVersionRepository.ListSubAgentBindings (the orchestrator's read) sees
+// the same rows, in the same order, as SubAgentRepository.ListBindings.
+func TestAgentVersion_ListSubAgentBindings(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	_, caller := seedVersionWithStatus(t, db, types.AgentStatusDraft)
+	_, target := seedVersionWithStatus(t, db, types.AgentStatusReady)
+	_, target2 := seedVersionWithStatus(t, db, types.AgentStatusReady)
+	rawBind(t, db, caller, "writer", target2)
+	rawBind(t, db, caller, "researcher", target)
+
+	got, err := NewAgentVersionRepository(db).ListSubAgentBindings(ctx, caller)
+	if err != nil {
+		t.Fatalf("ListSubAgentBindings: %v", err)
+	}
+	want, _ := NewSubAgentRepository(db).ListBindings(ctx, caller)
+	if len(got) != 2 || got[0].Name != "researcher" || got[1].Name != "writer" || got[0].TargetVersionID != target {
+		t.Fatalf("ListSubAgentBindings = %+v", got)
+	}
+	for i := range got {
+		if got[i].Name != want[i].Name || got[i].TargetVersionID != want[i].TargetVersionID {
+			t.Fatalf("row %d differs from ListBindings: %+v vs %+v", i, got[i], want[i])
+		}
+	}
+	empty, err := NewAgentVersionRepository(db).ListSubAgentBindings(ctx, target)
+	if err != nil || empty == nil || len(empty) != 0 {
+		t.Fatalf("no bindings = %#v, %v", empty, err)
+	}
+}

@@ -67,10 +67,10 @@ func TestOrchestrator_ArtifactRefsSurviveHistoryReload(t *testing.T) {
 
 	ref := llm.ArtifactRefBlock{StoreID: "MAIN", URI: "sha256/abc", MIME: "application/pdf", SizeBytes: 42, Sha256: "abc", Filename: "q3.pdf"}
 	chats.pending = map[string][]llm.ArtifactRefBlock{"s1": {ref}}
-	if err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "summarise"}}, &recordingSink{}); err != nil {
+	if _, err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "summarise"}}, &recordingSink{}, TurnOpts{}); err != nil {
 		t.Fatalf("turn 1: %v", err)
 	}
-	if err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "and again"}}, &recordingSink{}); err != nil {
+	if _, err := o.Turn(ctx, "v1", "s1", []llm.Block{llm.TextBlock{Text: "and again"}}, &recordingSink{}, TurnOpts{}); err != nil {
 		t.Fatalf("turn 2: %v", err)
 	}
 
@@ -92,7 +92,7 @@ func TestOrchestrator_ToolMessage_ResultsBeforeRefs(t *testing.T) {
 		{ToolUseID: "tu1", Output: imageToolOutput()},
 		{ToolUseID: "tu2", Output: []byte(`{}`)},
 	})
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}, TurnOpts{}); err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
 	tm := messagesWithRole(chats, types.ChatRoleTool)
@@ -111,7 +111,7 @@ func TestOrchestrator_ErrorFlaggedToolResultIsNormalised(t *testing.T) {
 	o, chats, up := newArtifactOrchestrator(t, flm, []tools.Result{
 		{ToolUseID: "tu1", Output: imageToolOutput(), IsError: true},
 	})
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}, TurnOpts{}); err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
 	if up.uploads != 1 {
@@ -142,7 +142,7 @@ func TestOrchestrator_ArtifactRefAfterToolMessagePersisted(t *testing.T) {
 		{ToolUseID: "tu2", Output: []byte(`{}`)},
 	})
 	sink := &recordingSink{}
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink, TurnOpts{}); err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
 	refIdx := eventIndex(sink.events, func(e transport.Event) bool { _, ok := e.(transport.ArtifactRefEvent); return ok })
@@ -172,7 +172,7 @@ func TestOrchestrator_NoArtifactRefWhenToolMessagePersistFails(t *testing.T) {
 	o, chats, _ := newArtifactOrchestrator(t, flm, []tools.Result{{ToolUseID: "tu1", Output: imageToolOutput()}})
 	chats.failRole = types.ChatRoleTool
 	sink := &recordingSink{}
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink); err == nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink, TurnOpts{}); err == nil {
 		t.Fatal("expected Turn error when the tool message fails to persist")
 	}
 	if eventIndex(sink.events, func(e transport.Event) bool {
@@ -194,7 +194,7 @@ func TestOrchestrator_ArtifactRefOrder_ToolCallThenItem(t *testing.T) {
 		{ToolUseID: "tu2", Output: []byte(`{"content":[` + img + `]}`)},
 	})
 	sink := &recordingSink{}
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink, TurnOpts{}); err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
 	var refIDs []string
@@ -243,7 +243,7 @@ func TestOrchestrator_BudgetHoldsAcrossToolRounds(t *testing.T) {
 		{ToolUseID: "t3", Output: imageToolOutput()},
 	})
 	o.WithArtifacts(func(string) llm.ArtifactFetcher { return &countingFetcher{} })
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}, TurnOpts{}); err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
 	final := flm.requests[len(flm.requests)-1]
@@ -292,7 +292,7 @@ func TestOrchestrator_BlobFetchedOncePerTurn(t *testing.T) {
 	})
 	f := &countingFetcher{}
 	o.WithArtifacts(func(string) llm.ArtifactFetcher { return f })
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}, TurnOpts{}); err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
 	// The image ref is sent on calls 2 and 3.
@@ -312,7 +312,7 @@ func TestOrchestrator_NoUploader_ToolResultPassesThroughUnchanged(t *testing.T) 
 	out := imageToolOutput()
 	o := NewOrchestrator(agents, chats, flm, &fakeBuilder{handler: &fakeTools{results: []tools.Result{{ToolUseID: "tu1", Output: out}}}}, slog.Default())
 	sink := &recordingSink{}
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, sink, TurnOpts{}); err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
 	var streamed []transport.ToolResultEvent

@@ -44,17 +44,26 @@ type TextEndEvent struct {
 type ToolCallStartEvent struct {
 	ToolCallID string
 	Name       string
+	// ChildSessionID is set when the event comes from a sub-agent child
+	// session; empty for the session's own events.
+	ChildSessionID string `json:"child_session_id,omitempty"`
 }
 
 // ToolCallArgsEvent: streamed JSON fragment of the tool call's arguments.
 type ToolCallArgsEvent struct {
 	ToolCallID string
 	ArgsJSON   string
+	// ChildSessionID is set when the event comes from a sub-agent child
+	// session; empty for the session's own events.
+	ChildSessionID string `json:"child_session_id,omitempty"`
 }
 
 // ToolCallEndEvent: the tool call's arguments are complete.
 type ToolCallEndEvent struct {
 	ToolCallID string
+	// ChildSessionID is set when the event comes from a sub-agent child
+	// session; empty for the session's own events.
+	ChildSessionID string `json:"child_session_id,omitempty"`
 }
 
 // ToolResultEvent: the orchestrator (not the model) has executed the tool
@@ -63,6 +72,27 @@ type ToolResultEvent struct {
 	ToolCallID string
 	Result     json.RawMessage
 	IsError    bool
+	// ChildSessionID is set when the event comes from a sub-agent child
+	// session; empty for the session's own events.
+	ChildSessionID string `json:"child_session_id,omitempty"`
+}
+
+// StepStartedEvent brackets one sub-agent run on the parent stream (spec §
+// AG-UI stream). ToolCallID is the wire id of the parent's agent call (never
+// re-prefixed by transports); ChildSessionID is the child session.
+type StepStartedEvent struct {
+	StepName       string // binding name
+	ToolCallID     string
+	ChildSessionID string
+	Description    string
+}
+
+// StepFinishedEvent closes the StepStartedEvent with the same ToolCallID.
+type StepFinishedEvent struct {
+	StepName       string
+	ToolCallID     string
+	ChildSessionID string
+	IsError        bool
 }
 
 // ArtifactRefEvent: a tool result produced an artifact. Sent after the
@@ -104,6 +134,8 @@ func (ToolCallStartEvent) isEvent() {}
 func (ToolCallArgsEvent) isEvent()  {}
 func (ToolCallEndEvent) isEvent()   {}
 func (ToolResultEvent) isEvent()    {}
+func (StepStartedEvent) isEvent()   {}
+func (StepFinishedEvent) isEvent()  {}
 func (ArtifactRefEvent) isEvent()   {}
 func (TurnEndEvent) isEvent()       {}
 func (ErrorEvent) isEvent()         {}

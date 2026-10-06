@@ -122,7 +122,7 @@ func (h *MockHandler) Call(ctx context.Context, bundle json.RawMessage, call Cal
 	}
 
 	// Skill meta-tool — real lookup via shared helper.
-	if call.Name == "Skill" {
+	if call.Name == SkillToolName {
 		return callSkillMetaTool(bundle, call)
 	}
 

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -31,6 +32,9 @@ type ToolHandlerBuilder interface {
 // its owning agent (for the architecture blob). One trip via GetWithAgent.
 type AgentReader interface {
 	GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error)
+	// ListSubAgentBindings returns the version's agent-tool bindings
+	// (pinned target version, tool-facing name, note).
+	ListSubAgentBindings(ctx context.Context, versionID string) ([]types.SubAgentBinding, error)
 }
 
 // ChatStore is the narrow chat-repo interface the orchestrator needs.
@@ -55,6 +59,11 @@ type ChatStore interface {
 	// transaction. refs may be empty.
 	AppendToolMessage(ctx context.Context, agentVersionID string, msg types.ChatMessage, refs []llm.ArtifactRefBlock) error
 	NextSeq(ctx context.Context, sessionID string) (int, error)
+	// CreateChildSession inserts a sub-agent child session under parentID
+	// in rootID's tree, pinned to targetVersionID, and returns its id.
+	// parentToolCallID is the raw tool_use id. types.ErrSessionLocked when
+	// the (BO) root is locked.
+	CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error)
 }
 
 // ArtifactFetcherResolver resolves an llm.ArtifactFetcher for a given
@@ -73,18 +82,26 @@ type ArtifactFetcherResolver func(storeID string) llm.ArtifactFetcher
 var ErrInlineMediaNotPersistable = errors.New("chat: inline media blocks must never be persisted")
 
 type Orchestrator struct {
-	agents            AgentReader
-	chats             ChatStore
-	llm               llm.LLM
-	builder           ToolHandlerBuilder
-	logger            *slog.Logger
-	artifactResolver  ArtifactFetcherResolver
-	artifactUploader  ArtifactUploader
+	agents           AgentReader
+	chats            ChatStore
+	llm              llm.LLM
+	builder          ToolHandlerBuilder
+	logger           *slog.Logger
+	artifactResolver ArtifactFetcherResolver
+	artifactUploader ArtifactUploader
 
 	// Tunables; set by NewAPI from config. Sensible defaults baked in.
 	Model         string
 	MaxTokens     int
 	MaxToolRounds int
+	// Agent-tool caps: a call from a session at depth MaxDepth is refused
+	// (root is depth 0); at most MaxParallel agent calls of one assistant
+	// step run concurrently.
+	MaxDepth    int
+	MaxParallel int
+
+	// runner executes agent calls as child turns; tests may replace it.
+	runner subAgentRunner
 }
 
 // WithArtifacts wires a resolver for looking up ArtifactFetchers by
@@ -119,7 +136,7 @@ func NewOrchestrator(agents AgentReader, chats ChatStore, l llm.LLM, b ToolHandl
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Orchestrator{
+	o := &Orchestrator{
 		agents:        agents,
 		chats:         chats,
 		llm:           l,
@@ -128,35 +145,69 @@ func NewOrchestrator(agents AgentReader, chats ChatStore, l llm.LLM, b ToolHandl
 		Model:         "claude-sonnet-4-6",
 		MaxTokens:     4096,
 		MaxToolRounds: 10,
+		MaxDepth:      3,
+		MaxParallel:   4,
 	}
+	o.runner = &turnRunner{o: o}
+	return o
 }
 
-// Turn runs one chat turn end-to-end. Caller owns the Sink + HTTP
-// connection. Stream-level errors are emitted as ErrorEvent and don't
-// abort the function; only unrecoverable errors (bundle missing, session
-// mismatch, persistence failures, an empty turn — types.ErrEmptyTurn)
-// return non-nil error.
+// TurnOpts carries the sub-agent tree position of a turn. The zero value is
+// a root turn; Turn normalises RootSessionID to the session id when empty.
+type TurnOpts struct {
+	Depth            int    // 0 for root turns
+	ParentSessionID  string // empty for root turns
+	ParentToolCallID string // raw tool_use id from the parent's persisted message (never prefixed)
+	RootSessionID    string // id of the tree's root session; equals the session id for root turns
+}
+
+// Turn runs one chat turn end-to-end. The caller owns the Sink (and closes
+// it) and the HTTP connection; Turn never closes the sink. Stream-level
+// errors are emitted as ErrorEvent and don't abort the function; only
+// unrecoverable errors (bundle missing, session mismatch, persistence
+// failures, an empty turn — types.ErrEmptyTurn) return non-nil error.
 //
 // The inner loop runs the LLM, executes any tool calls it emits, and
 // re-runs the LLM with the results appended — up to MaxToolRounds times.
 // On cap, stopReason is set to "max_tool_rounds" and the turn ends cleanly.
+//
+// The returned stop reason is the provider's last non-tool_use stop reason
+// (end_turn, max_tokens, …) or "max_tool_rounds"; it is empty on error.
+// The tool handler returned by Build is closed when Turn returns if it
+// implements io.Closer.
 func (o *Orchestrator) Turn(
 	ctx context.Context,
 	agentID, sessionID string,
 	userInput []llm.Block,
 	sink transport.Sink,
-) error {
+	opts TurnOpts,
+) (string, error) {
+	if opts.RootSessionID == "" {
+		opts.RootSessionID = sessionID
+	}
+	// Base log attributes shared by failTurn and the completion line. Child
+	// turns also carry their parent's ids.
+	logAttrs := []any{
+		slog.String("agent_id", agentID),
+		slog.String("session_id", sessionID),
+	}
+	if opts.ParentSessionID != "" {
+		logAttrs = append(logAttrs,
+			slog.String("parent_session_id", opts.ParentSessionID),
+			slog.String("parent_tool_call_id", opts.ParentToolCallID),
+		)
+	}
+
 	// failTurn logs the error with context and emits a RUN_ERROR event via
 	// the sink so the chat UI sees the message in-band. Returns err so
-	// callers can `return failTurn(...)`.
+	// callers can `return "", failTurn(...)`.
 	failTurn := func(code, stage string, err error) error {
-		o.logger.Error("chat turn failed",
-			slog.String("agent_id", agentID),
-			slog.String("session_id", sessionID),
+		attrs := append(append([]any{}, logAttrs...),
 			slog.String("stage", stage),
 			slog.String("code", code),
 			slog.Any("err", err),
 		)
+		o.logger.Error("chat turn failed", attrs...)
 		_ = sink.Send(ctx, transport.ErrorEvent{Code: code, Message: err.Error()})
 		return err
 	}
@@ -168,23 +219,23 @@ func (o *Orchestrator) Turn(
 	// frozen architecture (endpoints + metadata).
 	version, agent, err := o.agents.GetWithAgent(ctx, agentID)
 	if err != nil {
-		return failTurn("agent_load", "load_agent", err)
+		return "", failTurn("agent_load", "load_agent", err)
 	}
 	if len(agent.Architecture) == 0 || len(version.Prompts) == 0 {
-		return failTurn("agent_not_runnable", "verify_finalized", types.ErrAgentNotRunnable)
+		return "", failTurn("agent_not_runnable", "verify_finalized", types.ErrAgentNotRunnable)
 	}
 
 	// 2. Ensure session row exists (lazy-create). The ChatStore impl decides
 	// how to interpret the second arg (version-id for BO chat,
 	// per-agent-id for deployed runtime).
 	if err := o.chats.EnsureSession(ctx, sessionID, agentID); err != nil {
-		return failTurn("session_error", "ensure_session", err)
+		return "", failTurn("session_error", "ensure_session", err)
 	}
 
 	// 3. Load history.
 	history, err := o.chats.LoadMessages(ctx, sessionID)
 	if err != nil {
-		return failTurn("history_load", "load_messages", err)
+		return "", failTurn("history_load", "load_messages", err)
 	}
 
 	// 4. Build LLM request. Main prompt lives on the version's prompts blob;
@@ -193,17 +244,49 @@ func (o *Orchestrator) Turn(
 		MainPrompt string `json:"main_prompt"`
 	}
 	if err := json.Unmarshal(version.Prompts, &promptsHead); err != nil {
-		return failTurn("prompts_parse", "parse_prompts", err)
+		return "", failTurn("prompts_parse", "parse_prompts", err)
 	}
 
 	toolHandler, err := o.builder.Build(ctx, agent.ID, version.ID, agent.Architecture)
 	if err != nil {
-		return failTurn("tool_handler_init", "build_tool_handler", err)
+		return "", failTurn("tool_handler_init", "build_tool_handler", err)
+	}
+	// Every turn, root or child, releases what its handler holds (MCP
+	// sessions) whether it succeeds or fails.
+	if c, ok := toolHandler.(io.Closer); ok {
+		defer func() {
+			if err := c.Close(); err != nil {
+				o.logger.Warn("tool handler close failed", append(append([]any{}, logAttrs...), slog.Any("err", err))...)
+			}
+		}()
 	}
 
 	toolDefs, err := toolHandler.Tools(agent.Architecture)
 	if err != nil {
-		return failTurn("tools_init", "build_tool_defs", err)
+		return "", failTurn("tools_init", "build_tool_defs", err)
+	}
+	// The built-in agent tool: exposed right after Skill when the version
+	// enables it and has bindings. bindingsByName stays nil when it is not
+	// exposed, so a stray agent call then goes through toolHandler.Call.
+	var bindingsByName map[string]types.SubAgentBinding
+	if version.AgentToolEnabled {
+		bindings, err := o.agents.ListSubAgentBindings(ctx, version.ID)
+		if err != nil {
+			return "", failTurn("tools_init", "list_subagents", err)
+		}
+		if len(bindings) > 0 {
+			if tools.ArchitectureHasEndpointTool(agent.Architecture, tools.AgentToolName) {
+				// Config-time checks refuse this; an INITIALIZING version can
+				// still enable the tool before its architecture lands.
+				o.logger.Warn("agent tool omitted: endpoint tool name collision", logAttrs...)
+			} else {
+				toolDefs = insertAgentToolDef(toolDefs, agentToolDef(bindings))
+				bindingsByName = make(map[string]types.SubAgentBinding, len(bindings))
+				for _, b := range bindings {
+					bindingsByName[b.Name] = b
+				}
+			}
+		}
 	}
 
 	// 5. Persist the user message NOW (before the LLM call), claiming every
@@ -219,11 +302,11 @@ func (o *Orchestrator) Turn(
 	userMsgID := uuid.NewString()
 	userContent, err := blocksToJSON(textInput)
 	if err != nil {
-		return failTurn("encode_user_msg", "serialize_user_blocks", err)
+		return "", failTurn("encode_user_msg", "serialize_user_blocks", err)
 	}
 	userSeq, err := o.chats.NextSeq(ctx, sessionID)
 	if err != nil {
-		return failTurn("seq_assign", "next_seq_user", err)
+		return "", failTurn("seq_assign", "next_seq_user", err)
 	}
 	claimed, err := o.chats.AppendUserTurn(ctx, version.ID, types.ChatMessage{
 		ID:        userMsgID,
@@ -236,15 +319,15 @@ func (o *Orchestrator) Turn(
 		// Handlers normally reject empty turns with 400 before the stream
 		// opens; reaching here means the pending queue emptied between
 		// their check and the claim (e.g. a racing DELETE).
-		return failTurn("empty_turn", "claim_pending_artifacts", err)
+		return "", failTurn("empty_turn", "claim_pending_artifacts", err)
 	}
 	if errors.Is(err, types.ErrSessionLocked) {
 		// A dataset close locked the BO session after the handler's check;
 		// the claim re-reads locked_at and refuses, persisting nothing.
-		return failTurn("session_locked", "claim_pending_artifacts", err)
+		return "", failTurn("session_locked", "claim_pending_artifacts", err)
 	}
 	if err != nil {
-		return failTurn("persist_user_msg", "append_user_msg", err)
+		return "", failTurn("persist_user_msg", "append_user_msg", err)
 	}
 	userBlocks := textInput
 	for _, ref := range claimed {
@@ -285,6 +368,10 @@ func (o *Orchestrator) Turn(
 			pendingToolUses     []llm.ToolUseBlock
 			inputBuffers        = map[string]*bytes.Buffer{}
 			stopReasonThisRound string
+			// invalidInput: tool_use ids whose streamed input was not a
+			// JSON object. Their block input is replaced by {} and dispatch
+			// answers them with an error result instead of running them.
+			invalidInput = map[string]bool{}
 		)
 
 		// req.Messages always holds the ref form. Every LLM call renders a
@@ -293,7 +380,7 @@ func (o *Orchestrator) Turn(
 		// that could be persisted.
 		rendered, renderErr := renderArtifactsForLLM(ctx, req.Messages, o.llm, o.artifactResolver, renderCache, o.logger)
 		if renderErr != nil {
-			return failTurn("artifact_render", "render_artifacts", renderErr)
+			return "", failTurn("artifact_render", "render_artifacts", renderErr)
 		}
 		callReq := req
 		callReq.Messages = rendered
@@ -303,7 +390,7 @@ func (o *Orchestrator) Turn(
 
 		for ev, err := range o.llm.Generate(ctx, callReq) {
 			if err != nil {
-				return failTurn("llm_error", "llm_generate", err)
+				return "", failTurn("llm_error", "llm_generate", err)
 			}
 			switch e := ev.(type) {
 			case llm.TextDeltaEvent:
@@ -334,6 +421,18 @@ func (o *Orchestrator) Turn(
 				// Finalize the ToolUseBlock with accumulated input bytes.
 				if buf, ok := inputBuffers[e.ID]; ok {
 					inputBytes := buf.Bytes()
+					// The block is persisted and re-sent to the provider,
+					// which requires an object: anything else (unparsable,
+					// null, array, scalar) becomes {} (flagged for
+					// dispatch); empty input is a no-argument call and
+					// becomes {} as well.
+					trimmed := bytes.TrimSpace(inputBytes)
+					if len(trimmed) == 0 {
+						inputBytes = []byte(`{}`)
+					} else if trimmed[0] != '{' || !json.Valid(trimmed) {
+						inputBytes = []byte(`{}`)
+						invalidInput[e.ID] = true
+					}
 					for i, b := range assistantBlocks {
 						if tu, ok := b.(llm.ToolUseBlock); ok && tu.ID == e.ID {
 							tu.Input = inputBytes
@@ -359,14 +458,35 @@ func (o *Orchestrator) Turn(
 
 		_ = sink.Send(ctx, transport.TextEndEvent{MessageID: assistantMsgID})
 
+		// A round that did not stop for tool_use (max_tokens mid-call, …)
+		// gets no tool_result message, so a truncated tool_use must not be
+		// persisted: replaying it unanswered would make the provider reject
+		// every later turn of the session. If nothing else is left the
+		// round persists nothing (an empty assistant message is rejected
+		// on replay too).
+		if stopReasonThisRound != "tool_use" && len(invalidInput) > 0 {
+			kept := assistantBlocks[:0]
+			for _, b := range assistantBlocks {
+				if tu, ok := b.(llm.ToolUseBlock); ok && invalidInput[tu.ID] {
+					continue
+				}
+				kept = append(kept, b)
+			}
+			assistantBlocks = kept
+			if len(assistantBlocks) == 0 {
+				stopReason = stopReasonThisRound
+				break
+			}
+		}
+
 		// Persist assistant message for this round.
 		assistantContent, err := blocksToJSON(assistantBlocks)
 		if err != nil {
-			return failTurn("encode_assistant_msg", "serialize_assistant_blocks", err)
+			return "", failTurn("encode_assistant_msg", "serialize_assistant_blocks", err)
 		}
 		assistantSeq, err := o.chats.NextSeq(ctx, sessionID)
 		if err != nil {
-			return failTurn("seq_assign", "next_seq_assistant", err)
+			return "", failTurn("seq_assign", "next_seq_assistant", err)
 		}
 		if err := o.chats.AppendMessages(ctx, version.ID, []types.ChatMessage{{
 			ID:        assistantMsgID,
@@ -375,7 +495,7 @@ func (o *Orchestrator) Turn(
 			Content:   assistantContent,
 			Seq:       assistantSeq,
 		}}); err != nil {
-			return failTurn("persist_assistant_msg", "append_assistant_msg", err)
+			return "", failTurn("persist_assistant_msg", "append_assistant_msg", err)
 		}
 
 		stopReason = stopReasonThisRound
@@ -394,10 +514,33 @@ func (o *Orchestrator) Turn(
 		// order), then every artifact_ref (tool-call order, then item
 		// order). Anthropic rejects a user message answering tool_use
 		// whose content does not start with the tool_result blocks.
-		toolResults := make([]llm.Block, 0, len(pendingToolUses))
+		//
+		// Non-agent calls run first, sequentially, in tool_use order. Then
+		// the step's agent calls run concurrently (bounded by MaxParallel)
+		// as child turns; each result lands in its tool_use slot. Every
+		// sink event of the step goes through one lockedSink, which the
+		// children share.
+		shared := newLockedSink(sink)
+		results := make([]llm.ToolResultBlock, len(pendingToolUses))
+		var agentIdx []int
 		var toolRefs []llm.ArtifactRefBlock
 		var refEvents []transport.ArtifactRefEvent
-		for _, tu := range pendingToolUses {
+		for i, tu := range pendingToolUses {
+			isAgent := bindingsByName != nil && tu.Name == tools.AgentToolName
+			if invalidInput[tu.ID] {
+				if isAgent {
+					results[i] = agentErrorResult(tu.ID, &agentToolError{Code: "invalid_input", Details: "tool input is not a JSON object"})
+				} else {
+					errMsg, _ := json.Marshal(map[string]string{"error": "tool input is not a JSON object"})
+					results[i] = llm.ToolResultBlock{ToolUseID: tu.ID, Result: errMsg, IsError: true}
+				}
+				_ = shared.Send(ctx, transport.ToolResultEvent{ToolCallID: tu.ID, Result: results[i].Result, IsError: true})
+				continue
+			}
+			if isAgent {
+				agentIdx = append(agentIdx, i)
+				continue
+			}
 			res, err := toolHandler.Call(ctx, agent.Architecture, tools.Call{
 				ID:    tu.ID,
 				Name:  tu.Name,
@@ -429,16 +572,23 @@ func (o *Orchestrator) Turn(
 					})
 				}
 			}
-			_ = sink.Send(ctx, transport.ToolResultEvent{
+			_ = shared.Send(ctx, transport.ToolResultEvent{
 				ToolCallID: tu.ID,
 				Result:     res.Output,
 				IsError:    res.IsError,
 			})
-			toolResults = append(toolResults, llm.ToolResultBlock{
+			results[i] = llm.ToolResultBlock{
 				ToolUseID: tu.ID,
 				Result:    res.Output,
 				IsError:   res.IsError,
-			})
+			}
+		}
+		if len(agentIdx) > 0 {
+			o.runAgentCalls(ctx, pendingToolUses, agentIdx, results, bindingsByName, sessionID, opts, shared)
+		}
+		toolResults := make([]llm.Block, 0, len(results))
+		for _, r := range results {
+			toolResults = append(toolResults, r)
 		}
 		toolBlocks := toolResults
 		for _, r := range toolRefs {
@@ -450,11 +600,11 @@ func (o *Orchestrator) Turn(
 		toolMsgID := uuid.NewString()
 		toolContent, err := blocksToJSON(toolBlocks)
 		if err != nil {
-			return failTurn("encode_tool_msg", "serialize_tool_blocks", err)
+			return "", failTurn("encode_tool_msg", "serialize_tool_blocks", err)
 		}
 		toolSeq, err := o.chats.NextSeq(ctx, sessionID)
 		if err != nil {
-			return failTurn("seq_assign", "next_seq_tool", err)
+			return "", failTurn("seq_assign", "next_seq_tool", err)
 		}
 		if err := o.chats.AppendToolMessage(ctx, version.ID, types.ChatMessage{
 			ID:        toolMsgID,
@@ -463,7 +613,7 @@ func (o *Orchestrator) Turn(
 			Content:   toolContent,
 			Seq:       toolSeq,
 		}, toolRefs); err != nil {
-			return failTurn("persist_tool_msg", "append_tool_msg", err)
+			return "", failTurn("persist_tool_msg", "append_tool_msg", err)
 		}
 		for _, ev := range refEvents {
 			_ = sink.Send(ctx, ev)
@@ -477,22 +627,19 @@ func (o *Orchestrator) Turn(
 		toolRounds++
 	}
 
-	// 8. Turn-end + close sink.
+	// 8. Turn-end. The caller owns and closes the sink.
 	_ = sink.Send(ctx, transport.TurnEndEvent{
 		StopReason: stopReason,
 		UsageIn:    usageIn,
 		UsageOut:   usageOut,
 	})
-	_ = sink.Close()
 
-	o.logger.Info("turn completed",
-		slog.String("agent_id", agentID),
-		slog.String("session_id", sessionID),
+	o.logger.Info("turn completed", append(append([]any{}, logAttrs...),
 		slog.String("stop_reason", stopReason),
 		slog.Int("tokens_in", usageIn),
 		slog.Int("tokens_out", usageOut),
-	)
-	return nil
+	)...)
+	return stopReason, nil
 }
 
 // historyToLLM converts persisted ChatMessage rows to llm.Message values.
@@ -517,11 +664,15 @@ func historyToLLM(rows []*types.ChatMessage) []llm.Message {
 func parseBlocks(raw []json.RawMessage) []llm.Block {
 	out := make([]llm.Block, 0, len(raw))
 	for _, r := range raw {
-		var head struct{ Type string `json:"type"` }
+		var head struct {
+			Type string `json:"type"`
+		}
 		_ = json.Unmarshal(r, &head)
 		switch head.Type {
 		case "text":
-			var b struct{ Text string `json:"text"` }
+			var b struct {
+				Text string `json:"text"`
+			}
 			_ = json.Unmarshal(r, &b)
 			out = append(out, llm.TextBlock{Text: b.Text})
 		case "tool_use":

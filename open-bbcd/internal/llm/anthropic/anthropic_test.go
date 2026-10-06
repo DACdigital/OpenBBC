@@ -112,6 +112,35 @@ func TestConvertMessage_ToolRole_BecomesUser(t *testing.T) {
 	}
 }
 
+func TestConvertMessage_ToolResult_JSONStringSentAsPlainText(t *testing.T) {
+	cases := []struct {
+		name   string
+		result string
+		want   string
+	}{
+		{"json string unwrapped", `"hello \"x\""`, `hello "x"`},
+		{"json object passthrough", `{"a":1}`, `{"a":1}`},
+		{"non-json passthrough", `not json`, `not json`},
+		{"json null passthrough", `null`, `null`},
+		{"leading whitespace json string unwrapped", " \"hi\"", `hi`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := convertMessage(llm.Message{
+				Role:    llm.RoleTool,
+				Content: []llm.Block{llm.ToolResultBlock{ToolUseID: "tu_1", Result: []byte(tc.result)}},
+			})
+			tr := p.Content[0].OfToolResult
+			if tr == nil || len(tr.Content) != 1 || tr.Content[0].OfText == nil {
+				t.Fatalf("unexpected tool result block shape: %+v", p.Content[0])
+			}
+			if got := tr.Content[0].OfText.Text; got != tc.want {
+				t.Fatalf("content = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConvertTool(t *testing.T) {
 	td := llm.ToolDef{
 		Name:        "Skill",

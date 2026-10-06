@@ -38,8 +38,8 @@ func TestOrchestrator_TurnTextOnly(t *testing.T) {
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
 
-	err := o.Turn(context.Background(), "agent-1", "session-1",
-		[]llm.Block{llm.TextBlock{Text: "hi"}}, sink)
+	_, err := o.Turn(context.Background(), "agent-1", "session-1",
+		[]llm.Block{llm.TextBlock{Text: "hi"}}, sink, TurnOpts{})
 	if err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
@@ -73,8 +73,8 @@ func TestOrchestrator_NoBundle_ReturnsErrAgentNotRunnable(t *testing.T) {
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
 
-	err := o.Turn(context.Background(), "agent-1", "s1",
-		[]llm.Block{llm.TextBlock{Text: "hi"}}, sink)
+	_, err := o.Turn(context.Background(), "agent-1", "s1",
+		[]llm.Block{llm.TextBlock{Text: "hi"}}, sink, TurnOpts{})
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -106,8 +106,8 @@ func TestOrchestrator_AssistantTextPersistsConcatenated(t *testing.T) {
 
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
-	if err := o.Turn(context.Background(), "a", "s",
-		[]llm.Block{llm.TextBlock{Text: "hi"}}, sink); err != nil {
+	if _, err := o.Turn(context.Background(), "a", "s",
+		[]llm.Block{llm.TextBlock{Text: "hi"}}, sink, TurnOpts{}); err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
 
@@ -162,8 +162,8 @@ func TestOrchestrator_OneToolRound(t *testing.T) {
 
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
-	if err := o.Turn(context.Background(), "agent-1", "s1",
-		[]llm.Block{llm.TextBlock{Text: "hi"}}, sink); err != nil {
+	if _, err := o.Turn(context.Background(), "agent-1", "s1",
+		[]llm.Block{llm.TextBlock{Text: "hi"}}, sink, TurnOpts{}); err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
 
@@ -214,8 +214,8 @@ func TestOrchestrator_BoundedToolLoop(t *testing.T) {
 
 	var buf bytes.Buffer
 	sink, _ := jsonl.NewFactory().NewWriterSink(&buf)
-	if err := o.Turn(context.Background(), "a", "s",
-		[]llm.Block{llm.TextBlock{Text: "x"}}, sink); err != nil {
+	if _, err := o.Turn(context.Background(), "a", "s",
+		[]llm.Block{llm.TextBlock{Text: "x"}}, sink, TurnOpts{}); err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
 

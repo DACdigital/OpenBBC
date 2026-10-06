@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -112,5 +113,35 @@ func TestComposite_RoutesMixedHTTPAndMCP(t *testing.T) {
 	r, _ = h.Call(context.Background(), nil, Call{ID: "2", Name: "slack__send_message", Input: json.RawMessage(`{}`)})
 	if string(r.Output) != `"mcp-ok"` {
 		t.Fatalf("mcp route: got %s", string(r.Output))
+	}
+}
+
+type closingStubBackend struct {
+	stubBackend
+	closes int
+	err    error
+}
+
+func (c *closingStubBackend) Close() error { c.closes++; return c.err }
+
+func TestComposite_Close_ClosesCloserBackendsOnceAndJoinsErrors(t *testing.T) {
+	boom := errors.New("boom")
+	closer := &closingStubBackend{stubBackend: stubBackend{name: "mcp"}, err: boom}
+	plain := &stubBackend{name: "http"}
+	h := NewComposite([]Backend{plain, closer})
+
+	err := h.Close()
+	if closer.closes != 1 {
+		t.Fatalf("closer.Close calls = %d, want 1", closer.closes)
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("Close err = %v, want wrapping %v", err, boom)
+	}
+}
+
+func TestComposite_Close_NoClosers_NilError(t *testing.T) {
+	h := NewComposite([]Backend{&stubBackend{name: "http"}})
+	if err := h.Close(); err != nil {
+		t.Fatalf("Close err = %v, want nil", err)
 	}
 }

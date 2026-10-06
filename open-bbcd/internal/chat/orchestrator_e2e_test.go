@@ -73,7 +73,7 @@ func TestOrchestrator_E2E_HTTPBackend(t *testing.T) {
 
 	o := NewOrchestrator(fakeAgent, fakeChat, flm, &fakeBuilder{handler: composite}, slog.Default())
 	sink := &recordingSink{}
-	err := o.Turn(context.Background(), "version-1", "session-1", []llm.Block{llm.TextBlock{Text: "hi"}}, sink)
+	_, err := o.Turn(context.Background(), "version-1", "session-1", []llm.Block{llm.TextBlock{Text: "hi"}}, sink, TurnOpts{})
 	if err != nil {
 		t.Fatalf("Turn: %v", err)
 	}

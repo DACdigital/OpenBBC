@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -293,7 +294,16 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
+	// The handler owns the sink; the orchestrator never closes it.
+	defer sink.Close()
 	w.WriteHeader(http.StatusOK)
+
+	// Multi-agent turns routinely outlive the server-wide WriteTimeout;
+	// clear the per-connection deadline for this stream only (spec § Scope,
+	// SSE write-deadline fix). Non-streaming routes keep the 30s timeout.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		h.logger.Warn("deployed turn: clear write deadline failed", slog.Any("err", err))
+	}
 
 	// Build ctx: stash live FE headers, then parse routing envelope.
 	turnCtx := tools.WithForwardedHeaders(r.Context(), r.Header)
@@ -307,7 +317,7 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.orch.Turn(turnCtx, versionID, sessionID, input, sink); err != nil {
+	if _, err := h.orch.Turn(turnCtx, versionID, sessionID, input, sink, chat.TurnOpts{}); err != nil {
 		h.logger.Error("deployed turn failed",
 			slog.String("agent_id", agentID),
 			slog.String("version_id", versionID),

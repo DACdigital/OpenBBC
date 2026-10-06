@@ -22,7 +22,7 @@ func TestOrchestrator_UserTurnClaimsPendingAfterText(t *testing.T) {
 	chats.pending = map[string][]llm.ArtifactRefBlock{"s1": {refA, refB}}
 	sink := &recordingSink{}
 
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "summarise"}}, sink); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "summarise"}}, sink, TurnOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	user := messagesWithRole(chats, types.ChatRoleUser)[0]
@@ -50,7 +50,7 @@ func TestOrchestrator_UserTurnClaimsPendingAfterText(t *testing.T) {
 func TestOrchestrator_InputArtifactRefIsNotPersisted(t *testing.T) {
 	flm := &fakeLLM{script: [][]llm.Event{endRound()}}
 	o, chats, _ := newArtifactOrchestrator(t, flm, nil)
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "hi"}, refA}, &recordingSink{}); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "hi"}, refA}, &recordingSink{}, TurnOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	user := messagesWithRole(chats, types.ChatRoleUser)[0]
@@ -67,7 +67,7 @@ func TestOrchestrator_ArtifactOnlyTurnAccepted(t *testing.T) {
 	flm := &fakeLLM{script: [][]llm.Event{endRound()}}
 	o, chats, _ := newArtifactOrchestrator(t, flm, nil)
 	chats.pending = map[string][]llm.ArtifactRefBlock{"s1": {refA}}
-	if err := o.Turn(context.Background(), "v1", "s1", nil, &recordingSink{}); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", nil, &recordingSink{}, TurnOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	user := messagesWithRole(chats, types.ChatRoleUser)[0]
@@ -88,7 +88,7 @@ func TestOrchestrator_EmptyTurnRace_RunErrorAndNothingPersisted(t *testing.T) {
 		chats.mu.Unlock()
 	}
 	sink := &recordingSink{}
-	err := o.Turn(context.Background(), "v1", "s1", nil, sink)
+	_, err := o.Turn(context.Background(), "v1", "s1", nil, sink, TurnOpts{})
 	if !errors.Is(err, types.ErrEmptyTurn) {
 		t.Fatalf("err = %v, want ErrEmptyTurn", err)
 	}
@@ -117,7 +117,7 @@ func TestOrchestrator_EmptyTurnRace_RunErrorAndNothingPersisted(t *testing.T) {
 func TestOrchestrator_ToolResultRefsRecordedWithToolMessage(t *testing.T) {
 	flm := &fakeLLM{script: [][]llm.Event{toolUseRound("t1"), endRound()}}
 	o, chats, _ := newArtifactOrchestrator(t, flm, []tools.Result{{ToolUseID: "t1", Output: imageToolOutput()}})
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "go"}}, &recordingSink{}, TurnOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(chats.toolRows) != 1 || chats.toolRows[0].Ref.URI == "" {
@@ -137,13 +137,13 @@ func TestOrchestrator_LLMFailureKeepsClaimedRefsForNextTurn(t *testing.T) {
 	flm := &fakeLLM{script: [][]llm.Event{nil, endRound()}, failCall: map[int]error{0: errors.New("upstream 500")}}
 	o, chats, _ := newArtifactOrchestrator(t, flm, nil)
 	chats.pending = map[string][]llm.ArtifactRefBlock{"s1": {refA}}
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "one"}}, &recordingSink{}); err == nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "one"}}, &recordingSink{}, TurnOpts{}); err == nil {
 		t.Fatal("turn 1 should fail")
 	}
 	if len(chats.pending["s1"]) != 0 {
 		t.Fatal("ref not consumed by the failed turn")
 	}
-	if err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "two"}}, &recordingSink{}); err != nil {
+	if _, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "two"}}, &recordingSink{}, TurnOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	// Turn 2's request: history user message (text + ref) + new user message.
@@ -161,7 +161,7 @@ func TestOrchestrator_LockedSessionAtClaim_RunErrorSessionLocked(t *testing.T) {
 	chats.pending = map[string][]llm.ArtifactRefBlock{"s1": {refA}}
 	chats.userTurnErr = types.ErrSessionLocked
 	sink := &recordingSink{}
-	err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "hi"}}, sink)
+	_, err := o.Turn(context.Background(), "v1", "s1", []llm.Block{llm.TextBlock{Text: "hi"}}, sink, TurnOpts{})
 	if !errors.Is(err, types.ErrSessionLocked) {
 		t.Fatalf("err = %v, want ErrSessionLocked", err)
 	}
