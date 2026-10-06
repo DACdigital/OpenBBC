@@ -150,6 +150,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	if err != nil {
 		fatal("init configurator handler", err)
 	}
+	configuratorHandler.WithSubAgents(repository.NewSubAgentRepository(db))
 
 	agentDetailHandler, err := NewAgentDetailHandler(
 		&agentDetailStoreAdapter{agents: agentRepo, versions: versionRepo},
@@ -291,6 +292,14 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	mux.HandleFunc("POST /agent_versions/{version_id}/delete", configuratorHandler.Delete)
 	// Convenience alias under the new top-level "MCP" version tab.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/mcp", configuratorHandler.MCPSubtab)
+	// Agents tab: agent tool toggle + sub-agent bindings. Writes answer with
+	// HTML fragments (errors included) for the response-targets extension.
+	mux.HandleFunc("GET /agent_versions/{version_id}/configure/agents", configuratorHandler.AgentsTab)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents/toggle", configuratorHandler.ToggleAgentTool)
+	mux.HandleFunc("GET /agent_versions/{version_id}/architecture/agents/new", configuratorHandler.AddSubAgentModal)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents", configuratorHandler.AddSubAgentBinding)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents/notes", configuratorHandler.UpdateSubAgentNotes)
+	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/agents/{name}/delete", configuratorHandler.DeleteSubAgentBinding)
 
 	// Agent-level detail page: tabbed Versions / Inputs / Architecture.
 	// Architecture is editable pre-finalize (reads/writes the root version's
@@ -329,6 +338,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/sessions", chatHandler.NewSession)
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat", chatHandler.SessionList)
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}", chatHandler.ChatView)
+	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/children/{child_id}", chatHandler.ChildTranscript)
 	mux.HandleFunc("PATCH /agent_versions/{version_id}/chat/{session_id}/title", chatHandler.UpdateSessionTitle)
 	mux.HandleFunc("POST /agent_versions/{version_id}/chat/{session_id}/turn", chatHandler.Turn)
 	mux.HandleFunc("GET /agent_versions/{version_id}/chat/{session_id}/headers", chatHandler.ShowHeaderOverridesModal)
@@ -412,6 +422,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions", deployedHandler.CreateSession)
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions", deployedHandler.ListSessions)
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{session_id}", deployedHandler.GetSession)
+	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{root_id}/children/{child_id}", deployedHandler.GetChildSession)
 	mux.HandleFunc("PATCH /deployed/{agent_id}/sessions/{session_id}/title", deployedHandler.UpdateTitle)
 	mux.HandleFunc("DELETE /deployed/{agent_id}/sessions/{session_id}", deployedHandler.DeleteSession)
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions/{session_id}/turn", deployedHandler.Turn)

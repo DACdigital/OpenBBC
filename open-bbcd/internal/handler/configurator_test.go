@@ -37,6 +37,7 @@ type stubConfigStore struct {
 	lastPromptsParent string
 	lastPromptsJSON   []byte
 	lastPromptsStatus types.AgentStatus
+	agentToolEnabled  bool
 }
 
 func (s *stubConfigStore) GetVersionNum(ctx context.Context, versionID string) (int, error) {
@@ -59,7 +60,7 @@ func (s *stubConfigStore) GetWithAgent(ctx context.Context, versionID string) (*
 	// The stub uses the URL's version_id for both ids — there's only one
 	// config in this fake, and per-version calls (GetFlowMapConfig /
 	// UpdateFlowMapConfig) ignore the id anyway.
-	version := &types.AgentVersion{ID: versionID, AgentID: versionID, Status: status, Prompts: s.prompts}
+	version := &types.AgentVersion{ID: versionID, AgentID: versionID, Status: status, Prompts: s.prompts, AgentToolEnabled: s.agentToolEnabled}
 	agent := &types.Agent{ID: versionID, Name: s.cfg.Name, Architecture: s.architecture}
 	return version, agent, nil
 }
@@ -749,7 +750,7 @@ func newConfigHandlerWithDB(t *testing.T, db *sql.DB) *handler.ConfiguratorHandl
 	if err != nil {
 		t.Fatalf("NewConfiguratorHandler: %v", err)
 	}
-	return h
+	return h.WithSubAgents(repository.NewSubAgentRepository(db))
 }
 
 // TestDownloadYAML_IncludesAttachedMCPs verifies that DownloadYAML joins the

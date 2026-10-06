@@ -30,6 +30,10 @@ type DeployedStore interface {
 	UpdateSessionTitle(ctx context.Context, agentID, sessionID, userID, title string) error
 	DeleteSession(ctx context.Context, agentID, sessionID, userID string) error
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.DeployedMessage, error)
+	// GetDescendant returns childID iff it is a strict descendant of the
+	// root session rootID; ErrNotFound otherwise. No user scope: callers
+	// verify rootID's ownership first.
+	GetDescendant(ctx context.Context, rootID, childID string) (*types.DeployedSession, error)
 	// HasPendingArtifacts is true when the session has >=1 pending artifact (empty-turn rule).
 	HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error)
 }
@@ -163,6 +167,53 @@ func (h *DeployedHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 		Session  *types.DeployedSession   `json:"session"`
 		Messages []*types.DeployedMessage `json:"messages"`
 	}{sess, msgs})
+}
+
+// GetChildSession handles GET /deployed/{agent_id}/sessions/{root_id}/children/{child_id}
+// (spec § REST — root-only rule and child transcripts). The preamble is
+// GetSession's for root_id; the child is then resolved only through that
+// root's tree. Same JSON shape as GetSession; the child's session carries
+// parent_session_id, parent_tool_call_id, depth and agent_version_id.
+func (h *DeployedHandler) GetChildSession(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	rootID := r.PathValue("root_id")
+	childID := r.PathValue("child_id")
+	if _, ok := h.requireDeployed(w, r, agentID); !ok {
+		return
+	}
+	if !validUUID(rootID) || !validUUID(childID) {
+		Error(w, types.ErrNotFound)
+		return
+	}
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		Error(w, types.ErrUserIDRequired)
+		return
+	}
+	root, err := h.store.GetSession(r.Context(), rootID, userID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	if root.AgentID != agentID {
+		Error(w, types.ErrNotFound)
+		return
+	}
+	child, err := h.store.GetDescendant(r.Context(), rootID, childID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	msgs, err := h.store.LoadMessages(r.Context(), childID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Session  *types.DeployedSession   `json:"session"`
+		Messages []*types.DeployedMessage `json:"messages"`
+	}{child, msgs})
 }
 
 // UpdateTitle handles PATCH /deployed/{agent_id}/sessions/{session_id}/title

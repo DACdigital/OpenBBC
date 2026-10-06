@@ -339,3 +339,102 @@ func (r *SubAgentRepository) ConfigWriteBlock(ctx context.Context, versionID str
 	}
 	return checkCallerWritable(ctx, r.db, versionID, status)
 }
+
+// BindableTarget is one entry of the configurator's target picker: a
+// READY/DEPLOYED version of some agent.
+type BindableTarget struct {
+	AgentID    string
+	AgentName  string
+	VersionID  string
+	VersionNum int
+	Status     string
+}
+
+// Label renders the picker / bindings-table label `<agent name> · v<n> · <status>`.
+func (t BindableTarget) Label() string {
+	return targetLabel(t.AgentName, t.VersionNum, t.Status)
+}
+
+func targetLabel(agentName string, num int, status string) string {
+	return fmt.Sprintf("%s · v%d · %s", agentName, num, status)
+}
+
+// versionChainCTE numbers every version by its position in its agent's
+// parent chain (root = 1), as GetVersionNum does.
+const versionChainCTE = `
+	WITH RECURSIVE chain AS (
+	    SELECT id, parent_version_id, 1 AS num
+	    FROM agent_versions WHERE parent_version_id IS NULL
+	    UNION ALL
+	    SELECT av.id, av.parent_version_id, c.num + 1
+	    FROM agent_versions av JOIN chain c ON av.parent_version_id = c.id
+	)`
+
+// ListBindableTargets lists every READY/DEPLOYED version except callerID,
+// ordered by agent name then version number. Older versions of the caller's
+// own agent are included. Advisory: AddBinding re-checks under the row lock.
+func (r *SubAgentRepository) ListBindableTargets(ctx context.Context, callerID string) ([]BindableTarget, error) {
+	rows, err := r.db.QueryContext(ctx, versionChainCTE+`
+		SELECT a.id::text, a.name, v.id::text, c.num, v.status
+		FROM agent_versions v
+		JOIN agents a ON a.id = v.agent_id
+		JOIN chain c ON c.id = v.id
+		WHERE v.status IN ('READY','DEPLOYED') AND v.id <> $1::uuid
+		ORDER BY a.name, a.id, c.num
+	`, callerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BindableTarget{}
+	for rows.Next() {
+		var t BindableTarget
+		if err := rows.Scan(&t.AgentID, &t.AgentName, &t.VersionID, &t.VersionNum, &t.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// LabeledBinding is a binding plus its target's display label.
+type LabeledBinding struct {
+	types.SubAgentBinding
+	TargetLabel      string // `<agent name> · v<n> · <status>`
+	TargetAgentName  string
+	TargetVersionNum int
+	TargetStatus     string
+}
+
+// ListBindingsWithLabels returns the caller's bindings ordered by name, each
+// with its target's `<agent name> · v<n> · <status>` label.
+func (r *SubAgentRepository) ListBindingsWithLabels(ctx context.Context, callerID string) ([]LabeledBinding, error) {
+	rows, err := r.db.QueryContext(ctx, versionChainCTE+`
+		SELECT s.caller_version_id::text, s.target_version_id::text, s.name, s.note,
+		       s.created_at, s.updated_at, a.name, c.num, v.status
+		FROM agent_version_subagent s
+		JOIN agent_versions v ON v.id = s.target_version_id
+		JOIN agents a ON a.id = v.agent_id
+		JOIN chain c ON c.id = v.id
+		WHERE s.caller_version_id = $1::uuid
+		ORDER BY s.name
+	`, callerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []LabeledBinding{}
+	for rows.Next() {
+		var b LabeledBinding
+		var agentName, status string
+		var num int
+		if err := rows.Scan(&b.CallerVersionID, &b.TargetVersionID, &b.Name, &b.Note,
+			&b.CreatedAt, &b.UpdatedAt, &agentName, &num, &status); err != nil {
+			return nil, err
+		}
+		b.TargetLabel = targetLabel(agentName, num, status)
+		b.TargetAgentName, b.TargetVersionNum, b.TargetStatus = agentName, num, status
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}

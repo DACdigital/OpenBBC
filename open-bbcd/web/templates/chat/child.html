@@ -1,0 +1,26 @@
+{{define "content"}}
+<div class="page-header">
+  <div class="session-title">
+    <h1 class="session-title-text">Sub-agent transcript</h1>
+    <div class="session-subtitle">
+      <span class="subagent-pinned">{{.AgentLabel}}</span> · depth {{.Depth}} · read-only
+    </div>
+  </div>
+  <div class="chat-actions">
+    <a href="/agent_versions/{{.VersionID}}/chat/{{.SessionID}}" class="btn-secondary">← Back to {{if .RootTitle}}{{.RootTitle}}{{else}}chat{{end}}</a>
+  </div>
+</div>
+
+<div id="chat-log" class="chat-log chat-log-readonly">
+  {{range .Messages}}
+    {{template "message_bubble" (dict "M" . "Footer" false)}}
+  {{else}}
+    <p class="empty-state">No messages in this sub-agent session.</p>
+  {{end}}
+</div>
+
+<link rel="stylesheet" href="/static/chat.css">
+<script src="/static/marked.min.js"></script>
+{{/* chat.js renders markdown, then stops: #chat-log has no data-version-id. */}}
+<script src="/static/chat.js" defer></script>
+{{end}}

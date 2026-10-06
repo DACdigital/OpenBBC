@@ -22,6 +22,17 @@ release into this directory and bumping the version + checksum here.
 
 - Version: see `htmx.min.js` (existing — vendored prior to this PR)
 
+## htmx response-targets extension
+
+- File: `htmx-response-targets.min.js`
+- Version: 2.0.4 (npm `htmx-ext-response-targets`, peer `htmx.org ^2.0.2`;
+  matches the vendored htmx 2.0.4)
+- License: 0BSD (same as htmx)
+- Source: https://github.com/bigskysoftware/htmx-extensions/tree/main/src/response-targets
+- CDN used for fetch: https://cdn.jsdelivr.net/npm/htmx-ext-response-targets@2.0.4/dist/response-targets.min.js
+  (the package's own minified build, unmodified)
+- sha256: `bde3061dd9b0c7a0b3c7bae63784312bbb7a3a798411b750fe1a5c07a286e63a`
+
 ## marked
 
 - Version: 14.1.4

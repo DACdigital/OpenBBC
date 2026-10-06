@@ -380,7 +380,9 @@ func (h *EvalHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	var agentName, datasetName string
 	var agentVersionNum, datasetVersionNum int
+	var agentToolEnabled bool
 	if len(enriched) > 0 {
+		agentToolEnabled = enriched[0].AgentToolEnabled
 		agentName = enriched[0].AgentName
 		agentVersionNum = enriched[0].AgentVersionNum
 		datasetName = enriched[0].DatasetName
@@ -413,6 +415,7 @@ func (h *EvalHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 		"DatasetVersionNum":     datasetVersionNum,
 		"Sessions":              sessions,
 		"ActiveTrainingSession": activeTraining,
+		"AgentToolEnabled":      agentToolEnabled,
 	})
 }
 

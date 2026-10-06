@@ -48,10 +48,12 @@ type ConfiguratorHandler struct {
 	backends    *repository.ToolBackendRepository
 	wiring      *repository.VersionWiringRepository
 	agentWiring *repository.AgentWiringRepository
+	subAgents   *repository.SubAgentRepository // nil → Agents tab routes 500; set via WithSubAgents
 	schema      *types.WizardSchema
 	inputsTmpl  *template.Template
 	promptsTmpl *template.Template
 	mcpTmpl     *template.Template
+	agentsTmpl  *template.Template
 	deleteTmpl  *template.Template
 }
 
@@ -101,6 +103,15 @@ func NewConfiguratorHandler(
 	if err != nil {
 		return nil, err
 	}
+	agentsTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/layout.html",
+		"templates/configurator/layout.html",
+		"templates/configurator/partials.html",
+		"templates/configurator/agents.html",
+	)
+	if err != nil {
+		return nil, err
+	}
 	deleteTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/configurator/delete_confirm_modal.html",
 	)
@@ -116,6 +127,7 @@ func NewConfiguratorHandler(
 		inputsTmpl:  inputsTmpl,
 		promptsTmpl: promptsTmpl,
 		mcpTmpl:     mcpTmpl,
+		agentsTmpl:  agentsTmpl,
 		deleteTmpl:  deleteTmpl,
 	}, nil
 }
@@ -155,12 +167,13 @@ type configPageData struct {
 	AgentStatus      string // version's status (lives on AgentVersion now)
 	ReadOnly         bool   // true for non-INITIALIZING versions (DRAFT, TRAINING, READY, DEPLOYED)
 	HasBundle        bool   // true when the agent has architecture AND this version has prompts (Run is enabled)
+	AgentToolEnabled bool   // version is multi-agent: Evaluate renders disabled (spec § BO buttons)
 	Tab              string // primary tab: "inputs" | "architecture" | "prompts" | "finalize"
 	SubTab           string // architecture sub-tab: "flows" | "skills" | "endpoints" (empty for other primary tabs)
 	Config           types.FlowMapConfig
 	ParseError       string
-	Architecture     json.RawMessage // agent-level architecture blob (endpoints/flows/skills_meta); len()>0 once finalized
-	Prompts          json.RawMessage // version-level prompts blob (main_prompt + skill_prompts)
+	Architecture     json.RawMessage   // agent-level architecture blob (endpoints/flows/skills_meta); len()>0 once finalized
+	Prompts          json.RawMessage   // version-level prompts blob (main_prompt + skill_prompts)
 	WizardFields     []wizardFieldView // populated for the Inputs tab
 	SelectedFlow     *types.Flow
 	SelectedSkill    *types.Skill
@@ -197,18 +210,19 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 	// failure isn't fatal (we render "v?" in the header).
 	versionNum, _ := h.repo.GetVersionNum(r.Context(), version.ID)
 	return configPageData{
-		Active:       "agents",
-		VersionID:    versionID,
-		VersionNum:   versionNum,
-		AgentID:      agent.ID,
-		AgentName:    agent.Name,
-		AgentStatus:  version.Status,
-		ReadOnly:     version.Status != "INITIALIZING",
-		HasBundle:    len(agent.Architecture) > 0 && len(version.Prompts) > 0,
-		Config:       cfg,
-		ParseError:   parseErr,
-		Architecture: agent.Architecture,
-		Prompts:      version.Prompts,
+		Active:           "agents",
+		VersionID:        versionID,
+		VersionNum:       versionNum,
+		AgentID:          agent.ID,
+		AgentName:        agent.Name,
+		AgentStatus:      version.Status,
+		ReadOnly:         version.Status != "INITIALIZING",
+		HasBundle:        len(agent.Architecture) > 0 && len(version.Prompts) > 0,
+		AgentToolEnabled: version.AgentToolEnabled,
+		Config:           cfg,
+		ParseError:       parseErr,
+		Architecture:     agent.Architecture,
+		Prompts:          version.Prompts,
 	}, nil
 }
 
@@ -1010,4 +1024,3 @@ func sanitiseFilename(name string) string {
 	}
 	return out
 }
-

@@ -338,3 +338,46 @@ func TestTrainingGate_StartFailsForward(t *testing.T) {
 		t.Fatalf("Start (unknown) = %v, want ErrNotFound", err)
 	}
 }
+
+// BO buttons read agent_tool_enabled through ListGrouped (Versions tab) and
+// EnrichRows (eval detail).
+func TestAgentToolEnabled_ListGroupedAndEnrichRows(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	agentID, v := seedVersionWithStatus(t, db, types.AgentStatusReady)
+	evalID := rawEval(t, db, v, "DONE")
+
+	for _, on := range []bool{false, true} {
+		setToolFlag(t, db, v, on)
+		groups, err := NewAgentRepository(db).ListGrouped(ctx)
+		if err != nil {
+			t.Fatalf("ListGrouped: %v", err)
+		}
+		found := false
+		for _, g := range groups {
+			for _, it := range g.Versions {
+				if g.AgentID == agentID && it.Version.ID == v {
+					found = true
+					if it.Version.AgentToolEnabled != on {
+						t.Errorf("ListGrouped AgentToolEnabled = %v, want %v", it.Version.AgentToolEnabled, on)
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("version %s not listed", v)
+		}
+		repo := NewEvalRepository(db)
+		e, err := repo.GetByID(ctx, evalID)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		rows, err := repo.EnrichRows(ctx, []*types.Eval{e})
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("EnrichRows: %v (%d rows)", err, len(rows))
+		}
+		if rows[0].AgentToolEnabled != on {
+			t.Errorf("EnrichRows AgentToolEnabled = %v, want %v", rows[0].AgentToolEnabled, on)
+		}
+	}
+}

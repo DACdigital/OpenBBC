@@ -71,9 +71,15 @@
         {{if $s.HasLast}}{{printf "%.2f" $s.LastScore}}{{else}}—{{end}}
       </td>
       <td class="col-actions" onclick="event.stopPropagation()">
+        {{if .Version.AgentToolEnabled}}
+        <button type="button" class="btn-small" disabled
+                style="opacity:0.4;cursor:not-allowed"
+                title="Evaluating multi-agent versions is not supported yet">Evaluate</button>
+        {{else}}
         <button class="btn-small"
                 hx-get="/agent_versions/{{.Version.ID}}/evals/new"
                 hx-target="body" hx-swap="beforeend">Evaluate</button>
+        {{end}}
         <a class="btn-small" href="/agent_versions/{{.Version.ID}}/evals">View evals</a>
       </td>
     </tr>

@@ -50,6 +50,8 @@ type stubChatStore struct {
 	child bool
 	// calls counts every store method call except IsChildSession.
 	calls int
+	// children maps raw agent tool_use id → child session id (history cards).
+	children map[string]string
 }
 
 func (s *stubChatStore) IsChildSession(ctx context.Context, sessionID string) (bool, error) {
@@ -87,6 +89,19 @@ func (s *stubChatStore) LoadMessages(ctx context.Context, sessionID string) ([]*
 func (s *stubChatStore) UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error {
 	s.calls++
 	return s.err
+}
+
+func (s *stubChatStore) GetDescendant(ctx context.Context, rootID, childID string) (*types.ChatSession, error) {
+	s.calls++
+	return nil, types.ErrNotFound
+}
+
+func (s *stubChatStore) ChildByParentToolCall(ctx context.Context, parentID, toolCallID string) (string, error) {
+	s.calls++
+	if id, ok := s.children[toolCallID]; ok {
+		return id, nil
+	}
+	return "", types.ErrNotFound
 }
 
 func (s *stubChatStore) HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error) {
@@ -133,6 +148,8 @@ func emptyTemplateFS() fs.FS {
 		"templates/layout.html":                    {Data: []byte(`{{define "layout"}}{{end}}`)},
 		"templates/chat/sessions.html":             {Data: []byte(`{{define "content"}}{{end}}`)},
 		"templates/chat/view.html":                 {Data: []byte(`{{define "content"}}{{end}}`)},
+		"templates/chat/child.html":                {Data: []byte(`{{define "content"}}{{end}}`)},
+		"templates/chat/bubble.html":               {Data: []byte(`{{define "message_bubble"}}{{end}}`)},
 		"templates/chat/headers_modal.html":        {Data: []byte(`{{define "headers_modal"}}{{end}}`)},
 		"templates/chat/feedback_footer.html":      {Data: []byte(`{{define "feedback_footer"}}{{end}}`)},
 		"templates/chat/assign_dataset_modal.html": {Data: []byte(`{{define "assign_dataset_modal"}}{{end}}`)},
@@ -249,7 +266,7 @@ func TestBuildMessageViews_MergesAssistantTurns(t *testing.T) {
 		{Role: types.ChatRoleAssistant, Content: []byte(`[{"type":"text","text":"here you go"}]`)},
 		{Role: types.ChatRoleUser, Content: []byte(`[{"type":"text","text":"thanks"}]`)},
 	}
-	views := buildMessageViews(msgs, "/b/")
+	views := buildMessageViews(msgs, "/b/", nil)
 	if len(views) != 3 {
 		t.Fatalf("expected 3 bubbles (user, merged-assistant, user), got %d", len(views))
 	}
@@ -481,7 +498,7 @@ func TestBuildMessageViews_ArtifactRefBlocks(t *testing.T) {
 		{Role: types.ChatRoleUser, Content: []byte(`[{"type":"text","text":"see"},{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/ab","mime":"application/pdf","size_bytes":245678,"sha256":"ab","filename":"Q3 report.pdf"}]`)},
 		{Role: types.ChatRoleTool, Content: []byte(`[{"type":"tool_result","tool_use_id":"tu_1","content":{"ok":true}},{"type":"artifact_ref","store_id":"MAIN","uri":"sha256/cd","mime":"image/png","size_bytes":10,"sha256":"cd"}]`)},
 	}
-	views := buildMessageViews(msgs, "/b/")
+	views := buildMessageViews(msgs, "/b/", nil)
 	if len(views) != 2 {
 		t.Fatalf("got %d bubbles, want 2", len(views))
 	}
@@ -521,7 +538,7 @@ func TestBuildMessageViews_ArtifactRefHardening(t *testing.T) {
 	for _, c := range []struct{ store, uri string }{
 		{"MAIN", "../../x"}, {"MAIN", "a/./b"}, {"MAIN", "a//b"}, {"A/B", "sha256/ab"}, {".", "sha256/ab"}, {"..", "sha256/ab"},
 	} {
-		v := buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref(c.store, c.uri) + "]")}}, "/b/")
+		v := buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref(c.store, c.uri) + "]")}}, "/b/", nil)
 		blk := v[0].Blocks[0]
 		if blk.Kind != "artifact_ref" || blk.ArtifactHref != "" {
 			t.Errorf("%+v: want unlinked artifact_ref, got %+v", c, blk)
@@ -531,17 +548,17 @@ func TestBuildMessageViews_ArtifactRefHardening(t *testing.T) {
 		}
 	}
 	// '?' and '#' are escaped, not interpreted.
-	v := buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "a?x=1#f") + "]")}}, "/b/")
+	v := buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "a?x=1#f") + "]")}}, "/b/", nil)
 	if got := v[0].Blocks[0].ArtifactHref; got != "/b/MAIN/a%3Fx=1%23f" {
 		t.Errorf("href = %q", got)
 	}
 	// Normal ref unchanged.
-	v = buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "sha256/ab") + "]")}}, "/b/")
+	v = buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "sha256/ab") + "]")}}, "/b/", nil)
 	if got := v[0].Blocks[0].ArtifactHref; got != "/b/MAIN/sha256/ab" {
 		t.Errorf("href = %q", got)
 	}
 	// Missing store_id / uri skipped.
-	v = buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("", "x") + "," + ref("MAIN", "") + "]")}}, "/b/")
+	v = buildMessageViews([]*types.ChatMessage{{Role: types.ChatRoleTool, Content: []byte("[" + ref("", "x") + "," + ref("MAIN", "") + "]")}}, "/b/", nil)
 	if len(v[0].Blocks) != 0 {
 		t.Errorf("want skipped, got %+v", v[0].Blocks)
 	}
@@ -549,7 +566,7 @@ func TestBuildMessageViews_ArtifactRefHardening(t *testing.T) {
 	v = buildMessageViews([]*types.ChatMessage{
 		{Role: types.ChatRoleAssistant, Content: []byte(`[{"type":"text","text":"here"}]`)},
 		{Role: types.ChatRoleTool, Content: []byte("[" + ref("MAIN", "sha256/ab") + "]")},
-	}, "/b/")
+	}, "/b/", nil)
 	if len(v) != 1 || len(v[0].Blocks) != 2 || v[0].Blocks[1].ArtifactHref == "" {
 		t.Errorf("merge: %+v", v)
 	}

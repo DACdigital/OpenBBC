@@ -1,0 +1,63 @@
+{{/* message_bubble renders one chat bubble. Shared by the chat view and the
+     read-only child transcript. Args (dict): M (messageView), Footer (bool:
+     render the assistant feedback footer), and the footer's Feedback, Locked,
+     VersionID, SessionID. */}}
+{{define "message_bubble"}}
+{{$m := .M}}
+<div class="chat-bubble {{$m.Role}}">
+  <div class="bubble-header">
+    <div class="avatar avatar-{{$m.Role}}">{{slice $m.Role 0 1}}</div>
+    <div class="role-name">{{$m.Role}}</div>
+  </div>
+  <div class="content">
+    {{range $m.Blocks}}
+      {{if eq .Kind "text"}}
+        <div class="md" data-raw="{{.Text}}">{{.Text}}</div>
+      {{else if eq .Kind "tool_call"}}
+        <details class="tool-call">
+          <summary>▸ {{.ToolName}}(…)</summary>
+          <pre class="args">{{.ToolArgs}}</pre>
+        </details>
+      {{else if eq .Kind "tool_result"}}
+        <details class="tool-result{{if .ToolIsError}} is-error{{end}}">
+          <summary{{if .ToolIsMocked}} class="mocked"{{end}}>▸ result{{if .ToolIsMocked}} (mocked){{end}}</summary>
+          <pre>{{.ToolResult}}</pre>
+        </details>
+      {{else if eq .Kind "subagent"}}
+        {{template "subagent_card" .}}
+      {{else if eq .Kind "artifact_ref"}}
+        {{if .ArtifactHref}}<a class="artifact-link" href="{{.ArtifactHref}}" title="{{.ArtifactLabel}}" target="_blank" rel="noopener">📎 {{.ArtifactLabel}}</a>{{else}}<span class="artifact-link artifact-link-disabled" title="{{.ArtifactLabel}}">📎 {{.ArtifactLabel}}</span>{{end}}
+      {{end}}
+    {{end}}
+  </div>
+  {{if and .Footer (eq $m.Role "assistant")}}
+    {{template "feedback_footer" (dict "MessageID" $m.ID "Feedback" .Feedback "Locked" .Locked "VersionID" .VersionID "SessionID" .SessionID)}}
+  {{end}}
+</div>
+{{end}}
+
+{{/* subagent_card: a persisted `agent` tool_use paired with its tool_result
+     (spec § AG-UI stream → BO history view / interrupted cards). */}}
+{{define "subagent_card"}}
+<div class="subagent-card subagent-{{.SubagentState}}" data-state="{{.SubagentState}}">
+  <div class="subagent-head">
+    <span class="subagent-icon" aria-hidden="true">⤷</span>
+    <code class="subagent-name">{{.SubagentName}}</code>
+    <span class="subagent-desc">{{.SubagentDescription}}</span>
+    <span class="subagent-state">{{.SubagentState}}</span>
+    {{if .SubagentHref}}<a class="subagent-link" href="{{.SubagentHref}}">Open transcript →</a>{{end}}
+  </div>
+  {{if .SubagentPrompt}}
+  <details class="subagent-detail">
+    <summary>▸ prompt</summary>
+    <pre>{{.SubagentPrompt}}</pre>
+  </details>
+  {{end}}
+  {{if ne .SubagentState "interrupted"}}
+  <details class="subagent-detail{{if eq .SubagentState "error"}} is-error{{end}}">
+    <summary>▸ result</summary>
+    <pre>{{.SubagentResult}}</pre>
+  </details>
+  {{end}}
+</div>
+{{end}}

@@ -106,7 +106,8 @@ func statusFor(err error) int {
 		status = http.StatusConflict
 	case errors.Is(err, types.ErrSessionAgentMismatch):
 		status = http.StatusForbidden
-	case errors.Is(err, types.ErrNameRequired),
+	case errors.Is(err, errAgentsFormInvalid),
+		errors.Is(err, types.ErrNameRequired),
 		errors.Is(err, types.ErrPromptRequired),
 		errors.Is(err, types.ErrAgentRequired),
 		errors.Is(err, types.ErrDiscoveryFileRequired),

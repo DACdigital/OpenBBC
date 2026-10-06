@@ -415,3 +415,28 @@
 .artifact-link-disabled:hover { text-decoration: none; }
 .user-attachments { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
 .artifact-chip-sent { opacity: 0.85; }
+
+/* Sub-agent cards (server-rendered history; spec § AG-UI stream → BO). */
+.subagent-card { margin: 0.4rem 0; padding: 0.4rem 0.6rem; border: 1px solid var(--border, #30363d); border-left: 3px solid #58a6ff; border-radius: 6px; font-size: 0.9rem; }
+.subagent-card.subagent-error { border-left-color: #f85149; }
+.subagent-card.subagent-interrupted { border-left-color: #d29922; border-style: dashed; border-left-style: solid; }
+.subagent-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem; }
+.subagent-desc { color: #8b949e; flex: 1 1 auto; min-width: 0; }
+.subagent-state { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; padding: 0 0.35rem; border-radius: 4px; border: 1px solid currentColor; color: #3fb950; }
+.subagent-error .subagent-state { color: #f85149; }
+.subagent-interrupted .subagent-state { color: #d29922; }
+.subagent-link, .subagent-link:visited { color: #58a6ff; text-decoration: none; white-space: nowrap; }
+.subagent-link:hover { text-decoration: underline; }
+.subagent-detail > summary { cursor: pointer; color: #8b949e; font-size: 0.8rem; }
+.subagent-detail pre { white-space: pre-wrap; word-break: break-word; margin: 0.25rem 0; }
+.subagent-detail.is-error pre { color: #f85149; }
+
+/* Live sub-agent cards (chat.js): the same card as a collapsible <details>
+   whose body nests the child's tool calls and deeper cards. */
+details.subagent-card > summary.subagent-head { cursor: pointer; list-style: none; }
+details.subagent-card > summary.subagent-head::-webkit-details-marker { display: none; }
+.subagent-card.subagent-running { border-left-color: #d2a8ff; }
+.subagent-running .subagent-state { color: #d2a8ff; }
+.subagent-body { margin: 0.3rem 0 0 0.75rem; padding-left: 0.5rem; border-left: 1px dashed var(--border, #30363d); }
+.subagent-body:empty { display: none; }
+.subagent-body .subagent-card { margin-left: 0; }

@@ -362,6 +362,36 @@ func TestEvalHandler_UIDetail_TrainButtonAppearsWhenEligible(t *testing.T) {
 	}
 }
 
+func TestEvalHandler_UIDetail_TrainButtonDisabledForMultiAgentVersion(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+	db := getEvalTestDB(t, h)
+	evalID := insertDoneEval(t, db, versionID, dvID, 0.5)
+	if _, err := db.Exec(`UPDATE agent_versions SET agent_tool_enabled = true WHERE id = $1::uuid`, versionID); err != nil {
+		t.Fatalf("enable agent tool: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/evals/"+evalID, nil)
+	req.SetPathValue("eval_id", evalID)
+	rec := httptest.NewRecorder()
+	h.UIDetail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	i := strings.Index(body, ">Train</button>")
+	if i < 0 {
+		t.Fatal("expected a Train button")
+	}
+	btn := body[strings.LastIndex(body[:i], "<button"):i]
+	if !strings.Contains(btn, " disabled") || !strings.Contains(btn, "Evaluating multi-agent versions is not supported yet") {
+		t.Errorf("Train button not disabled with tooltip: %s", btn)
+	}
+	if strings.Contains(btn, `type="submit"`) {
+		t.Errorf("disabled Train button must not submit: %s", btn)
+	}
+}
+
 func TestEvalHandler_UIDetail_TrainButtonHiddenWhenActiveSession(t *testing.T) {
 	h, versionID, dvID := setupEvalAPI(t)
 	db := getEvalTestDB(t, h)

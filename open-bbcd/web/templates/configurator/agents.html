@@ -1,0 +1,38 @@
+{{define "tab_content"}}
+<div id="agents-tab" class="config-agents" hx-ext="response-targets">
+  <div class="config-banner">
+    With the <code>agent</code> tool enabled, this version can delegate a task to a bound sub-agent: a pinned READY or DEPLOYED version of another agent, called by the name you give it. The note tells the calling agent when to use it.
+  </div>
+  {{if .EvalBlocked}}
+  <div class="config-banner config-banner-warning">Agent-tool settings are locked while an eval or training session is pending or in progress.</div>
+  {{else if .Locked}}
+  <div class="config-banner config-banner-readonly">Agent-tool settings can only change while the version is INITIALIZING or DRAFT.</div>
+  {{end}}
+  {{template "agents_error" (dict "Message" "" "OOB" false)}}
+
+  {{template "agents_toggle" .}}
+
+  <div class="config-agents-heading-row">
+    <h3 class="config-agents-heading">Sub-agents</h3>
+    {{if not .Locked}}
+    <button type="button" class="btn-primary config-agents-add-btn"
+            hx-get="/agent_versions/{{.VersionID}}/architecture/agents/new"
+            hx-target="body" hx-swap="beforeend"
+            hx-target-error="#agents-error">+ Add sub-agent</button>
+    {{end}}
+  </div>
+  {{template "agents_table" .}}
+
+  {{if not .Locked}}
+  <form id="agents-notes-form"
+        hx-post="/agent_versions/{{.VersionID}}/architecture/agents/notes"
+        hx-target="#agents-tab" hx-swap="outerHTML"
+        hx-target-error="#agents-error"
+        class="config-mcp-form-actions">
+    <button type="submit" class="btn-primary">Save notes</button>
+    {{if .Saved}}<span class="config-mcp-note-saved">Saved ✓</span>{{end}}
+  </form>
+
+  {{end}}
+</div>
+{{end}}
