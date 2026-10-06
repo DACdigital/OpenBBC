@@ -130,10 +130,18 @@ func (r *AgentRepository) GetDiscoveryZip(ctx context.Context, agentID string) (
 
 // Delete removes an agent and (via FK CASCADE) every version, chat session,
 // deployed session, message, and endpoint wiring that belongs to it. Refuses
-// if any version is currently DEPLOYED — undeploy first.
+// if any version is currently DEPLOYED — undeploy first — and, with
+// ErrVersionReferenced, if another agent still references one of its versions
+// (spec § Repository invariants, agent delete).
 func (r *AgentRepository) Delete(ctx context.Context, agentID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var hasDeployed bool
-	if err := r.db.QueryRowContext(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS(SELECT 1 FROM agent_versions WHERE agent_id = $1::uuid AND status = 'DEPLOYED')
 	`, agentID).Scan(&hasDeployed); err != nil {
 		return err
@@ -142,7 +150,7 @@ func (r *AgentRepository) Delete(ctx context.Context, agentID string) error {
 		return types.ErrAgentInUse
 	}
 	var pinned bool
-	if err := r.db.QueryRowContext(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS(
 		    SELECT 1 FROM dataset_version_sessions dvs
 		    JOIN chat_sessions s      ON s.id = dvs.session_id
@@ -155,15 +163,63 @@ func (r *AgentRepository) Delete(ctx context.Context, agentID string) error {
 	if pinned {
 		return types.ErrSessionInDataset
 	}
-	res, err := r.db.ExecContext(ctx, `DELETE FROM agents WHERE id = $1::uuid`, agentID)
-	if err != nil {
+
+	// References into this agent's versions that its own cascade will not
+	// remove. The cascade set: bindings whose caller is one of its versions;
+	// deployed sessions with its agent_id (roots and children); BO trees whose
+	// root's version is its.
+	var referenced bool
+	if err := tx.QueryRowContext(ctx, `
+		WITH RECURSIVE mine AS (
+		    SELECT id FROM agent_versions WHERE agent_id = $1::uuid
+		), own_bo(id) AS (
+		    SELECT s.id FROM chat_sessions s
+		    WHERE s.parent_session_id IS NULL AND s.agent_version_id IN (SELECT id FROM mine)
+		    UNION ALL
+		    SELECT c.id FROM chat_sessions c JOIN own_bo o ON c.parent_session_id = o.id
+		)
+		SELECT EXISTS(
+		    SELECT 1 FROM agent_version_subagent b
+		    WHERE b.target_version_id IN (SELECT id FROM mine)
+		      AND b.caller_version_id NOT IN (SELECT id FROM mine)
+		) OR EXISTS(
+		    SELECT 1 FROM deployed_sessions d
+		    WHERE d.agent_version_id IN (SELECT id FROM mine) AND d.agent_id <> $1::uuid
+		) OR EXISTS(
+		    SELECT 1 FROM chat_sessions s
+		    WHERE s.agent_version_id IN (SELECT id FROM mine) AND s.locked_at IS NOT NULL
+		      AND s.id NOT IN (SELECT id FROM own_bo)
+		)
+	`, agentID).Scan(&referenced); err != nil {
 		return err
+	}
+	if referenced {
+		return types.ErrVersionReferenced
+	}
+
+	// Remove the agent's own NO ACTION references first. Postgres runs RI
+	// checks row by row in queue order, so the check for an older version can
+	// fire before a newer version's cascade has removed the binding pointing at
+	// it (row-order dependent; a top-level DELETE FROM agent_versions fails the
+	// same way).
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM agent_version_subagent
+		WHERE caller_version_id IN (SELECT id FROM agent_versions WHERE agent_id = $1::uuid)
+	`, agentID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM deployed_sessions WHERE agent_id = $1::uuid`, agentID); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM agents WHERE id = $1::uuid`, agentID)
+	if err != nil {
+		return translateVersionFK(err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return types.ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // GetByID returns the Agent (per-agent row).

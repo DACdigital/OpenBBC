@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
@@ -46,17 +47,18 @@ func (r *ChatRepository) EnsureSession(ctx context.Context, sessionID, versionID
 	return nil
 }
 
-// GetSession loads a single session and verifies it belongs to versionID.
-// Returns ErrNotFound if the session doesn't exist and ErrSessionAgentMismatch
-// if it exists but is owned by a different agent version.
+// GetSession loads a single root session and verifies it belongs to versionID.
+// Returns ErrNotFound if the session doesn't exist or is a sub-agent child
+// (root-only rule) and ErrSessionAgentMismatch if it exists but is owned by a
+// different agent version.
 func (r *ChatRepository) GetSession(ctx context.Context, sessionID, versionID string) (*types.ChatSession, error) {
 	s := &types.ChatSession{}
 	var lockedAt sql.NullTime
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at, locked_at
+		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at, locked_at, depth
 		FROM chat_sessions
-		WHERE id = $1::uuid
-	`, sessionID).Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt, &lockedAt)
+		WHERE id = $1::uuid AND parent_session_id IS NULL
+	`, sessionID).Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt, &lockedAt, &s.Depth)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, types.ErrNotFound
@@ -73,8 +75,20 @@ func (r *ChatRepository) GetSession(ctx context.Context, sessionID, versionID st
 	return s, nil
 }
 
-// UpdateSessionTitle sets the title of a session. Verifies the session belongs
-// to versionID before updating. An empty title clears the column (NULL in DB).
+// IsChildSession reports whether sessionID names a sub-agent child session.
+// BO preambles that treat GetSession's ErrNotFound as "not created yet" call
+// it first so a child id is a 404, never a lazily adopted session (spec §
+// root-only rule). Unknown ids are not children.
+func (r *ChatRepository) IsChildSession(ctx context.Context, sessionID string) (bool, error) {
+	var child bool
+	err := r.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE id = $1::uuid AND parent_session_id IS NOT NULL)`,
+		sessionID).Scan(&child)
+	return child, err
+}
+
+// UpdateSessionTitle sets the title of a root session. Verifies the session
+// belongs to versionID before updating; a child session is ErrNotFound. An empty title clears the column (NULL in DB).
 func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error {
 	var nullable sql.NullString
 	if title != "" {
@@ -83,7 +97,7 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, vers
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE chat_sessions
 		SET title = $3, updated_at = now()
-		WHERE id = $1::uuid AND agent_version_id = $2::uuid
+		WHERE id = $1::uuid AND agent_version_id = $2::uuid AND parent_session_id IS NULL
 	`, sessionID, versionID, nullable)
 	if err != nil {
 		return err
@@ -97,7 +111,7 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, vers
 		// Distinguish for the caller.
 		var existingVersion string
 		err := r.db.QueryRowContext(ctx,
-			`SELECT agent_version_id::text FROM chat_sessions WHERE id = $1::uuid`,
+			`SELECT agent_version_id::text FROM chat_sessions WHERE id = $1::uuid AND parent_session_id IS NULL`,
 			sessionID,
 		).Scan(&existingVersion)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -111,12 +125,12 @@ func (r *ChatRepository) UpdateSessionTitle(ctx context.Context, sessionID, vers
 	return nil
 }
 
-// ListSessions returns one page of sessions for an agent version, newest
-// first, plus the total row count. limit<=0 fetches everything.
+// ListSessions returns one page of root sessions for an agent version, newest
+// first, plus the total row count (sub-agent children excluded from both). limit<=0 fetches everything.
 func (r *ChatRepository) ListSessions(ctx context.Context, versionID string, limit, offset int) ([]*types.ChatSession, int, error) {
 	var total int
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM chat_sessions WHERE agent_version_id = $1::uuid`,
+		`SELECT COUNT(*) FROM chat_sessions WHERE agent_version_id = $1::uuid AND parent_session_id IS NULL`,
 		versionID,
 	).Scan(&total); err != nil {
 		return nil, 0, err
@@ -125,7 +139,7 @@ func (r *ChatRepository) ListSessions(ctx context.Context, versionID string, lim
 	q := `
 		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at, locked_at
 		FROM chat_sessions
-		WHERE agent_version_id = $1::uuid
+		WHERE agent_version_id = $1::uuid AND parent_session_id IS NULL
 		ORDER BY created_at DESC`
 	args := []any{versionID}
 	if limit > 0 {
@@ -268,13 +282,14 @@ func (r *ChatRepository) GetSessionHeaderOverrides(ctx context.Context, sessionI
 }
 
 // SetSessionHeaderOverrides replaces the per-backend header override map for a
-// session. Returns ErrNotFound if the session doesn't exist.
+// root session. Returns ErrNotFound if the session doesn't exist or is a
+// sub-agent child.
 func (r *ChatRepository) SetSessionHeaderOverrides(ctx context.Context, sessionID string, ovr map[string]map[string]string) error {
 	raw, err := json.Marshal(ovr)
 	if err != nil {
 		return err
 	}
-	const q = `UPDATE chat_sessions SET backend_header_overrides = $1 WHERE id = $2::uuid`
+	const q = `UPDATE chat_sessions SET backend_header_overrides = $1 WHERE id = $2::uuid AND parent_session_id IS NULL`
 	res, err := r.db.ExecContext(ctx, q, raw, sessionID)
 	if err != nil {
 		return err
@@ -330,4 +345,132 @@ func (r *ChatRepository) insertChatMessageTx(ctx context.Context, tx *sql.Tx, m 
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE chat_sessions SET updated_at = now() WHERE id = $1::uuid`, m.SessionID)
 	return err
+}
+
+// CreateChildSession inserts a sub-agent child session under parentID in
+// one transaction (spec § Repository invariants). It locks the tree's root
+// FOR SHARE — which conflicts with close-draft's UPDATE … SET locked_at,
+// while parallel sibling spawns can still share it — and refuses with
+// ErrSessionLocked when the root is locked. The child is pinned to
+// targetVersionID, has depth = parent.depth + 1, and copies the root's
+// backend_header_overrides. parentToolCallID is the raw tool_use id.
+// ErrNotFound when rootID is not a root session, parentID is neither rootID
+// nor a descendant of it, or targetVersionID does not exist. A duplicate (parentID, parentToolCallID)
+// returns the raw unique-violation error. An empty id argument is rejected
+// with a plain error before any SQL runs.
+func (r *ChatRepository) CreateChildSession(ctx context.Context, rootID, parentID, parentToolCallID, targetVersionID string) (string, error) {
+	if err := validateChildSessionIDs(rootID, parentID, parentToolCallID, targetVersionID); err != nil {
+		return "", err
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var lockedAt sql.NullTime
+	err = tx.QueryRowContext(ctx,
+		`SELECT locked_at FROM chat_sessions WHERE id = $1::uuid AND parent_session_id IS NULL FOR SHARE`,
+		rootID).Scan(&lockedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if lockedAt.Valid {
+		return "", types.ErrSessionLocked
+	}
+	var id string
+	err = tx.QueryRowContext(ctx, `
+		WITH RECURSIVE tree(id) AS (
+		    SELECT id FROM chat_sessions WHERE id = $1::uuid
+		    UNION ALL
+		    SELECT c.id FROM chat_sessions c JOIN tree t ON c.parent_session_id = t.id
+		)
+		INSERT INTO chat_sessions (id, agent_version_id, parent_session_id, parent_tool_call_id, depth, backend_header_overrides)
+		SELECT gen_random_uuid(), $4::uuid, p.id, $3, p.depth + 1, root.backend_header_overrides
+		FROM chat_sessions p, chat_sessions root
+		WHERE p.id = $2::uuid AND root.id = $1::uuid AND p.id IN (SELECT id FROM tree)
+		RETURNING id::text`, rootID, parentID, parentToolCallID, targetVersionID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return "", types.ErrNotFound
+		}
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// GetDescendant returns childID iff it is a strict descendant of the root
+// session rootID. ErrNotFound when rootID is not a root, when childID is
+// rootID itself, or when childID lies outside rootID's tree.
+func (r *ChatRepository) GetDescendant(ctx context.Context, rootID, childID string) (*types.ChatSession, error) {
+	s := &types.ChatSession{}
+	var lockedAt sql.NullTime
+	var parentID, toolCallID sql.NullString
+	err := r.db.QueryRowContext(ctx, `
+		WITH RECURSIVE tree(id) AS (
+		    SELECT id FROM chat_sessions WHERE id = $1::uuid AND parent_session_id IS NULL
+		    UNION ALL
+		    SELECT c.id FROM chat_sessions c JOIN tree t ON c.parent_session_id = t.id
+		)
+		SELECT id::text, agent_version_id::text, COALESCE(title, ''), created_at, updated_at, locked_at,
+		       parent_session_id::text, parent_tool_call_id, depth
+		FROM chat_sessions
+		WHERE id = $2::uuid AND id <> $1::uuid AND id IN (SELECT id FROM tree)
+	`, rootID, childID).Scan(&s.ID, &s.AgentVersionID, &s.Title, &s.CreatedAt, &s.UpdatedAt, &lockedAt,
+		&parentID, &toolCallID, &s.Depth)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, types.ErrNotFound
+		}
+		return nil, err
+	}
+	if lockedAt.Valid {
+		t := lockedAt.Time
+		s.LockedAt = &t
+	}
+	if parentID.Valid {
+		s.ParentSessionID = &parentID.String
+	}
+	s.ParentToolCallID = toolCallID.String
+	return s, nil
+}
+
+// ChildByParentToolCall returns the id of the child session spawned by the
+// agent tool_use toolCallID (raw id) in session parentID, for the history
+// card link. ErrNotFound when there is none.
+func (r *ChatRepository) ChildByParentToolCall(ctx context.Context, parentID, toolCallID string) (string, error) {
+	var id string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id::text FROM chat_sessions WHERE parent_session_id = $1::uuid AND parent_tool_call_id = $2`,
+		parentID, toolCallID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	return id, err
+}
+
+// validateChildSessionIDs rejects empty arguments to CreateChildSession (chat
+// and deployed). The parent_tool_call_id CHECK only tests NULL, so an empty
+// tool-call id would otherwise be stored; empty uuids would surface as a raw
+// cast error. Plain errors — these are caller bugs, not client input.
+func validateChildSessionIDs(rootID, parentID, parentToolCallID, targetVersionID string) error {
+	switch {
+	case rootID == "":
+		return fmt.Errorf("child session: root id is required")
+	case parentID == "":
+		return fmt.Errorf("child session: parent id is required")
+	case parentToolCallID == "":
+		return fmt.Errorf("child session: parent tool call id is required")
+	case targetVersionID == "":
+		return fmt.Errorf("child session: target version id is required")
+	}
+	return nil
 }

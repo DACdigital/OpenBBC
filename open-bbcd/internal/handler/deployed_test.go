@@ -82,23 +82,23 @@ func (s *stubDeployedStore) ListSessions(ctx context.Context, agentID, userID st
 	}
 	return out, nil
 }
-func (s *stubDeployedStore) UpdateSessionTitle(ctx context.Context, sessionID, userID, title string) error {
+func (s *stubDeployedStore) UpdateSessionTitle(ctx context.Context, agentID, sessionID, userID, title string) error {
 	if !validUUID(sessionID) {
 		return errors.New("pq: invalid input syntax for type uuid")
 	}
 	sess, ok := s.sessions[sessionID]
-	if !ok || sess.UserID != userID {
+	if !ok || sess.UserID != userID || sess.AgentID != agentID {
 		return types.ErrNotFound
 	}
 	sess.Title = title
 	return nil
 }
-func (s *stubDeployedStore) DeleteSession(ctx context.Context, sessionID, userID string) error {
+func (s *stubDeployedStore) DeleteSession(ctx context.Context, agentID, sessionID, userID string) error {
 	if !validUUID(sessionID) {
 		return errors.New("pq: invalid input syntax for type uuid")
 	}
 	sess, ok := s.sessions[sessionID]
-	if !ok || sess.UserID != userID {
+	if !ok || sess.UserID != userID || sess.AgentID != agentID {
 		return types.ErrNotFound
 	}
 	_ = sess

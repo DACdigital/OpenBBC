@@ -48,6 +48,25 @@ type AnthropicConfig struct {
 type ChatConfig struct {
 	Transport     string `env:"OPENBBC_CHAT_TRANSPORT" envDefault:"agui"`
 	MaxToolRounds int    `env:"OPENBBC_MAX_TOOL_ROUNDS" envDefault:"10"`
+	// AgentToolMaxDepth caps sub-agent nesting (root = 0); AgentToolMaxParallel
+	// caps concurrent agent calls per assistant step per session node. Both
+	// are validated as integers >= 1 in Load (AGENT_TOOL_MAX_DEPTH /
+	// AGENT_TOOL_MAX_PARALLEL); defaults 3 and 4.
+	AgentToolMaxDepth    int
+	AgentToolMaxParallel int
+}
+
+// positiveIntEnv reads name as an integer >= 1, returning def when unset.
+func positiveIntEnv(name string, def int) (int, error) {
+	v, ok := os.LookupEnv(name)
+	if !ok || v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("%s: expected integer >= 1, got %q", name, v)
+	}
+	return n, nil
 }
 
 // ArtifactsConfig captures deployer-declared artifact-store registry state
@@ -249,6 +268,14 @@ func Load() (*Config, error) {
 
 	cfg := &Config{}
 	if err := env.Parse(cfg); err != nil {
+		return nil, err
+	}
+
+	var err error
+	if cfg.Chat.AgentToolMaxDepth, err = positiveIntEnv("AGENT_TOOL_MAX_DEPTH", 3); err != nil {
+		return nil, err
+	}
+	if cfg.Chat.AgentToolMaxParallel, err = positiveIntEnv("AGENT_TOOL_MAX_PARALLEL", 4); err != nil {
 		return nil, err
 	}
 

@@ -379,3 +379,30 @@ func TestTrainingSessionRepository_List_FiltersByStatus(t *testing.T) {
 		t.Errorf("limited count = %d, want 1", len(limited))
 	}
 }
+
+func TestComplete_CopiesAgentToolConfig(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewTrainingSessionRepository(db)
+	vrepo := NewAgentVersionRepository(db)
+	ctx := context.Background()
+
+	evalID, versionID := seedEvalForTraining(t, db)
+	want := seedForkParent(t, db, versionID)
+	// The parent has agent_tool_enabled, so Create/Start are refused by the
+	// temporary multi-agent gate; raw-insert the IN_PROGRESS session instead.
+	var id string
+	if err := db.QueryRow(`
+		INSERT INTO training_sessions (source_eval_id, parent_version_id, status, started_at, epochs, patience)
+		VALUES ($1::uuid, $2::uuid, 'IN_PROGRESS', now(), 5, 3) RETURNING id::text`, evalID, versionID).Scan(&id); err != nil {
+		t.Fatalf("raw insert session: %v", err)
+	}
+	prompts, _ := json.Marshal(types.Prompts{MainPrompt: "trained", SkillPrompts: map[string]string{}})
+	report := json.RawMessage(`{"schema_version":"training-report-v1","initial_score":0.4,"final_score":0.7,"total_epochs_run":3,"stopped_reason":"max_epochs","epochs":[]}`)
+	newID, err := repo.Complete(ctx, vrepo, id, prompts, report, types.CompleteSummary{
+		InitialScore: 0.4, FinalScore: 0.7, TotalEpochsRun: 3, StoppedReason: "max_epochs",
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	assertForkCopied(t, db, versionID, newID, true, want)
+}

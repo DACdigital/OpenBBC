@@ -256,3 +256,98 @@ func TestAgentVersionRepository_List_FiltersByStatus(t *testing.T) {
 		t.Fatalf("no-filter len=%d, want >= 4", len(all))
 	}
 }
+
+// bindingRow is one agent_version_subagent row without its caller.
+type bindingRow struct{ name, target, note string }
+
+// readBindings returns the caller's bindings ordered by name.
+func readBindings(t *testing.T, db *sql.DB, callerID string) []bindingRow {
+	t.Helper()
+	rows, err := db.Query(`
+		SELECT name, target_version_id::text, note FROM agent_version_subagent
+		WHERE caller_version_id = $1::uuid ORDER BY name`, callerID)
+	if err != nil {
+		t.Fatalf("readBindings: %v", err)
+	}
+	defer rows.Close()
+	var out []bindingRow
+	for rows.Next() {
+		var b bindingRow
+		if err := rows.Scan(&b.name, &b.target, &b.note); err != nil {
+			t.Fatalf("readBindings scan: %v", err)
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+// seedForkParent turns parentID into a version with the agent tool on and two
+// raw bindings (researcher, writer) to distinct READY targets with notes n1, n2.
+// Returns the expected binding set.
+func seedForkParent(t *testing.T, db *sql.DB, parentID string) []bindingRow {
+	t.Helper()
+	r1 := seedVersionStatusOnly(t, db, types.AgentStatusReady)
+	r2 := seedVersionStatusOnly(t, db, types.AgentStatusReady)
+	if _, err := db.Exec(`UPDATE agent_versions SET agent_tool_enabled = true WHERE id = $1::uuid`, parentID); err != nil {
+		t.Fatalf("enable tool: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_version_subagent (caller_version_id, target_version_id, name, note)
+		VALUES ($1::uuid, $2::uuid, 'researcher', 'n1'), ($1::uuid, $3::uuid, 'writer', 'n2')`,
+		parentID, r1, r2); err != nil {
+		t.Fatalf("seed bindings: %v", err)
+	}
+	return []bindingRow{{"researcher", r1, "n1"}, {"writer", r2, "n2"}}
+}
+
+// assertForkCopied checks the new version carries the parent's flag and
+// binding set, and that the parent's rows are untouched.
+func assertForkCopied(t *testing.T, db *sql.DB, parentID, newID string, wantOn bool, want []bindingRow) {
+	t.Helper()
+	if got := toolEnabled(t, db, newID); got != wantOn {
+		t.Fatalf("new agent_tool_enabled = %v, want %v", got, wantOn)
+	}
+	if got := toolEnabled(t, db, parentID); got != wantOn {
+		t.Fatalf("parent agent_tool_enabled = %v, want %v", got, wantOn)
+	}
+	for _, id := range []string{newID, parentID} {
+		got := readBindings(t, db, id)
+		if len(got) != len(want) {
+			t.Fatalf("bindings of %s = %v, want %v", id, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("bindings of %s = %v, want %v", id, got, want)
+			}
+		}
+	}
+}
+
+func TestCreateVersionFromPrompts_CopiesAgentToolConfig(t *testing.T) {
+	for _, st := range []types.AgentStatus{types.AgentStatusDraft, types.AgentStatusReady} {
+		t.Run(string(st), func(t *testing.T) {
+			db := openTestDB(t)
+			vrepo := NewAgentVersionRepository(db)
+			ctx := context.Background()
+			parent := seedVersionStatusOnly(t, db, types.AgentStatusReady)
+			want := seedForkParent(t, db, parent)
+
+			newID, err := vrepo.CreateVersionFromPrompts(ctx, parent, []byte(`{}`), st)
+			if err != nil {
+				t.Fatalf("CreateVersionFromPrompts: %v", err)
+			}
+			assertForkCopied(t, db, parent, newID, true, want)
+		})
+	}
+}
+
+func TestCreateVersionFromPrompts_ToolOffForksOff(t *testing.T) {
+	db := openTestDB(t)
+	vrepo := NewAgentVersionRepository(db)
+	parent := seedVersionStatusOnly(t, db, types.AgentStatusReady)
+	newID, err := vrepo.CreateVersionFromPrompts(context.Background(), parent, []byte(`{}`), types.AgentStatusDraft)
+	if err != nil {
+		t.Fatalf("CreateVersionFromPrompts: %v", err)
+	}
+	assertForkCopied(t, db, parent, newID, false, nil)
+}

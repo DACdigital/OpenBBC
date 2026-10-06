@@ -18,7 +18,7 @@ func NewAgentVersionRepository(db *sql.DB) *AgentVersionRepository {
 	return &AgentVersionRepository{db: db}
 }
 
-const agentVersionColumns = `id, agent_id, parent_version_id, status, prompts, flow_map_config, flow_map_parse_error, created_at, updated_at`
+const agentVersionColumns = `id, agent_id, parent_version_id, status, prompts, flow_map_config, flow_map_parse_error, agent_tool_enabled, created_at, updated_at`
 
 func scanAgentVersion(s scanner) (*types.AgentVersion, error) {
 	v := &types.AgentVersion{}
@@ -26,7 +26,7 @@ func scanAgentVersion(s scanner) (*types.AgentVersion, error) {
 	var prompts []byte
 	var cfg []byte
 	var parseErr sql.NullString
-	if err := s.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &cfg, &parseErr, &v.CreatedAt, &v.UpdatedAt); err != nil {
+	if err := s.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &cfg, &parseErr, &v.AgentToolEnabled, &v.CreatedAt, &v.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if parent.Valid {
@@ -51,7 +51,9 @@ func (r *AgentVersionRepository) GetByID(ctx context.Context, versionID string) 
 // Delete removes a single version row. Refuses if the version is currently
 // DEPLOYED or if a newer version was forked from it (chain integrity — the
 // chain is a linked list via parent_version_id and deleting a middle node
-// would orphan the child).
+// would orphan the child). Also refuses with ErrVersionReferenced when the
+// version is a binding target, pins a deployed child, or pins a locked BO
+// session (spec § Repository invariants, version delete).
 func (r *AgentVersionRepository) Delete(ctx context.Context, versionID string) error {
 	var status string
 	var hasChild bool
@@ -86,8 +88,21 @@ func (r *AgentVersionRepository) Delete(ctx context.Context, versionID string) e
 	if pinned {
 		return types.ErrSessionInDataset
 	}
+	// A binding where the version is the *caller* cascades with it and is not
+	// a reference; neither is an unlocked BO child pinned to it (it cascades).
+	var referenced bool
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM agent_version_subagent WHERE target_version_id = $1::uuid)
+		    OR EXISTS(SELECT 1 FROM deployed_sessions      WHERE agent_version_id  = $1::uuid)
+		    OR EXISTS(SELECT 1 FROM chat_sessions          WHERE agent_version_id  = $1::uuid AND locked_at IS NOT NULL)
+	`, versionID).Scan(&referenced); err != nil {
+		return err
+	}
+	if referenced {
+		return types.ErrVersionReferenced
+	}
 	_, err = r.db.ExecContext(ctx, `DELETE FROM agent_versions WHERE id = $1::uuid`, versionID)
-	return err
+	return translateVersionFK(err)
 }
 
 // GetWithAgent returns both the AgentVersion and its owning Agent via JOIN.
@@ -95,7 +110,7 @@ func (r *AgentVersionRepository) Delete(ctx context.Context, versionID string) e
 // the frozen architecture, the version carries the editable prompts.
 func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.prompts, av.flow_map_config, av.flow_map_parse_error, av.created_at, av.updated_at,
+		SELECT av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.prompts, av.flow_map_config, av.flow_map_parse_error, av.agent_tool_enabled, av.created_at, av.updated_at,
 		       a.id::text, a.name, a.description,
 		       (a.discovery_zip IS NOT NULL AND octet_length(a.discovery_zip) > 0),
 		       a.architecture, a.finalized_at, a.created_at
@@ -112,7 +127,7 @@ func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID str
 	var aDesc sql.NullString
 	var arch []byte
 	var aFinal sql.NullTime
-	err := row.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &vCfg, &vParseErr, &v.CreatedAt, &v.UpdatedAt,
+	err := row.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &vCfg, &vParseErr, &v.AgentToolEnabled, &v.CreatedAt, &v.UpdatedAt,
 		&a.ID, &a.Name, &aDesc, &a.HasDiscoveryZip, &arch, &aFinal, &a.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, types.ErrNotFound
@@ -309,13 +324,18 @@ func (r *AgentVersionRepository) SetPrompts(ctx context.Context, versionID strin
 }
 
 // insertVersionFromPromptsTx inserts a new agent_versions row inside an
-// existing transaction. Copies MCP attachments forward. Returns the new id.
+// existing transaction. Copies MCP attachments, the agent-tool flag and
+// sub-agent bindings forward. Returns the new id.
 // Extracted so training-session Complete can bundle version-creation + session
 // state update in one transaction. Public callers use CreateVersionFromPrompts.
 func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context, tx *sql.Tx, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
+	// FOR SHARE on the parent row: agent-tool config writes take FOR NO KEY
+	// UPDATE on it (SubAgentRepository.lockVersions), so holding the share
+	// lock until commit keeps the flag and bindings copied below from one
+	// consistent point — a concurrent toggle/AddBinding waits for the fork.
 	var agentID string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT agent_id::text FROM agent_versions WHERE id = $1`, parentVersionID,
+		`SELECT agent_id::text FROM agent_versions WHERE id = $1 FOR SHARE`, parentVersionID,
 	).Scan(&agentID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", types.ErrNotFound
@@ -341,6 +361,25 @@ func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context,
 		return "", fmt.Errorf("copy mcp attachments: %w", err)
 	}
 
+	// Agent-tool config is per-version and forks with the prompts. Bindings
+	// are copied verbatim even if a target is no longer READY: pins are by id
+	// and a target's status cannot regress.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE agent_versions
+		SET agent_tool_enabled = (SELECT agent_tool_enabled FROM agent_versions WHERE id = $1::uuid)
+		WHERE id = $2::uuid
+	`, parentVersionID, newID); err != nil {
+		return "", fmt.Errorf("copy agent tool flag: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO agent_version_subagent (caller_version_id, target_version_id, name, note)
+		SELECT $2::uuid, target_version_id, name, note
+		FROM agent_version_subagent
+		WHERE caller_version_id = $1::uuid
+	`, parentVersionID, newID); err != nil {
+		return "", fmt.Errorf("copy sub-agent bindings: %w", err)
+	}
+
 	return newID, nil
 }
 
@@ -352,10 +391,10 @@ func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context,
 // parent_version_id links the version chain; agent_id stays the same
 // (architecture is shared agent-wide).
 //
-// MCP attachments are copied forward in the same transaction so the new
-// version inherits its predecessor's per-version wiring without manual
-// re-attachment. Endpoint→backend wiring is agent-keyed and doesn't need
-// copying.
+// MCP attachments, the agent-tool flag and sub-agent bindings are copied
+// forward in the same transaction so the new version inherits its
+// predecessor's per-version wiring without manual re-attachment.
+// Endpoint→backend wiring is agent-keyed and doesn't need copying.
 //
 // Returns the new version's id.
 func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {

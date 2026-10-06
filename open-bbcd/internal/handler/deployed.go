@@ -24,8 +24,10 @@ type DeployedStore interface {
 	CreateSession(ctx context.Context, agentID, userID, title string) (*types.DeployedSession, error)
 	GetSession(ctx context.Context, sessionID, userID string) (*types.DeployedSession, error)
 	ListSessions(ctx context.Context, agentID, userID string) ([]*types.DeployedSession, error)
-	UpdateSessionTitle(ctx context.Context, sessionID, userID, title string) error
-	DeleteSession(ctx context.Context, sessionID, userID string) error
+	// UpdateSessionTitle and DeleteSession act on root sessions of agentID
+	// only; anything else is ErrNotFound.
+	UpdateSessionTitle(ctx context.Context, agentID, sessionID, userID, title string) error
+	DeleteSession(ctx context.Context, agentID, sessionID, userID string) error
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.DeployedMessage, error)
 	// HasPendingArtifacts is true when the session has >=1 pending artifact (empty-turn rule).
 	HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error)
@@ -185,7 +187,7 @@ func (h *DeployedHandler) UpdateTitle(w http.ResponseWriter, r *http.Request) {
 		Error(w, types.ErrUserIDRequired)
 		return
 	}
-	if err := h.store.UpdateSessionTitle(r.Context(), sessionID, body.UserID, body.Title); err != nil {
+	if err := h.store.UpdateSessionTitle(r.Context(), agentID, sessionID, body.UserID, body.Title); err != nil {
 		Error(w, err)
 		return
 	}
@@ -208,7 +210,7 @@ func (h *DeployedHandler) DeleteSession(w http.ResponseWriter, r *http.Request) 
 		Error(w, types.ErrUserIDRequired)
 		return
 	}
-	if err := h.store.DeleteSession(r.Context(), sessionID, userID); err != nil {
+	if err := h.store.DeleteSession(r.Context(), agentID, sessionID, userID); err != nil {
 		Error(w, err)
 		return
 	}

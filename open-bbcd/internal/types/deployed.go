@@ -8,12 +8,17 @@ import (
 // DeployedSession is one chat thread against a deployed agent chain. Scoped
 // by (agent_id, user_id). UserID is opaque integrator-defined text.
 type DeployedSession struct {
-	ID          string    `json:"id"`
-	AgentID string    `json:"agent_id"`
-	UserID      string    `json:"user_id"`
-	Title       string    `json:"title,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
+	AgentID   string    `json:"agent_id"`
+	UserID    string    `json:"user_id"`
+	Title     string    `json:"title,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	ParentSessionID  *string `json:"parent_session_id,omitempty"`
+	ParentToolCallID string  `json:"parent_tool_call_id,omitempty"`
+	Depth            int     `json:"depth"`
+	AgentVersionID   *string `json:"agent_version_id,omitempty"`
 }
 
 // DeployedMessage is one row in a deployed session's message log. AgentVersionID

@@ -188,8 +188,17 @@ func (h *EvalHandler) Start(w http.ResponseWriter, r *http.Request) {
 }
 
 // Export handles GET /evals/{eval_id}/export.yaml.
+//
+// Temporary multi-agent gate: when the eval's version has agent_tool_enabled,
+// FailIfMultiAgent fails the eval (if PENDING) and its PENDING training
+// sessions forward and the route answers 409 before building anything.
 func (h *EvalHandler) Export(w http.ResponseWriter, r *http.Request) {
-	payload, err := eval.Build(r.Context(), h.adapter, r.PathValue("eval_id"))
+	id := r.PathValue("eval_id")
+	if err := h.repo.FailIfMultiAgent(r.Context(), id); err != nil {
+		Error(w, err)
+		return
+	}
+	payload, err := eval.Build(r.Context(), h.adapter, id)
 	if err != nil {
 		Error(w, err)
 		return

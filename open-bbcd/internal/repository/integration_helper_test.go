@@ -41,7 +41,7 @@ func withRepo(t *testing.T) (*AgentRepository, *AgentVersionRepository, *sql.DB)
 	if _, err := db.Exec(`TRUNCATE
 		deployed_messages, deployed_sessions, chat_messages, chat_sessions,
 		resources, agent_versions, agents,
-		tool_backends, agent_endpoint_backend, agent_version_mcp_backend
+		tool_backends, agent_endpoint_backend, agent_version_mcp_backend, agent_version_subagent
 		RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -76,7 +76,7 @@ func openTestDB(t *testing.T) *sql.DB {
 		deployed_messages, deployed_sessions, chat_messages, chat_sessions,
 		dataset_version_sessions, dataset_versions, datasets,
 		resources, agent_versions, agents,
-		tool_backends, agent_endpoint_backend, agent_version_mcp_backend
+		tool_backends, agent_endpoint_backend, agent_version_mcp_backend, agent_version_subagent
 		RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -160,6 +160,36 @@ func seedMCPBackend(t *testing.T, db *sql.DB, name string) string {
 	`, name).Scan(&id)
 	if err != nil {
 		t.Fatalf("seedMCPBackend: %v", err)
+	}
+	return id
+}
+
+// insertChatChild raw-inserts a BO child session under parentID pinned to versionID
+// and returns its id. depth is parent.depth+1.
+func insertChatChild(t *testing.T, db *sql.DB, parentID, toolCallID, versionID string) string {
+	t.Helper()
+	var id string
+	err := db.QueryRow(`
+		INSERT INTO chat_sessions (id, agent_version_id, parent_session_id, parent_tool_call_id, depth)
+		SELECT gen_random_uuid(), $3::uuid, p.id, $2, p.depth + 1 FROM chat_sessions p WHERE p.id = $1::uuid
+		RETURNING id::text`, parentID, toolCallID, versionID).Scan(&id)
+	if err != nil {
+		t.Fatalf("insertChatChild: %v", err)
+	}
+	return id
+}
+
+// insertDeployedChild raw-inserts a deployed child under parentID, copying the
+// parent's agent_id and user_id (spec: children carry the root's), pinned to versionID.
+func insertDeployedChild(t *testing.T, db *sql.DB, parentID, toolCallID, versionID string) string {
+	t.Helper()
+	var id string
+	err := db.QueryRow(`
+		INSERT INTO deployed_sessions (agent_id, user_id, parent_session_id, parent_tool_call_id, depth, agent_version_id)
+		SELECT p.agent_id, p.user_id, p.id, $2, p.depth + 1, $3::uuid FROM deployed_sessions p WHERE p.id = $1::uuid
+		RETURNING id::text`, parentID, toolCallID, versionID).Scan(&id)
+	if err != nil {
+		t.Fatalf("insertDeployedChild: %v", err)
 	}
 	return id
 }

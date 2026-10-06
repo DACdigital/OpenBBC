@@ -135,7 +135,8 @@ func (r *DatasetRepository) EnsureDraft(ctx context.Context, datasetID string) (
 }
 
 // CloseDraft flips the given DRAFT to CLOSED (with optional note) and sets
-// chat_sessions.locked_at on every session in that version. One tx.
+// chat_sessions.locked_at on every session in that version and on all their
+// sub-agent descendants. One tx.
 func (r *DatasetRepository) CloseDraft(ctx context.Context, versionID, note string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -200,6 +201,22 @@ func (r *DatasetRepository) CloseDraft(ctx context.Context, versionID, note stri
 		SET locked_at = now()
 		WHERE locked_at IS NULL
 		  AND id IN (SELECT session_id FROM dataset_version_sessions WHERE dataset_version_id = $1::uuid)
+	`, versionID); err != nil {
+		return err
+	}
+	// Statement 2 (separate, later — spec § Datasets): lock every descendant
+	// of the member roots. Statement 1's row locks conflict with
+	// CreateChildSession's FOR SHARE on the root, and this statement takes a
+	// fresh READ COMMITTED snapshot, so a child that committed while
+	// statement 1 waited is seen here.
+	if _, err := tx.ExecContext(ctx, `
+		WITH RECURSIVE tree(id) AS (
+		    SELECT session_id FROM dataset_version_sessions WHERE dataset_version_id = $1::uuid
+		    UNION ALL
+		    SELECT c.id FROM chat_sessions c JOIN tree t ON c.parent_session_id = t.id
+		)
+		UPDATE chat_sessions SET locked_at = now()
+		WHERE locked_at IS NULL AND parent_session_id IS NOT NULL AND id IN (SELECT id FROM tree)
 	`, versionID); err != nil {
 		return err
 	}
@@ -297,6 +314,7 @@ func (r *DatasetRepository) GetVersionSessions(ctx context.Context, versionID st
 
 // AssignSessionToDraft adds a session to the dataset's current draft
 // (creating one if none). Refuses if:
+//   - the session is unknown or a sub-agent child (ErrNotFound)
 //   - the session has no feedback rows (ErrSessionNoFeedback)
 //   - the session is locked (ErrSessionLocked)
 //   - the session already belongs to a different dataset (ErrSessionAlreadyInDataset)
@@ -305,6 +323,17 @@ func (r *DatasetRepository) GetVersionSessions(ctx context.Context, versionID st
 // from a previous CLOSED version) is a no-op at the row level — the draft
 // already has the row from EnsureDraft's inheritance step.
 func (r *DatasetRepository) AssignSessionToDraft(ctx context.Context, datasetID, sessionID string) (*types.DatasetVersion, error) {
+	// Root-only: resolve the session first so a sub-agent child is
+	// ErrNotFound regardless of whether it carries feedback rows.
+	var locked sql.NullTime
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT locked_at FROM chat_sessions WHERE id = $1::uuid AND parent_session_id IS NULL`, sessionID,
+	).Scan(&locked); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, types.ErrNotFound
+		}
+		return nil, err
+	}
 	var hasFeedback bool
 	if err := r.db.QueryRowContext(ctx, `
 		SELECT EXISTS(
@@ -317,15 +346,6 @@ func (r *DatasetRepository) AssignSessionToDraft(ctx context.Context, datasetID,
 	}
 	if !hasFeedback {
 		return nil, types.ErrSessionNoFeedback
-	}
-	var locked sql.NullTime
-	if err := r.db.QueryRowContext(ctx,
-		`SELECT locked_at FROM chat_sessions WHERE id = $1::uuid`, sessionID,
-	).Scan(&locked); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, types.ErrNotFound
-		}
-		return nil, err
 	}
 	if locked.Valid {
 		return nil, types.ErrSessionLocked

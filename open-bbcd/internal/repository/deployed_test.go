@@ -151,7 +151,7 @@ func TestDeployedRepository_DeleteSession_CascadesMessages(t *testing.T) {
 			Content: json.RawMessage(`[]`), Seq: 1},
 	})
 
-	if err := repo.DeleteSession(ctx, sess.ID, "user-A"); err != nil {
+	if err := repo.DeleteSession(ctx, chainRoot, sess.ID, "user-A"); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	_, err := repo.GetSession(ctx, sess.ID, "user-A")
@@ -168,7 +168,7 @@ func TestDeployedRepository_UpdateSessionTitle(t *testing.T) {
 	repo, _, chainRoot := newDeployedRepoTest(t)
 	ctx := context.Background()
 	sess, _ := repo.CreateSession(ctx, chainRoot, "user-A", "")
-	if err := repo.UpdateSessionTitle(ctx, sess.ID, "user-A", "Renamed"); err != nil {
+	if err := repo.UpdateSessionTitle(ctx, chainRoot, sess.ID, "user-A", "Renamed"); err != nil {
 		t.Fatalf("UpdateSessionTitle: %v", err)
 	}
 	got, _ := repo.GetSession(ctx, sess.ID, "user-A")

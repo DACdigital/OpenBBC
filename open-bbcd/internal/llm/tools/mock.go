@@ -80,7 +80,7 @@ func (h *MockHandler) Tools(bundle json.RawMessage) ([]llm.ToolDef, error) {
 			continue
 		}
 		out = append(out, llm.ToolDef{
-			Name:        sanitizeToolName(t.Name),
+			Name:        SanitizeToolName(t.Name),
 			Description: t.Description,
 			InputSchema: permissiveSchema,
 		})
@@ -88,12 +88,12 @@ func (h *MockHandler) Tools(bundle json.RawMessage) ([]llm.ToolDef, error) {
 	return out, nil
 }
 
-// sanitizeToolName makes a tool name conform to Anthropic's required
+// SanitizeToolName makes a tool name conform to Anthropic's required
 // regex `^[a-zA-Z0-9_-]{1,128}$`. The discovery skill emits dotted names
 // like "orders.list"; the API rejects those. Replace each disallowed
 // rune with '_' and truncate to 128. Idempotent — already-clean names
 // pass through unchanged.
-func sanitizeToolName(name string) string {
+func SanitizeToolName(name string) string {
 	const max = 128
 	out := make([]byte, 0, len(name))
 	for _, r := range name {

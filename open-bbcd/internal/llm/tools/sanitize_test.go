@@ -12,8 +12,8 @@ func TestSanitizeToolName(t *testing.T) {
 		{"...", "___"},
 	}
 	for _, c := range cases {
-		if got := sanitizeToolName(c.in); got != c.want {
-			t.Errorf("sanitizeToolName(%q) = %q, want %q", c.in, got, c.want)
+		if got := SanitizeToolName(c.in); got != c.want {
+			t.Errorf("SanitizeToolName(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

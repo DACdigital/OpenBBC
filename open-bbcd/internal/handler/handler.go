@@ -65,6 +65,12 @@ func ParseListParams(w http.ResponseWriter, r *http.Request) (status string, lim
 }
 
 func Error(w http.ResponseWriter, err error) {
+	JSON(w, statusFor(err), ErrorResponse{Error: err.Error()})
+}
+
+// statusFor maps a sentinel error (possibly wrapped) to its HTTP status;
+// unknown errors are 500.
+func statusFor(err error) int {
 	status := http.StatusInternalServerError
 
 	switch {
@@ -90,7 +96,13 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrEvalAlreadyFinal),
 		errors.Is(err, types.ErrTrainingSessionConflict),
 		errors.Is(err, types.ErrPendingArtifactCap),
-		errors.Is(err, types.ErrArtifactConsumed):
+		errors.Is(err, types.ErrArtifactConsumed),
+		errors.Is(err, types.ErrVersionLocked),
+		errors.Is(err, types.ErrEvalOrTrainingActive),
+		errors.Is(err, types.ErrBindingConflict),
+		errors.Is(err, types.ErrVersionReferenced),
+		errors.Is(err, types.ErrMultiAgentEvalUnsupported),
+		errors.Is(err, types.ErrToolNameCollision):
 		status = http.StatusConflict
 	case errors.Is(err, types.ErrSessionAgentMismatch):
 		status = http.StatusForbidden
@@ -116,14 +128,16 @@ func Error(w http.ResponseWriter, err error) {
 		errors.Is(err, types.ErrDatasetVersionNotClosed),
 		errors.Is(err, types.ErrDatasetMissingCriteria),
 		errors.Is(err, types.ErrTrainingSessionEvalNotEligible),
-		errors.Is(err, types.ErrEmptyTurn):
+		errors.Is(err, types.ErrEmptyTurn),
+		errors.Is(err, types.ErrTargetNotRunnable),
+		errors.Is(err, types.ErrTopologyCycle):
 		status = http.StatusBadRequest
 	case errors.Is(err, types.ErrLLMUnavailable),
 		errors.Is(err, types.ErrToolHandlerFailed):
 		status = http.StatusBadGateway
 	}
 
-	JSON(w, status, ErrorResponse{Error: err.Error()})
+	return status
 }
 
 // validUUID reports whether id is a canonical 36-char UUID. uuid.Parse also

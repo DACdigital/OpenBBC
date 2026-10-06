@@ -25,9 +25,9 @@ const (
 // when the first version's prompts land; once set, architecture is
 // read-only forever (one-way per agent — re-discovery requires a new agent).
 type Agent struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 	// HasDiscoveryZip is true when the agent has a non-empty discovery_zip
 	// blob stored. Computed at scan time so templates can gate the
 	// download link without hydrating the whole blob on every read.
@@ -50,6 +50,7 @@ type AgentVersion struct {
 	Prompts           json.RawMessage `json:"prompts,omitempty"`
 	FlowMapConfig     json.RawMessage `json:"flow_map_config,omitempty"`
 	FlowMapParseError string          `json:"flow_map_parse_error,omitempty"`
+	AgentToolEnabled  bool            `json:"agent_tool_enabled"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
 }

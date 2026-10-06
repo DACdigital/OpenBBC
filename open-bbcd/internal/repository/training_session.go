@@ -22,9 +22,35 @@ func NewTrainingSessionRepository(db *sql.DB) *TrainingSessionRepository {
 // Create inserts a PENDING training session. Returns ErrTrainingSessionConflict
 // if an active (PENDING/IN_PROGRESS) session already exists for the eval — the
 // partial unique index does the enforcement.
+//
+// Temporary multi-agent gate: the source eval's version row is read FOR SHARE
+// in the same transaction as the insert; when agent_tool_enabled is set
+// nothing is inserted and ErrMultiAgentEvalUnsupported is returned.
+// ErrNotFound when the source eval does not exist.
 func (r *TrainingSessionRepository) Create(ctx context.Context, sourceEvalID, parentVersionID string) (string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var evalVersionID string
+	err = tx.QueryRowContext(ctx,
+		`SELECT agent_version_id::text FROM evals WHERE id = $1::uuid`, sourceEvalID).Scan(&evalVersionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	enabled, err := versionAgentToolEnabledTx(ctx, tx, evalVersionID)
+	if err != nil {
+		return "", err
+	}
+	if enabled {
+		return "", types.ErrMultiAgentEvalUnsupported
+	}
 	var id string
-	err := r.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO training_sessions (source_eval_id, parent_version_id)
 		VALUES ($1::uuid, $2::uuid)
 		RETURNING id::text
@@ -33,6 +59,9 @@ func (r *TrainingSessionRepository) Create(ctx context.Context, sourceEvalID, pa
 		if isUniqueViolation(err) {
 			return "", types.ErrTrainingSessionConflict
 		}
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	return id, nil
@@ -78,9 +107,51 @@ func (r *TrainingSessionRepository) GetActiveByEval(ctx context.Context, evalID 
 }
 
 // Start marks a PENDING session IN_PROGRESS, stamps started_at, and records
-// the epochs/patience config the script is about to use.
+// the epochs/patience config the script is about to use. Returns
+// ErrTrainingSessionConflict when the session is not PENDING, ErrNotFound for
+// an unknown id.
+//
+// Temporary multi-agent gate: when the source eval's version currently has
+// agent_tool_enabled, a PENDING session is failed forward (FAILED with the
+// sentinel text, same columns as Fail) and ErrMultiAgentEvalUnsupported is
+// returned; a non-PENDING session is left untouched and gets the same error.
 func (r *TrainingSessionRepository) Start(ctx context.Context, id string, epochs, patience int) error {
-	res, err := r.db.ExecContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var status string
+	var enabled bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT ts.status, v.agent_tool_enabled
+		FROM training_sessions ts
+		JOIN evals e ON e.id = ts.source_eval_id
+		JOIN agent_versions v ON v.id = e.agent_version_id
+		WHERE ts.id = $1::uuid
+		FOR NO KEY UPDATE OF ts
+	`, id).Scan(&status, &enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if enabled {
+		if status == string(types.TrainingSessionStatusPending) {
+			if err := failTrainingMultiAgentTx(ctx, tx, id); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+		}
+		return types.ErrMultiAgentEvalUnsupported
+	}
+	if status != string(types.TrainingSessionStatusPending) {
+		return types.ErrTrainingSessionConflict
+	}
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE training_sessions
 		SET status = 'IN_PROGRESS',
 		    started_at = now(),
@@ -88,18 +159,37 @@ func (r *TrainingSessionRepository) Start(ctx context.Context, id string, epochs
 		    patience = $3,
 		    updated_at = now()
 		WHERE id = $1::uuid AND status = 'PENDING'
-	`, id, epochs, patience)
-	if err != nil {
+	`, id, epochs, patience); err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return r.classifyMissingOrConflict(ctx, id, types.ErrTrainingSessionConflict)
-	}
-	return nil
+	return tx.Commit()
+}
+
+// trainingFailSQL is the UPDATE … SET head shared by every path that moves
+// training sessions to FAILED ($2 = error_message); callers append the WHERE.
+const trainingFailSQL = `
+	UPDATE training_sessions
+	SET status = 'FAILED',
+	    completed_at = now(),
+	    error_message = $2,
+	    updated_at = now()`
+
+// failTrainingMultiAgentTx fails one PENDING training session forward with
+// the multi-agent gate sentinel text.
+func failTrainingMultiAgentTx(ctx context.Context, tx *sql.Tx, id string) error {
+	_, err := tx.ExecContext(ctx, trainingFailSQL+`
+		WHERE id = $1::uuid AND status = 'PENDING'
+	`, id, types.ErrMultiAgentEvalUnsupported.Error())
+	return err
+}
+
+// failTrainingsFromEvalMultiAgentTx fails every PENDING training session
+// sourced from evalID forward with the multi-agent gate sentinel text.
+func failTrainingsFromEvalMultiAgentTx(ctx context.Context, tx *sql.Tx, evalID string) error {
+	_, err := tx.ExecContext(ctx, trainingFailSQL+`
+		WHERE source_eval_id = $1::uuid AND status = 'PENDING'
+	`, evalID, types.ErrMultiAgentEvalUnsupported.Error())
+	return err
 }
 
 // Complete forks a READY agent_version and marks the session DONE in one tx.
@@ -166,12 +256,7 @@ func (r *TrainingSessionRepository) Complete(
 
 // Fail transitions PENDING or IN_PROGRESS → FAILED with the given message.
 func (r *TrainingSessionRepository) Fail(ctx context.Context, id, errorMessage string) error {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE training_sessions
-		SET status = 'FAILED',
-		    completed_at = now(),
-		    error_message = $2,
-		    updated_at = now()
+	res, err := r.db.ExecContext(ctx, trainingFailSQL+`
 		WHERE id = $1::uuid AND status IN ('PENDING','IN_PROGRESS')
 	`, id, errorMessage)
 	if err != nil {
@@ -189,8 +274,7 @@ func (r *TrainingSessionRepository) Fail(ctx context.Context, id, errorMessage s
 
 // classifyMissingOrConflict is called after an UPDATE affects 0 rows. It
 // distinguishes "no such id" (ErrNotFound) from "wrong current status"
-// (returns the caller-supplied conflictErr). Mirrors the same helper in
-// EvalRepository.
+// (returns the caller-supplied conflictErr).
 func (r *TrainingSessionRepository) classifyMissingOrConflict(ctx context.Context, id string, conflictErr error) error {
 	var status string
 	err := r.db.QueryRowContext(ctx,

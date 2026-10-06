@@ -151,3 +151,17 @@ func (r *FeedbackRepository) GetForSession(ctx context.Context, sessionID string
 	}
 	return out, rows.Err()
 }
+
+// MessageInRootSession reports whether messageID belongs to sessionID and
+// sessionID is a root session. Feedback handlers call it before Get/Upsert/
+// Delete, which key on message_id alone, so a message addressed under the
+// wrong session — or any child-session message — is a 404 (spec § root-only rule).
+func (r *FeedbackRepository) MessageInRootSession(ctx context.Context, sessionID, messageID string) (bool, error) {
+	var ok bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+		    SELECT 1 FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id
+		    WHERE m.id = $2::uuid AND m.session_id = $1::uuid AND s.parent_session_id IS NULL
+		)`, sessionID, messageID).Scan(&ok)
+	return ok, err
+}

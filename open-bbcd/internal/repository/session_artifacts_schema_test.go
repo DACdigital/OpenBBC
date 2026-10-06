@@ -79,7 +79,7 @@ func TestDeployedSessionArtifacts_Constraints(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkSessionArtifactConstraints(t, repo.db, "deployed_session_artifacts", sess.ID, func() {
-		if err := repo.DeleteSession(ctx, sess.ID, "user-A"); err != nil {
+		if err := repo.DeleteSession(ctx, agentID, sess.ID, "user-A"); err != nil {
 			t.Fatal(err)
 		}
 	})

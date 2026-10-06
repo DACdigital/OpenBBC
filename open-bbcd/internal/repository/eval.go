@@ -71,6 +71,11 @@ func scanEval(s scanner) (*types.Eval, error) {
 
 // Create inserts a PENDING eval with the given config. Callers are responsible
 // for validating dataset-version-closed / criteria-complete before calling.
+//
+// Temporary multi-agent gate: the version row is read FOR SHARE in the same
+// transaction as the insert; when agent_tool_enabled is set nothing is
+// inserted and ErrMultiAgentEvalUnsupported is returned. ErrNotFound when the
+// version does not exist.
 func (r *EvalRepository) Create(ctx context.Context, agentVersionID, datasetVersionID string, mockMCP bool, headerOverrides map[string]string) (*types.Eval, error) {
 	if headerOverrides == nil {
 		headerOverrides = map[string]string{}
@@ -79,13 +84,73 @@ func (r *EvalRepository) Create(ctx context.Context, agentVersionID, datasetVers
 	if err != nil {
 		return nil, err
 	}
-	row := r.db.QueryRowContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	enabled, err := versionAgentToolEnabledTx(ctx, tx, agentVersionID)
+	if err != nil {
+		return nil, err
+	}
+	if enabled {
+		return nil, types.ErrMultiAgentEvalUnsupported
+	}
+	row := tx.QueryRowContext(ctx, `
 		INSERT INTO evals (agent_version_id, dataset_version_id, status, mock_mcp_tools, header_overrides)
 		VALUES ($1::uuid, $2::uuid, 'PENDING', $3, $4::jsonb)
 		RETURNING `+evalColumns,
 		agentVersionID, datasetVersionID, mockMCP, headers,
 	)
-	return scanEval(row)
+	e, err := scanEval(row)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// versionAgentToolEnabledTx reads agent_tool_enabled for versionID under
+// FOR SHARE, so a concurrent agent-tool config write (FOR NO KEY UPDATE on
+// the same row) serialises with the caller's insert (spec § REST — eval and
+// training gate). Returns ErrNotFound when the version does not exist.
+func versionAgentToolEnabledTx(ctx context.Context, tx *sql.Tx, versionID string) (bool, error) {
+	var enabled bool
+	err := tx.QueryRowContext(ctx,
+		`SELECT agent_tool_enabled FROM agent_versions WHERE id = $1::uuid FOR SHARE`, versionID).Scan(&enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, types.ErrNotFound
+	}
+	return enabled, err
+}
+
+// lockEvalGateTx locks the eval row FOR NO KEY UPDATE (enough to serialise
+// status transitions without blocking FK inserts that reference the eval) and
+// returns its status plus its version's current agent_tool_enabled.
+// ErrNotFound when the eval is missing.
+func lockEvalGateTx(ctx context.Context, tx *sql.Tx, evalID string) (status string, enabled bool, err error) {
+	err = tx.QueryRowContext(ctx, `
+		SELECT e.status, v.agent_tool_enabled
+		FROM evals e JOIN agent_versions v ON v.id = e.agent_version_id
+		WHERE e.id = $1::uuid
+		FOR NO KEY UPDATE OF e
+	`, evalID).Scan(&status, &enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, types.ErrNotFound
+	}
+	return status, enabled, err
+}
+
+// failEvalMultiAgentTx moves a PENDING eval to FAILED with the gate sentinel
+// text, setting exactly the columns Fail sets.
+func failEvalMultiAgentTx(ctx context.Context, tx *sql.Tx, evalID string) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE evals SET status='FAILED', error_message=$2, completed_at=now()
+		WHERE id = $1::uuid AND status = 'PENDING'
+	`, evalID, types.ErrMultiAgentEvalUnsupported.Error())
+	return err
 }
 
 func (r *EvalRepository) GetByID(ctx context.Context, id string) (*types.Eval, error) {
@@ -157,20 +222,78 @@ func (r *EvalRepository) query(ctx context.Context, sqlStr string, args ...any) 
 }
 
 // Start transitions PENDING → IN_PROGRESS and stamps started_at. Returns
-// ErrEvalNotPending if the current status is anything else.
+// ErrEvalNotPending if the current status is anything else, and ErrNotFound
+// for an unknown id.
+//
+// Temporary multi-agent gate: when the eval's version currently has
+// agent_tool_enabled, a PENDING eval is failed forward (FAILED with the
+// sentinel text, so a drainer never retries it) and ErrMultiAgentEvalUnsupported
+// is returned; a non-PENDING eval is left untouched and gets the same error.
 func (r *EvalRepository) Start(ctx context.Context, id string) error {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE evals SET status='IN_PROGRESS', started_at=now()
-		WHERE id = $1::uuid AND status = 'PENDING'
-	`, id)
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return r.classifyMissingOrConflict(ctx, id, types.ErrEvalNotPending)
+	defer func() { _ = tx.Rollback() }()
+	status, enabled, err := lockEvalGateTx(ctx, tx, id)
+	if err != nil {
+		return err
 	}
-	return nil
+	if enabled {
+		if status == string(types.EvalStatusPending) {
+			if err := failEvalMultiAgentTx(ctx, tx, id); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+		}
+		return types.ErrMultiAgentEvalUnsupported
+	}
+	if status != string(types.EvalStatusPending) {
+		return types.ErrEvalNotPending
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE evals SET status='IN_PROGRESS', started_at=now()
+		WHERE id = $1::uuid AND status = 'PENDING'
+	`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// FailIfMultiAgent is the export-route backstop of the temporary multi-agent
+// gate. When the eval's version currently has agent_tool_enabled it, in one
+// transaction, fails a PENDING eval forward and fails every PENDING training
+// session sourced from it (both with the sentinel text), then returns
+// ErrMultiAgentEvalUnsupported — also when nothing was PENDING. Returns nil
+// without writing when the version is not gated, ErrNotFound for an unknown
+// eval.
+func (r *EvalRepository) FailIfMultiAgent(ctx context.Context, evalID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	status, enabled, err := lockEvalGateTx(ctx, tx, evalID)
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return tx.Commit()
+	}
+	if status == string(types.EvalStatusPending) {
+		if err := failEvalMultiAgentTx(ctx, tx, evalID); err != nil {
+			return err
+		}
+	}
+	if err := failTrainingsFromEvalMultiAgentTx(ctx, tx, evalID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return types.ErrMultiAgentEvalUnsupported
 }
 
 // Submit persists the terminal result. On DONE, inserts every session row
@@ -319,18 +442,6 @@ func (r *EvalRepository) LastScoreByAgentVersion(ctx context.Context, agentVersi
 		return 0, false, err
 	}
 	return score, true, nil
-}
-
-func (r *EvalRepository) classifyMissingOrConflict(ctx context.Context, id string, conflictErr error) error {
-	var status string
-	err := r.db.QueryRowContext(ctx, `SELECT status FROM evals WHERE id = $1::uuid`, id).Scan(&status)
-	if errors.Is(err, sql.ErrNoRows) {
-		return types.ErrNotFound
-	}
-	if err != nil {
-		return err
-	}
-	return conflictErr
 }
 
 func marshalOrEmpty(raw json.RawMessage) []byte {

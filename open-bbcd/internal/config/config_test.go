@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +74,54 @@ func TestLoad_DiscoveryFromEnv(t *testing.T) {
 	}
 	if cfg.Discovery.MaxUploadMB != 200 {
 		t.Errorf("Discovery.MaxUploadMB = %d", cfg.Discovery.MaxUploadMB)
+	}
+}
+
+func TestLoad_AgentToolLimits(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("DATABASE_URL", "postgres://localhost/test")
+		// t.Setenv records the original value and restores it on cleanup;
+		// the Unsetenv that follows then makes the var truly absent.
+		for _, name := range []string{"AGENT_TOOL_MAX_DEPTH", "AGENT_TOOL_MAX_PARALLEL"} {
+			t.Setenv(name, "")
+			os.Unsetenv(name)
+		}
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Chat.AgentToolMaxDepth != 3 || cfg.Chat.AgentToolMaxParallel != 4 {
+			t.Fatalf("defaults = %d/%d, want 3/4", cfg.Chat.AgentToolMaxDepth, cfg.Chat.AgentToolMaxParallel)
+		}
+	})
+	for _, name := range []string{"AGENT_TOOL_MAX_DEPTH", "AGENT_TOOL_MAX_PARALLEL"} {
+		for _, bad := range []string{"0", "-1", "abc", "1.5"} {
+			t.Run(name+"="+bad, func(t *testing.T) {
+				t.Chdir(t.TempDir())
+				t.Setenv("DATABASE_URL", "postgres://localhost/test")
+				t.Setenv(name, bad)
+				_, err := Load()
+				if err == nil || !strings.Contains(err.Error(), name) {
+					t.Fatalf("Load err = %v, want error mentioning %s", err, name)
+				}
+			})
+		}
+		t.Run(name+"=1", func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			t.Setenv("DATABASE_URL", "postgres://localhost/test")
+			t.Setenv(name, "1")
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			got := cfg.Chat.AgentToolMaxDepth
+			if name == "AGENT_TOOL_MAX_PARALLEL" {
+				got = cfg.Chat.AgentToolMaxParallel
+			}
+			if got != 1 {
+				t.Fatalf("%s = %d, want 1 (cfg %+v)", name, got, cfg.Chat)
+			}
+		})
 	}
 }

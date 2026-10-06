@@ -37,6 +37,8 @@ type ChatSessionStore interface {
 	ListSessions(ctx context.Context, versionID string, limit, offset int) ([]*types.ChatSession, int, error)
 	LoadMessages(ctx context.Context, sessionID string) ([]*types.ChatMessage, error)
 	UpdateSessionTitle(ctx context.Context, sessionID, versionID, title string) error
+	// IsChildSession is true when sessionID names a sub-agent child session.
+	IsChildSession(ctx context.Context, sessionID string) (bool, error)
 	// HasPendingArtifacts is true when the session has >=1 pending artifact (empty-turn rule).
 	HasPendingArtifacts(ctx context.Context, sessionID string) (bool, error)
 }
@@ -156,6 +158,29 @@ func NewChatHandler(
 		orch: orch, transport: tf, feedbackRepo: feedbackRepo, datasetRepo: datasetRepo,
 		logger: logger, sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl, headersTmpl: headersTmpl,
 	}, nil
+}
+
+// rejectChild writes 404 and returns true when sessionID is malformed or
+// names a sub-agent child session (spec § root-only rule: a child id is
+// indistinguishable from an unknown id). Per-session BO handlers call it
+// first, before any read or write, because several of them treat
+// GetSession's ErrNotFound as "not created yet" and would otherwise adopt
+// or write to the child.
+func (h *ChatHandler) rejectChild(w http.ResponseWriter, r *http.Request, sessionID string) bool {
+	if !validUUID(sessionID) {
+		Error(w, types.ErrNotFound)
+		return true
+	}
+	child, err := h.chats.IsChildSession(r.Context(), sessionID)
+	if err != nil {
+		Error(w, err)
+		return true
+	}
+	if child {
+		Error(w, types.ErrNotFound)
+		return true
+	}
+	return false
 }
 
 // NewSession creates a new chat_sessions row and 303-redirects to the chat view.
@@ -442,8 +467,7 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
 
-	if !validUUID(sessionID) {
-		Error(w, types.ErrNotFound)
+	if h.rejectChild(w, r, sessionID) {
 		return
 	}
 
@@ -559,6 +583,9 @@ func (h *ChatHandler) ChatView(w http.ResponseWriter, r *http.Request) {
 func (h *ChatHandler) UpdateSessionTitle(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
+	if h.rejectChild(w, r, sessionID) {
+		return
+	}
 	var body struct {
 		Title string `json:"title"`
 	}
@@ -616,8 +643,8 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
 
-	if !validUUID(sessionID) {
-		Error(w, types.ErrNotFound)
+	// Before decoding the body: a child id opens no stream and writes nothing.
+	if h.rejectChild(w, r, sessionID) {
 		return
 	}
 
@@ -752,6 +779,9 @@ type headersModalData struct {
 func (h *ChatHandler) ShowHeaderOverridesModal(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
+	if h.rejectChild(w, r, sessionID) {
+		return
+	}
 
 	data, err := h.buildHeadersModalData(r.Context(), versionID, sessionID)
 	if err != nil {
@@ -766,6 +796,9 @@ func (h *ChatHandler) ShowHeaderOverridesModal(w http.ResponseWriter, r *http.Re
 func (h *ChatHandler) UpdateHeaderOverrides(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("version_id")
 	sessionID := r.PathValue("session_id")
+	if h.rejectChild(w, r, sessionID) {
+		return
+	}
 
 	// Refuse writes on locked sessions before parsing the form.
 	if session, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
@@ -825,6 +858,9 @@ func (h *ChatHandler) UpdateHeaderOverrides(w http.ResponseWriter, r *http.Reque
 func (h *ChatHandler) AssignDatasetModal(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("session_id")
 	versionID := r.PathValue("version_id")
+	if h.rejectChild(w, r, sessionID) {
+		return
+	}
 
 	hasFeedback := false
 	if h.feedbackRepo != nil {
@@ -858,6 +894,9 @@ func (h *ChatHandler) AssignDatasetModal(w http.ResponseWriter, r *http.Request)
 func (h *ChatHandler) AssignDataset(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("session_id")
 	versionID := r.PathValue("version_id")
+	if h.rejectChild(w, r, sessionID) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		Error(w, err)
 		return
@@ -878,6 +917,9 @@ func (h *ChatHandler) AssignDataset(w http.ResponseWriter, r *http.Request) {
 // UnassignDataset handles DELETE /agent_versions/{version_id}/chat/{session_id}/assign-dataset
 func (h *ChatHandler) UnassignDataset(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("session_id")
+	if h.rejectChild(w, r, sessionID) {
+		return
+	}
 	if err := h.datasetRepo.UnassignSession(r.Context(), sessionID); err != nil {
 		Error(w, err)
 		return

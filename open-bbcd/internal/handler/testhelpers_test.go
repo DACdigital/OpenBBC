@@ -44,7 +44,7 @@ func openTestDBForHandlers(t *testing.T) *sql.DB {
 		dataset_version_sessions, dataset_versions, datasets,
 		deployed_messages, deployed_sessions, chat_messages, chat_sessions,
 		resources, agent_versions, agents,
-		tool_backends, agent_endpoint_backend, agent_version_mcp_backend
+		tool_backends, agent_endpoint_backend, agent_version_mcp_backend, agent_version_subagent
 		RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
