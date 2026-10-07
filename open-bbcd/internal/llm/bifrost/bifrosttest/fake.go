@@ -128,6 +128,7 @@ func Usage(prompt, completion int) Chunk {
 }
 
 // SSE renders chunks as an SSE body terminated by [DONE].
+// It fills id/object/created/model into the passed Chunk maps (mutates its arguments).
 func SSE(chunks ...Chunk) string {
 	var b strings.Builder
 	for _, c := range chunks {
