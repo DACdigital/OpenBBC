@@ -86,6 +86,27 @@ func TestGenerate_ToolCall(t *testing.T) {
 	}
 }
 
+// A provider that reuses a tool-call ID from an earlier round (some
+// OpenRouter upstreams number calls per round) must not collide with the
+// history: the parent_tool_call_id uniqueness of child sessions depends on it.
+func TestGenerate_ToolCallIDReusedFromHistoryIsRewritten(t *testing.T) {
+	fake := bifrosttest.New(t)
+	fake.Route("sys", bifrosttest.ToolCall("call_1", "lookup", `{"q":"y"}`))
+	req := llm.Request{System: "sys", Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.Block{llm.TextBlock{Text: "hi"}}},
+		{Role: llm.RoleAssistant, Content: []llm.Block{llm.ToolUseBlock{ID: "call_1", Name: "lookup", Input: []byte(`{"q":"x"}`)}}},
+		{Role: llm.RoleTool, Content: []llm.Block{llm.ToolResultBlock{ToolUseID: "call_1", Result: []byte(`"x"`)}}},
+	}}
+	evs, err := collect(t, newTestLLM(t, fake.URL(), "sk"), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, ok := evs[0].(llm.ToolUseStartEvent)
+	if !ok || start.ID == "call_1" || !strings.HasPrefix(start.ID, "call_1_") {
+		t.Fatalf("events = %#v", evs)
+	}
+}
+
 func TestGenerate_MissingKeyFailsWithoutRequest(t *testing.T) {
 	fake := bifrosttest.New(t)
 	_, err := collect(t, newTestLLM(t, fake.URL(), ""), userReq("sys", "hi"))
