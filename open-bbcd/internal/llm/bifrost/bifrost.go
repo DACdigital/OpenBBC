@@ -79,6 +79,7 @@ func (l *LLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event
 		}
 
 		t := newStreamTranslator(l.cfg.Provider)
+		t.reserve(historyToolCallIDs(req.Messages)...)
 		for {
 			select {
 			case <-ctx.Done():
@@ -109,4 +110,18 @@ func (l *LLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event
 func drain(ch chan *schemas.BifrostStreamChunk) {
 	for range ch {
 	}
+}
+
+// historyToolCallIDs returns every tool-call ID already present in the
+// request history, so the stream never re-emits one.
+func historyToolCallIDs(msgs []llm.Message) []string {
+	var ids []string
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			if tu, ok := b.(llm.ToolUseBlock); ok {
+				ids = append(ids, tu.ID)
+			}
+		}
+	}
+	return ids
 }

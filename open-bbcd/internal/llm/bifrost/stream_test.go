@@ -274,3 +274,30 @@ func TestStream_SignatureAndProviderIDsUnchanged(t *testing.T) {
 		t.Fatalf("id1 = %q", s.ID)
 	}
 }
+
+func TestStream_ReservedIDIsRewritten(t *testing.T) {
+	tr := newStreamTranslator("openai")
+	tr.reserve("call_1", "lookup_ts_abc")
+	var evs []llm.Event
+	for _, c := range []*schemas.BifrostStreamChunk{
+		toolChunk(0, "call_1", "lookup", "{}"),
+		toolChunk(1, "lookup_ts_abc", "lookup", "{}"),
+		toolChunk(2, "call_2", "lookup", "{}"),
+		finishChunk("tool_calls"),
+	} {
+		got, err := tr.translate(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evs = append(evs, got...)
+	}
+	if s := evs[0].(llm.ToolUseStartEvent); !strings.HasPrefix(s.ID, "call_1_") || len(s.ID) != len("call_1_")+8 {
+		t.Fatalf("id0 = %q, want call_1_<8hex>", s.ID)
+	}
+	if s := evs[2].(llm.ToolUseStartEvent); s.ID != "lookup_ts_abc" {
+		t.Fatalf("id1 = %q, signature IDs are never rewritten", s.ID)
+	}
+	if s := evs[4].(llm.ToolUseStartEvent); s.ID != "call_2" {
+		t.Fatalf("id2 = %q", s.ID)
+	}
+}

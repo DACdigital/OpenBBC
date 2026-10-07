@@ -18,7 +18,7 @@ import (
 type streamTranslator struct {
 	provider string
 	calls    map[uint16]*pendingCall
-	seen     map[string]bool // final tool-call IDs already emitted
+	seen     map[string]bool // tool-call IDs in use: reserved from history or emitted
 	order    []uint16
 	opened   bool // at least one ToolUseStartEvent emitted
 	finished bool // a finish_reason was seen
@@ -32,6 +32,17 @@ type pendingCall struct {
 
 func newStreamTranslator(provider string) *streamTranslator {
 	return &streamTranslator{provider: provider, calls: map[uint16]*pendingCall{}, seen: map[string]bool{}}
+}
+
+// reserve marks tool-call IDs already used earlier in the session (the
+// request history) so a provider that reuses one in a later round gets a
+// fresh ID instead of a duplicate.
+func (t *streamTranslator) reserve(ids ...string) {
+	for _, id := range ids {
+		if id != "" {
+			t.seen[id] = true
+		}
+	}
 }
 
 // translate returns the events for one chunk, or the error a chunk carries.
@@ -108,12 +119,16 @@ func (t *streamTranslator) toolDelta(tc schemas.ChatAssistantMessageToolCall) []
 	return evs
 }
 
-// uniqueID makes a tool-call ID safe to key on. When Gemini returns a function
+// uniqueID makes a tool-call ID safe to key on across the whole session:
+// child sessions are unique on (parent_session_id, parent_tool_call_id), so an
+// ID must not repeat one from an earlier round. When Gemini returns a function
 // call without an ID, Bifrost falls back to the bare function name as the call
 // ID (providers/gemini/chat.go, appending "_ts_<signature>" only when a thought
-// signature exists), so parallel calls to one tool, or calls in later rounds,
-// would collide. An ID that equals the name or was already used in this stream
-// gets a short random suffix. IDs containing "_ts_" are never touched: Bifrost
+// signature exists), and some OpenRouter upstreams number calls per round
+// ("functions.lookup:0"), so parallel calls to one tool, or calls in later
+// rounds, would collide. An ID that equals the name, was already emitted in
+// this stream, or was reserved from the request history gets a short random
+// suffix ("<id>_<8hex>"). IDs containing "_ts_" are never touched: Bifrost
 // decodes the part after it as a signature, and takes the function name from
 // Function.Name on the way back, so a renamed ID is safe.
 func (t *streamTranslator) uniqueID(id, name string) string {
