@@ -78,6 +78,8 @@ func TestParseLLM_Errors(t *testing.T) {
 		{"base url unsupported provider", []string{"OPENBBC_LLM_ADAPTER=bifrost", "OPENBBC_DEFAULT_MODEL=groq/x", "GROQ_BASE_URL=https://p.example"}, "GROQ_BASE_URL"},
 		{"base url not a url", []string{"OPENBBC_LLM_ADAPTER=bifrost", "OPENBBC_DEFAULT_MODEL=openai/x", "OPENAI_BASE_URL=not a url"}, "OPENAI_BASE_URL"},
 		{"base url plain http remote", []string{"OPENBBC_LLM_ADAPTER=bifrost", "OPENBBC_DEFAULT_MODEL=openai/x", "OPENAI_BASE_URL=http://proxy.internal:8080"}, "OPENAI_BASE_URL"},
+		{"base url empty host", []string{"OPENBBC_LLM_ADAPTER=bifrost", "OPENBBC_DEFAULT_MODEL=openai/x", "OPENAI_BASE_URL=https://"}, "OPENAI_BASE_URL"},
+		{"base url loopback lookalike", []string{"OPENBBC_LLM_ADAPTER=bifrost", "OPENBBC_DEFAULT_MODEL=openai/x", "OPENAI_BASE_URL=http://localhost.evil.com"}, "OPENAI_BASE_URL"},
 		{"base url ftp", []string{"OPENBBC_LLM_ADAPTER=bifrost", "OPENBBC_DEFAULT_MODEL=openai/x", "OPENAI_BASE_URL=ftp://p.example"}, "OPENAI_BASE_URL"},
 	}
 	for _, c := range cases {
