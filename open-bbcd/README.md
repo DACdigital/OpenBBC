@@ -172,8 +172,11 @@ Config is env-driven (`internal/config/config.go`, `caarlos0/env` + `joho/godote
 | `SERVER_PORT` | `8080` | No | Server bind port. Also read by `open-bbcd healthcheck`. |
 | `DISCOVERY_STORAGE_DIR` | `./data/discovery` | No | Local disk root for discovery zip blobs. In the compose file this is set to `/data/discovery` and backed by a named volume. |
 | `DISCOVERY_MAX_UPLOAD_MB` | `50` | No | Max discovery zip size accepted by the wizard. |
-| `ANTHROPIC_API_KEY` | — | No | Required only for `/chat/*` and related LLM-backed endpoints; other routes work without it. |
-| `OPENBBC_DEFAULT_MODEL` | `claude-sonnet-4-6` | No | Default Anthropic model. |
+| `OPENBBC_LLM_ADAPTER` | `anthropic` | No | LLM adapter: `anthropic` (direct Anthropic API) or `bifrost` (embedded Bifrost SDK, multi-provider). Any other value fails boot. |
+| `ANTHROPIC_API_KEY` | — | No | Key for the `anthropic` adapter, and for provider `anthropic` on `bifrost`. Missing → LLM-backed endpoints fail at first call; other routes work. |
+| `OPENBBC_DEFAULT_MODEL` | `claude-sonnet-4-6` (anthropic only) | On `bifrost` | `anthropic`: bare Anthropic model id. `bifrost`: `<provider>/<model>` (split on the first `/`), provider one of `anthropic, cerebras, cohere, deepseek, gemini, groq, mistral, openai, openrouter, xai`, e.g. `openai/gpt-4o`, `openrouter/meta-llama/llama-3.1-70b`. Unset, malformed or another provider fails boot. |
+| `<PROVIDER>_API_KEY` | — | No | `bifrost` only: key for the selected provider (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, …). Only the selected provider's key is read. Missing → LLM-backed endpoints fail at first call. |
+| `<PROVIDER>_BASE_URL` | — | No | `bifrost` only, providers `openai`, `anthropic`, `cohere`, `mistral`: endpoint override (e.g. a corporate proxy). Must be `https`; plain `http` only to a loopback host. Set for another provider, or invalid → boot fails. |
 | `OPENBBC_MAX_TOKENS` | `4096` | No | Per-response cap. |
 | `OPENBBC_CHAT_TRANSPORT` | `agui` | No | Chat transport selector. |
 | `OPENBBC_MAX_TOOL_ROUNDS` | `10` | No | Per-turn tool-call loop bound. |
