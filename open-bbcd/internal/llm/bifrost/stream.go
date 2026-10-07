@@ -2,7 +2,9 @@ package bifrost
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/maximhq/bifrost/core/schemas"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
@@ -16,6 +18,7 @@ import (
 type streamTranslator struct {
 	provider string
 	calls    map[uint16]*pendingCall
+	seen     map[string]bool // final tool-call IDs already emitted
 	order    []uint16
 	opened   bool // at least one ToolUseStartEvent emitted
 	finished bool // a finish_reason was seen
@@ -28,7 +31,7 @@ type pendingCall struct {
 }
 
 func newStreamTranslator(provider string) *streamTranslator {
-	return &streamTranslator{provider: provider, calls: map[uint16]*pendingCall{}}
+	return &streamTranslator{provider: provider, calls: map[uint16]*pendingCall{}, seen: map[string]bool{}}
 }
 
 // translate returns the events for one chunk, or the error a chunk carries.
@@ -87,6 +90,8 @@ func (t *streamTranslator) toolDelta(tc schemas.ChatAssistantMessageToolCall) []
 	if !pc.started && pc.id != "" && pc.name != "" {
 		pc.started = true
 		t.opened = true
+		pc.id = t.uniqueID(pc.id, pc.name)
+		t.seen[pc.id] = true
 		evs = append(evs, llm.ToolUseStartEvent{ID: pc.id, Name: pc.name})
 		for _, f := range pc.buffered {
 			evs = append(evs, llm.ToolUseInputEvent{ID: pc.id, JSONFragment: f})
@@ -103,11 +108,25 @@ func (t *streamTranslator) toolDelta(tc schemas.ChatAssistantMessageToolCall) []
 	return evs
 }
 
+// uniqueID makes a tool-call ID safe to key on. When Gemini returns a function
+// call without an ID, Bifrost falls back to the bare function name as the call
+// ID (providers/gemini/chat.go, appending "_ts_<signature>" only when a thought
+// signature exists), so parallel calls to one tool, or calls in later rounds,
+// would collide. An ID that equals the name or was already used in this stream
+// gets a short random suffix. IDs containing "_ts_" are never touched: Bifrost
+// decodes the part after it as a signature, and takes the function name from
+// Function.Name on the way back, so a renamed ID is safe.
+func (t *streamTranslator) uniqueID(id, name string) string {
+	if strings.Contains(id, "_ts_") || (id != name && !t.seen[id]) {
+		return id
+	}
+	return id + "_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+}
+
 func (t *streamTranslator) finish(reason string) ([]llm.Event, error) {
 	if t.finished {
 		return nil, nil
 	}
-	t.finished = true
 	var evs []llm.Event
 	for _, idx := range t.order {
 		pc := t.calls[idx]
@@ -116,6 +135,7 @@ func (t *streamTranslator) finish(reason string) ([]llm.Event, error) {
 		}
 		evs = append(evs, llm.ToolUseEndEvent{ID: pc.id})
 	}
+	t.finished = true
 	return append(evs, llm.MessageStopEvent{StopReason: t.stopReason(reason)}), nil
 }
 

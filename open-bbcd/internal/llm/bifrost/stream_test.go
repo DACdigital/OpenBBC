@@ -220,3 +220,57 @@ func TestProviderError_NoStatus(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestStream_DuplicateIDsAreMadeUnique(t *testing.T) {
+	evs, err := run(t,
+		toolChunk(0, "lookup", "lookup", `{"a":1}`),
+		toolChunk(1, "lookup", "lookup", `{"b":2}`),
+		finishChunk("tool_calls"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 7 {
+		t.Fatalf("events = %#v", evs)
+	}
+	s0, s1 := evs[0].(llm.ToolUseStartEvent), evs[2].(llm.ToolUseStartEvent)
+	if s0.ID == s1.ID || !strings.HasPrefix(s0.ID, "lookup_") || !strings.HasPrefix(s1.ID, "lookup_") {
+		t.Fatalf("ids = %q %q", s0.ID, s1.ID)
+	}
+	if in := evs[1].(llm.ToolUseInputEvent); in.ID != s0.ID || in.JSONFragment != `{"a":1}` {
+		t.Fatalf("input0 = %#v", in)
+	}
+	if in := evs[3].(llm.ToolUseInputEvent); in.ID != s1.ID || in.JSONFragment != `{"b":2}` {
+		t.Fatalf("input1 = %#v", in)
+	}
+	if e0, e1 := evs[4].(llm.ToolUseEndEvent), evs[5].(llm.ToolUseEndEvent); e0.ID != s0.ID || e1.ID != s1.ID {
+		t.Fatalf("ends = %#v %#v", e0, e1)
+	}
+}
+
+func TestStream_IDEqualToNameIsRewritten(t *testing.T) {
+	evs, err := run(t, toolChunk(0, "get_x", "get_x", "{}"), finishChunk("tool_calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := evs[0].(llm.ToolUseStartEvent); !strings.HasPrefix(s.ID, "get_x_") || s.ID == "get_x_" {
+		t.Fatalf("id = %q", s.ID)
+	}
+}
+
+func TestStream_SignatureAndProviderIDsUnchanged(t *testing.T) {
+	evs, err := run(t,
+		toolChunk(0, "lookup_ts_abc", "lookup", "{}"),
+		toolChunk(1, "call_1", "lookup", "{}"),
+		finishChunk("tool_calls"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := evs[0].(llm.ToolUseStartEvent); s.ID != "lookup_ts_abc" {
+		t.Fatalf("id0 = %q", s.ID)
+	}
+	if s := evs[2].(llm.ToolUseStartEvent); s.ID != "call_1" {
+		t.Fatalf("id1 = %q", s.ID)
+	}
+}
