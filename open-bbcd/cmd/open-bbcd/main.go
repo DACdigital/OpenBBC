@@ -54,6 +54,11 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	llmClient, closeLLM, err := handler.NewLLM(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("init llm: %w", err)
+	}
+
 	logger.Info("connecting to database")
 	db, err := database.NewPostgres(cfg.Database.URL)
 	if err != nil {
@@ -71,7 +76,7 @@ func run() error {
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      handler.NewAPI(db, cfg, logger),
+		Handler:      handler.NewAPIWithLLM(db, cfg, logger, llmClient),
 		ReadTimeout:  handler.ReadTimeout,
 		WriteTimeout: handler.WriteTimeout,
 		IdleTimeout:  handler.IdleTimeout,
@@ -94,7 +99,9 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 	defer cancel()
 
-	return server.Shutdown(ctx)
+	err = server.Shutdown(ctx)
+	closeLLM()
+	return err
 }
 
 func runMigrate() error {
