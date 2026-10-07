@@ -18,12 +18,33 @@ import (
 // OPENBBC_LIVE_LLM_TEST=1, against every allow-listed provider whose
 // <PROVIDER>_API_KEY is set. Override a provider's model with
 // OPENBBC_LIVE_MODEL_<PROVIDER> (e.g. OPENBBC_LIVE_MODEL_OPENAI=gpt-4o-mini).
+// Defaults are small, tool-capable models, one per allow-listed provider
+// (config.bifrostProviders); keep the two in step.
 var liveModels = map[string]string{
-	"openai":    "gpt-4o-mini",
-	"anthropic": "claude-haiku-4-5-20251001",
-	"gemini":    "gemini-2.5-flash",
-	"mistral":   "mistral-small-latest",
-	"groq":      "meta-llama/llama-4-scout-17b-16e-instruct",
+	"openai":     "gpt-4o-mini",
+	"anthropic":  "claude-haiku-4-5-20251001",
+	"gemini":     "gemini-2.5-flash",
+	"mistral":    "mistral-small-latest",
+	"groq":       "meta-llama/llama-4-scout-17b-16e-instruct",
+	"cohere":     "command-r7b-12-2024",
+	"openrouter": "openai/gpt-4o-mini",
+	"deepseek":   "deepseek-chat",
+	"xai":        "grok-4-fast-non-reasoning",
+	"cerebras":   "gpt-oss-120b",
+}
+
+// liveTextOnly lists providers whose default live model has no vision: the
+// image_tool scenario is skipped for them unless OPENBBC_LIVE_MODEL_<PROVIDER>
+// picks another model (a model without vision rejects image input, which the
+// spec treats as a deployer model-choice error, not an adapter failure).
+var liveTextOnly = map[string]bool{
+	"cohere":   true,
+	"deepseek": true,
+	"cerebras": true,
+}
+
+func liveModelOverride(provider string) string {
+	return os.Getenv("OPENBBC_LIVE_MODEL_" + strings.ToUpper(provider))
 }
 
 const lookupSchema = `{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`
@@ -34,7 +55,7 @@ func liveLLM(t *testing.T, provider string) (*LLM, bool) {
 		return nil, false
 	}
 	model := liveModels[provider]
-	if m := os.Getenv("OPENBBC_LIVE_MODEL_" + strings.ToUpper(provider)); m != "" {
+	if m := liveModelOverride(provider); m != "" {
 		model = m
 	}
 	l, err := New(context.Background(), config.LLMConfig{Adapter: "bifrost", Provider: provider, Model: model, APIKey: key}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -95,19 +116,30 @@ func TestLive(t *testing.T) {
 			tools := []llm.ToolDef{{Name: "get_weather", Description: "Current weather for a city", InputSchema: json.RawMessage(lookupSchema)}}
 			msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{llm.TextBlock{Text: "Use get_weather for Paris, then tell me the result in one sentence."}}}}
 			_, calls, stop := turn(t, l, llm.Request{System: "You are terse.", Messages: msgs, Tools: tools, MaxTokens: 512})
-			if stop != "tool_use" || len(calls) == 0 || calls[0].Name != "get_weather" || !json.Valid(calls[0].Input) {
+			if stop != "tool_use" || len(calls) == 0 {
 				t.Fatalf("first round: stop=%q calls=%+v", stop, calls)
 			}
-			msgs = append(msgs,
-				llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{calls[0]}},
-				llm.Message{Role: llm.RoleTool, Content: []llm.Block{llm.ToolResultBlock{ToolUseID: calls[0].ID, Result: json.RawMessage(`"Sunny, 21C"`)}}},
-			)
+			// Answer every call: providers reject a history with an
+			// unanswered tool call, and some issue parallel calls here.
+			assistant := llm.Message{Role: llm.RoleAssistant}
+			results := llm.Message{Role: llm.RoleTool}
+			for _, c := range calls {
+				if c.Name != "get_weather" || !json.Valid(c.Input) {
+					t.Fatalf("first round: bad call %+v", c)
+				}
+				assistant.Content = append(assistant.Content, c)
+				results.Content = append(results.Content, llm.ToolResultBlock{ToolUseID: c.ID, Result: json.RawMessage(`"Sunny, 21C"`)})
+			}
+			msgs = append(msgs, assistant, results)
 			text, _, stop := turn(t, l, llm.Request{System: "You are terse.", Messages: msgs, Tools: tools, MaxTokens: 512})
 			if stop != "end_turn" || !strings.Contains(strings.ToLower(text), "sunny") {
 				t.Fatalf("second round: stop=%q text=%q", stop, text)
 			}
 		})
 		t.Run(provider+"/image_tool", func(t *testing.T) {
+			if liveTextOnly[provider] && liveModelOverride(provider) == "" {
+				t.Skipf("default model %q has no vision; set OPENBBC_LIVE_MODEL_%s to a vision model", liveModels[provider], strings.ToUpper(provider))
+			}
 			tools := []llm.ToolDef{{Name: "get_swatch", Description: "Returns a colour swatch image", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)}}
 			msgs := []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{llm.TextBlock{Text: "Call get_swatch, look at the image it returns, and answer with just the colour name."}}}}
 			_, calls, stop := turn(t, l, llm.Request{Messages: msgs, Tools: tools, MaxTokens: 256})
