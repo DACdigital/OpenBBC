@@ -82,7 +82,7 @@ Suggested cron cadence (see `docs/PRODUCTION.md`):
 
 ## open-bbcd (Go service)
 
-Module: `github.com/DACdigital/OpenBBC/open-bbcd` · Go 1.22+ · PostgreSQL 15+ · migrations via `goose`.
+Module: `github.com/DACdigital/OpenBBC/open-bbcd` · Go 1.27+ · PostgreSQL 15+ · migrations via `goose`.
 
 ### Common commands (run from `open-bbcd/`)
 

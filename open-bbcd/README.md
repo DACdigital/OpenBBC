@@ -4,7 +4,7 @@ Core platform service for OpenBBC — backoffice UI, REST API, and the deployed 
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.27+
 - PostgreSQL 15+
 - Docker Compose (for the bundled Postgres + service stack)
 - goose CLI is only needed for authoring new migrations (`go install github.com/pressly/goose/v3/cmd/goose@latest`); at runtime the server embeds goose as a library and auto-applies migrations on startup.
