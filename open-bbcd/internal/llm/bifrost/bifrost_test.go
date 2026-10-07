@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/goleak"
+
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/bifrost/bifrosttest"
@@ -128,6 +130,15 @@ func TestGenerate_CancelReturnsCtxErr(t *testing.T) {
 	}))
 	defer srv.Close()
 	l := newTestLLM(t, srv.URL, "sk")
+	// Snapshot after Init so Bifrost's long-lived worker pool counts as
+	// "current"; anything Generate starts (the drain goroutine, the
+	// provider's stream reader) must be gone once the call has returned.
+	// fasthttp's connection-pool cleaners are started lazily on the first
+	// request and live as long as the client, so they are ignored too.
+	// goleak retries until its deadline, so the drain gets time to finish.
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent(),
+		goleak.IgnoreAnyFunction("github.com/valyala/fasthttp.(*Client).mCleaner"),
+		goleak.IgnoreAnyFunction("github.com/valyala/fasthttp.(*HostClient).connsCleaner"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var gotErr error
