@@ -56,6 +56,10 @@ func (l *LLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event
 		defer cancel()
 		stream, berr := l.client.ChatCompletionStreamRequest(bctx, buildChatRequest(req, schemas.ModelProvider(l.cfg.Provider), l.cfg.Model))
 		if berr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				yield(nil, ctxErr)
+				return
+			}
 			yield(nil, providerError(l.cfg.Provider, berr))
 			return
 		}

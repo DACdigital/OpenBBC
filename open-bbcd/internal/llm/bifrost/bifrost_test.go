@@ -148,3 +148,20 @@ func TestGenerate_CancelReturnsCtxErr(t *testing.T) {
 		t.Fatal("Generate did not return promptly after cancel")
 	}
 }
+
+func TestGenerate_CancelledBeforeStreamReturnsCtxErr(t *testing.T) {
+	fake := bifrosttest.New(t)
+	fake.Route("sys", bifrosttest.Text("hello"))
+	l := newTestLLM(t, fake.URL(), "sk")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var errs []error
+	for _, err := range l.Generate(ctx, userReq("sys", "hi")) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) != 1 || errs[0] != context.Canceled {
+		t.Fatalf("errs = %v, want [context.Canceled]", errs)
+	}
+}
