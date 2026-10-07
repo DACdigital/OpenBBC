@@ -100,8 +100,24 @@ func run() error {
 	defer cancel()
 
 	err = server.Shutdown(ctx)
-	closeLLM()
+	closeWithin(ctx, closeLLM, logger)
 	return err
+}
+
+// closeWithin runs closeFn but returns no later than ctx's deadline, so a
+// slow LLM adapter shutdown cannot stretch the exit past ShutdownTimeout.
+// On timeout closeFn is left running; the process is exiting anyway.
+func closeWithin(ctx context.Context, closeFn func(), logger *slog.Logger) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		closeFn()
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		logger.Warn("llm adapter shutdown did not finish before the shutdown deadline", slog.Any("error", ctx.Err()))
+	}
 }
 
 func runMigrate() error {
