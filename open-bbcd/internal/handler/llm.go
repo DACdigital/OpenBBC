@@ -18,7 +18,8 @@ var newBifrost = bifrost.New
 // NewLLM builds the boot-selected LLM adapter (OPENBBC_LLM_ADAPTER). The
 // shutdown func releases adapter resources; it is a no-op for the direct
 // Anthropic adapter. One adapter serves both orchestrators and every
-// sub-agent.
+// sub-agent. Either adapter is wrapped by llm.WithCallLog, so with
+// LOG_LEVEL=debug every LLM call logs the adapter that served it.
 func NewLLM(cfg *config.Config, logger *slog.Logger) (llm.LLM, func(), error) {
 	if cfg.LLM.Adapter == config.LLMAdapterBifrost {
 		b, err := newBifrost(context.Background(), cfg.LLM, logger)
@@ -26,9 +27,11 @@ func NewLLM(cfg *config.Config, logger *slog.Logger) (llm.LLM, func(), error) {
 			return nil, nil, err
 		}
 		logger.Info("llm adapter ready", slog.String("adapter", b.Name()), slog.String("model", cfg.LLM.Model))
-		return b, b.Shutdown, nil
+		return llm.WithCallLog(b, logger), b.Shutdown, nil
 	}
-	return anthropic.New(cfg.Anthropic), func() {}, nil
+	a := anthropic.New(cfg.Anthropic)
+	logger.Info("llm adapter ready", slog.String("adapter", a.Name()), slog.String("model", cfg.LLMModel()))
+	return llm.WithCallLog(a, logger), func() {}, nil
 }
 
 // NewAPIWithLLM is NewAPI around an adapter built by NewLLM.
