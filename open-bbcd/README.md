@@ -170,6 +170,7 @@ Config is env-driven (`internal/config/config.go`, `caarlos0/env` + `joho/godote
 | `DATABASE_URL` | — | Yes | PostgreSQL connection URL. |
 | `SERVER_HOST` | `0.0.0.0` | No | Server bind host. |
 | `SERVER_PORT` | `8080` | No | Server bind port. Also read by `open-bbcd healthcheck`. |
+| `LOG_LEVEL` | `info` | No | `debug`, `info`, `warn` or `error`; anything else fails boot. At `debug`, every LLM call logs an `llm call` line naming its adapter (`anthropic` or `bifrost:<provider>`), model, stop reason, tokens and duration. |
 | `DISCOVERY_STORAGE_DIR` | `./data/discovery` | No | Local disk root for discovery zip blobs. In the compose file this is set to `/data/discovery` and backed by a named volume. |
 | `DISCOVERY_MAX_UPLOAD_MB` | `50` | No | Max discovery zip size accepted by the wizard. |
 | `OPENBBC_LLM_ADAPTER` | `anthropic` | No | LLM adapter: `anthropic` (direct Anthropic API) or `bifrost` (embedded Bifrost SDK, multi-provider). Any other value fails boot. |
