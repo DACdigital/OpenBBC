@@ -11,7 +11,7 @@ The repo is split into three independent components:
 | Path | What it is | Language |
 |---|---|---|
 | [`aikdm/`](./aikdm/) | Python CLI: generate / evaluate / train agent prompt bundles. Out-of-process, `open-bbcd`-unaware. | Python 3.12+ |
-| [`open-bbcd/`](./open-bbcd/) | Core service: backoffice UI, REST API, deployed agent runtime. The only long-running binary in the repo. | Go 1.22+ |
+| [`open-bbcd/`](./open-bbcd/) | Core service: backoffice UI, REST API, deployed agent runtime. The only long-running binary in the repo. | Go 1.27+ |
 | [`bbc-discovery/`](./bbc-discovery/) | Claude Code plugin marketplace. Ships `flow-map-compiler` — pure markdown + SKILL.md, no build. | Markdown / SKILL.md |
 
 The three parts talk over files and HTTP, not shared libraries — you can run `aikdm` and the discovery skill standalone against any backend, and `open-bbcd` orchestrates them via subprocess + REST when you use the full platform.

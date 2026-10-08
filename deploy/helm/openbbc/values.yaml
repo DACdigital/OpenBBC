@@ -32,6 +32,14 @@ openbbcd:
     SERVER_HOST: "0.0.0.0"
     SERVER_PORT: "8080"
 
+  # LLM adapter. Default is the direct Anthropic adapter. For the multi-provider
+  # Bifrost adapter set, e.g.:
+  #   extraEnv:
+  #     OPENBBC_LLM_ADAPTER: bifrost
+  #     OPENBBC_DEFAULT_MODEL: openai/gpt-4o
+  # and put the provider key (e.g. OPENAI_API_KEY) in the Secret named by
+  # openbbcd.envFromSecret below. Mount only the selected provider's key.
+
   # Extra env vars (key/value) merged into the container. For secrets prefer
   # openbbcd.envFromSecret below.
   extraEnv: {}
