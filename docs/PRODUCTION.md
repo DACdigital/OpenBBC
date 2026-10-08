@@ -342,6 +342,11 @@ Mount only the selected provider's key into `open-bbcd`. On Helm, set
 `OPENBBC_LLM_ADAPTER` / `OPENBBC_DEFAULT_MODEL` through `openbbcd.extraEnv` and the key
 through `openbbcd.envFromSecret`.
 
+To confirm which adapter serves traffic, check the boot line `"llm adapter ready"` (its
+`adapter` field is `anthropic` or `bifrost:<provider>`), or set `LOG_LEVEL=debug`: every LLM
+call then logs an `"llm call"` line with `adapter`, `model`, `stop_reason`, token counts and
+`duration_ms`.
+
 Set the keys in each service's environment. The compose file wires the aikdm profile
 with `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` from the shell environment
 (all optional, default empty). The Helm chart takes them as Secret values on
