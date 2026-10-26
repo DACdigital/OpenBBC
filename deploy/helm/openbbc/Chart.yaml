@@ -2,7 +2,7 @@ apiVersion: v2
 name: openbbc
 description: OpenBBC — backoffice UI + REST API + deployed agent runtime, with aikdm cron drainers
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.1.0"
 kubeVersion: ">=1.25.0-0"
 keywords:
