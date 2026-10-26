@@ -112,6 +112,7 @@ password. Pin it explicitly for reproducible dry-runs.
 | `openbbcd.image.tag` | `""` | Empty → `.Chart.appVersion`. Override to `main`, `pr-<num>`, `sha-<short>`, or `X.Y.Z`. |
 | `openbbcd.replicaCount` | `1` | Migrations auto-apply at startup; do not scale >1 until you add a leader-elected step. openbbcd itself is stateless. |
 | `openbbcd.ingress.enabled` | `false` | Otherwise use `kubectl port-forward` to reach `/agents/ui`. |
+| `hostAliases` | `[]` | `/etc/hosts` entries on every pod (open-bbcd and the aikdm CronJobs), e.g. an LLM gateway with no DNS record. |
 | `aikdmRunner.image.repository` | `ghcr.io/dacdigital/openbbc/aikdm-runner` | Built from `Dockerfile.aikdm-runner` by CI. |
 | `aikdmRunner.secrets.existingSecret` | `""` | Recommended for prod. Secret keys are envFrom-loaded verbatim by cron pods — set at least one of `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`GEMINI_API_KEY`. |
 | `aikdmRunner.cronjobs.alphas.schedule` | `*/5 * * * *` | One aikdm LLM call (~30–60s) per finalized version. |

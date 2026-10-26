@@ -7,6 +7,12 @@ fullnameOverride: ""
 imagePullSecrets: []
 #  - name: my-registry
 
+# /etc/hosts entries for every pod (open-bbcd and the aikdm CronJobs), e.g. an
+# LLM gateway reachable only by IP with no DNS for its hostname.
+hostAliases: []
+#  - ip: "10.0.0.10"
+#    hostnames: ["llm-gateway.example.com"]
+
 # ---------------------------------------------------------------------------
 # open-bbcd: the Go service (backoffice UI + REST API + deployed agent runtime)
 # ---------------------------------------------------------------------------
