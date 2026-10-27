@@ -298,7 +298,7 @@ func (s *azureStore) Probe(ctx context.Context) error {
 		return s.probeErr("stat of missing key", err)
 	}
 	if st.Exists {
-		return fmt.Errorf("%w: stat of random missing key %q reported it exists", ErrProbeFailed, missing)
+		return fmt.Errorf("%w: stat of random missing key %q reported it exists (account %q, container %q)", ErrProbeFailed, missing, s.account, s.containerName)
 	}
 	return nil
 }
