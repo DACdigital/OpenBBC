@@ -56,7 +56,12 @@ const sasClockSkew = 5 * time.Minute
 // https://<ACCOUNT_NAME>.blob.core.windows.net/; plain http only for
 // loopback or single-label hosts such as Azurite).
 func NewAzureBlob(options map[string]string, signTTL time.Duration) (ArtifactStore, error) {
-	return newAzureBlob(options, signTTL, nil)
+	s, err := newAzureBlob(options, signTTL, nil)
+	if err != nil {
+		// Return a bare nil, not a nil *azureStore wrapped in the interface.
+		return nil, err
+	}
+	return s, nil
 }
 
 // newAzureBlob is NewAzureBlob with injectable client options so tests
@@ -183,6 +188,9 @@ func (s *azureStore) Put(ctx context.Context, uri, mime string, r io.Reader, siz
 		return PutResult{}, err
 	}
 	if cr.n != size {
+		// The committed bytes don't match the content-addressed URI;
+		// best-effort removal so a corrupt blob isn't served later.
+		_ = s.Delete(ctx, uri)
 		return PutResult{}, fmt.Errorf("azure_blob: put %s: read %d bytes, declared %d", uri, cr.n, size)
 	}
 	return PutResult{
