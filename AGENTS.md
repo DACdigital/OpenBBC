@@ -24,7 +24,7 @@ raise a PR against the docs repo, not against this file.
 
 Three components in one monorepo (per [openbbc-docs `docs/repos/openbbc.md`](https://github.com/DACdigital/openbbc-docs/blob/main/docs/repos/openbbc.md)):
 
-- [`open-bbcd/`](open-bbcd/) — Go 1.22+ daemon. Backoffice UI + REST API + deployed agent
+- [`open-bbcd/`](open-bbcd/) — Go 1.27+ daemon. Backoffice UI + REST API + deployed agent
   runtime + MCP-over-REST bridge (`http_endpoint` tool-backend kind). Single binary, no
   local disk state after migration 026 inlined the discovery zip on `agents.discovery_zip`.
 - [`aikdm/`](aikdm/) — Python 3.12+ CLI managed with `uv`. Subcommands `generate-agent`,

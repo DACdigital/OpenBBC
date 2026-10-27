@@ -191,7 +191,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 			WithArtifacts(artifactResolverFrom(artifactRegistry)).
 			WithArtifactUploader(artifactUploader{registry: artifactRegistry})
 	}
-	orchestrator.Model = cfg.Anthropic.DefaultModel
+	orchestrator.Model = cfg.LLMModel()
 	orchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	orchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 	orchestrator.MaxDepth = cfg.Chat.AgentToolMaxDepth
@@ -243,7 +243,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 
 	deployedChatStore := chat.NewDeployedChatStore(deployedRepo)
 	deployedOrchestrator := chat.NewOrchestrator(versionRepo, deployedChatStore, llmClient, builder, logger)
-	deployedOrchestrator.Model = cfg.Anthropic.DefaultModel
+	deployedOrchestrator.Model = cfg.LLMModel()
 	deployedOrchestrator.MaxTokens = cfg.Anthropic.MaxTokens
 	deployedOrchestrator.MaxToolRounds = cfg.Chat.MaxToolRounds
 	deployedOrchestrator.MaxDepth = cfg.Chat.AgentToolMaxDepth

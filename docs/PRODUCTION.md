@@ -12,7 +12,7 @@ live in the docs repo: **[DACdigital/openbbc-docs](https://github.com/DACdigital
 
 ## 1. Deploying `open-bbcd`
 
-`open-bbcd` is a single Go binary (~25 MB distroless image) plus a Postgres 15+ dependency.
+`open-bbcd` is a single Go binary (~57 MB distroless image) plus a Postgres 15+ dependency.
 Three paths:
 
 ### 1a. Docker Compose (local dev, single-node)
@@ -318,8 +318,34 @@ recommendation.
 
 ## 7. Provider LLM keys
 
-`open-bbcd` calls Anthropic (default) for backoffice chat and orchestration. `aikdm` can
-call Anthropic, OpenAI, or Gemini depending on `AIKDM_MODEL_*` env overrides.
+`open-bbcd` calls one LLM provider for backoffice chat and the deployed runtime, chosen at
+boot by `OPENBBC_LLM_ADAPTER`. `aikdm` can call Anthropic, OpenAI, or Gemini depending on
+`AIKDM_MODEL_*` env overrides.
+
+**`open-bbcd` adapter** (full table in [`open-bbcd/README.md`](../open-bbcd/README.md)):
+
+- `OPENBBC_LLM_ADAPTER=anthropic` (default) — direct Anthropic API. Reads
+  `ANTHROPIC_API_KEY`; `OPENBBC_DEFAULT_MODEL` is a bare Anthropic model id (default
+  `claude-sonnet-4-6`).
+- `OPENBBC_LLM_ADAPTER=bifrost` — the embedded Bifrost SDK, one provider per deployment.
+  `OPENBBC_DEFAULT_MODEL` is required and has the form `<provider>/<model>` (split on the
+  first `/`, e.g. `openai/gpt-4o`), with provider one of `anthropic, cerebras, cohere,
+  deepseek, gemini, groq, mistral, openai, openrouter, xai`. Anything else fails boot.
+- `<PROVIDER>_API_KEY` (e.g. `OPENAI_API_KEY`, `XAI_API_KEY`) — only the selected
+  provider's key is read. A missing key does not fail boot; LLM-backed endpoints fail at
+  the first call.
+- `<PROVIDER>_BASE_URL` — optional endpoint override (e.g. a corporate proxy), only for
+  `openai`, `anthropic`, `cohere`, `mistral`. Must be `https`; plain `http` is accepted
+  only for a loopback host. Set for another provider, or invalid → boot fails.
+
+Mount only the selected provider's key into `open-bbcd`. On Helm, set
+`OPENBBC_LLM_ADAPTER` / `OPENBBC_DEFAULT_MODEL` through `openbbcd.extraEnv` and the key
+through `openbbcd.envFromSecret`.
+
+To confirm which adapter serves traffic, check the boot line `"llm adapter ready"` (its
+`adapter` field is `anthropic` or `bifrost:<provider>`), or set `LOG_LEVEL=debug`: every LLM
+call then logs an `"llm call"` line with `adapter`, `model`, `stop_reason`, token counts and
+`duration_ms`.
 
 Set the keys in each service's environment. The compose file wires the aikdm profile
 with `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` from the shell environment

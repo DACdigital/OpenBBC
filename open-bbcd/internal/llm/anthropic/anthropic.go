@@ -9,9 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"iter"
-	"net/http"
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -381,7 +379,7 @@ func (l *LLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBloc
 		return nil, llm.ErrUnsupported
 	}
 
-	bytes, err := fetchBytes(ctx, ref.URI, fetch)
+	bytes, err := llm.FetchBytes(ctx, ref.URI, fetch)
 	if err != nil {
 		return nil, err
 	}
@@ -390,43 +388,6 @@ func (l *LLM) RenderArtifactAsBlock(ctx context.Context, ref llm.ArtifactRefBloc
 		return nil, llm.ErrUnsupported
 	}
 	return llm.InlineMediaBlock{MIME: ref.MIME, Data: bytes}, nil
-}
-
-// fetchBytes reads the blob addressed by uri through the fetcher's
-// preferred delivery mode. Bytes-mode gets a direct Get; SignedURL-mode
-// gets a Sign + follow. TTL for the Sign path is deliberately short (60s):
-// the caller uses the URL immediately and the bytes are then inlined into
-// the LLM request, so a long TTL adds no value and risks the URL leaking.
-func fetchBytes(ctx context.Context, uri string, fetch llm.ArtifactFetcher) ([]byte, error) {
-	// PreferredDelivery uses the integer contract on llm.ArtifactFetcher:
-	// 0 = DeliveryBytes, 1 = DeliverySignedURL. Kept as int rather than a
-	// re-declared enum to avoid cross-package coupling.
-	if fetch.PreferredDelivery() == 0 { // DeliveryBytes
-		rc, err := fetch.Get(ctx, uri)
-		if err != nil {
-			return nil, err
-		}
-		defer rc.Close()
-		return io.ReadAll(rc)
-	}
-	// SignedURL branch.
-	url, err := fetch.Sign(ctx, uri, 60*1_000_000_000) // 60s in nanoseconds — matches time.Duration semantics
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, errors.New("anthropic: signed URL fetch returned status " + resp.Status)
-	}
-	return io.ReadAll(resp.Body)
 }
 
 // Compile-time check that *LLM satisfies llm.MultimodalRenderer.
