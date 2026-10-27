@@ -1,6 +1,7 @@
 package artifacts
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -106,5 +107,72 @@ func TestAzureBlob_KindAndDelivery(t *testing.T) {
 	}
 	if s.PreferredDelivery() != DeliverySignedURL {
 		t.Fatalf("PreferredDelivery = %v, want DeliverySignedURL", s.PreferredDelivery())
+	}
+}
+
+func TestAzureBlob_Sign(t *testing.T) {
+	s, err := newAzureBlob(azureOpts(nil), 5*time.Minute, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().UTC()
+	raw, err := s.Sign(t.Context(), "sha256/abc", 2*time.Minute, SignOptions{
+		ContentType:        "image/png",
+		ContentDisposition: `inline; filename="x.png"`,
+	})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	if u.Scheme != "https" || u.Host != "acct.blob.core.windows.net" || u.Path != "/artifacts/sha256/abc" {
+		t.Fatalf("signed URL = %q", raw)
+	}
+	q := u.Query()
+	if q.Get("sp") != "r" {
+		t.Errorf("sp = %q, want r", q.Get("sp"))
+	}
+	if q.Get("spr") != "https" {
+		t.Errorf("spr = %q, want https", q.Get("spr"))
+	}
+	if q.Get("sig") == "" {
+		t.Error("missing sig")
+	}
+	if q.Get("rsct") != "image/png" || q.Get("rscd") != `inline; filename="x.png"` {
+		t.Errorf("rsct=%q rscd=%q", q.Get("rsct"), q.Get("rscd"))
+	}
+	st, _ := time.Parse(time.RFC3339, q.Get("st"))
+	se, _ := time.Parse(time.RFC3339, q.Get("se"))
+	if d := before.Sub(st); d < 4*time.Minute || d > 6*time.Minute {
+		t.Errorf("st = %v, want ~5m before %v", st, before)
+	}
+	if d := se.Sub(before); d < 110*time.Second || d > 130*time.Second {
+		t.Errorf("se = %v, want ~2m after %v", se, before)
+	}
+}
+
+func TestAzureBlob_SignDefaultsAndNoOverrides(t *testing.T) {
+	s, err := newAzureBlob(azureOpts(map[string]string{"ENDPOINT": "http://127.0.0.1:10000/devstoreaccount1"}), 3*time.Minute, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().UTC()
+	raw, err := s.Sign(t.Context(), "sha256/abc", 0, SignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(raw)
+	q := u.Query()
+	if q.Has("rsct") || q.Has("rscd") {
+		t.Errorf("empty SignOptions must not add overrides: %q", raw)
+	}
+	if q.Get("spr") != "https,http" {
+		t.Errorf("spr = %q, want https,http for an http endpoint", q.Get("spr"))
+	}
+	se, _ := time.Parse(time.RFC3339, q.Get("se"))
+	if d := se.Sub(before); d < 170*time.Second || d > 190*time.Second {
+		t.Errorf("ttl<=0 should use constructor TTL (3m); se=%v", se)
 	}
 }
