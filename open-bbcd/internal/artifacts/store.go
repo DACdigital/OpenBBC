@@ -117,11 +117,12 @@ type ArtifactStore interface {
 	Delete(ctx context.Context, uri string) error
 
 	// Probe performs a boot-time self-check: a small write+read+delete
-	// round-trip against a sentinel key that verifies credentials, bucket
-	// reachability, and permission set, and that Stat of a random missing
-	// key reports not-found (for s3_compatible this needs s3:ListBucket;
-	// without it S3 answers 403 and a missing blob is indistinguishable
-	// from an auth failure). Failure of the default store's
+	// round-trip against a sentinel key that verifies credentials, bucket/
+	// container reachability, and permission set, and that Stat of a
+	// random missing key reports not-found. For s3_compatible this needs
+	// s3:ListBucket (without it S3 answers 403 and a missing blob is
+	// indistinguishable from an auth failure); azure_blob's Shared Key is
+	// account-wide so needs nothing extra. Failure of the default store's
 	// Probe (after bounded retry) fails daemon boot.
 	Probe(ctx context.Context) error
 }
