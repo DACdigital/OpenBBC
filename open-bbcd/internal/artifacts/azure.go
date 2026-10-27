@@ -118,6 +118,9 @@ func azureEndpoint(raw, account string) (endpoint string, insecure bool, err err
 	if perr != nil || u.Host == "" {
 		return "", false, fmt.Errorf("azure_blob: ENDPOINT %q is not an absolute http(s) URL", raw)
 	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", false, fmt.Errorf("azure_blob: ENDPOINT %q must not contain a query or fragment", raw)
+	}
 	switch u.Scheme {
 	case "https":
 	case "http":
@@ -172,17 +175,33 @@ func (s *azureStore) Put(ctx context.Context, uri, mime string, r io.Reader, siz
 	if err != nil {
 		return PutResult{}, err
 	}
-	_, err = bb.UploadStream(ctx, r, &blockblob.UploadStreamOptions{
+	cr := &countingReader{r: r}
+	_, err = bb.UploadStream(ctx, cr, &blockblob.UploadStreamOptions{
 		HTTPHeaders: &blob.HTTPHeaders{BlobContentType: &mime},
 	})
 	if err != nil {
 		return PutResult{}, err
+	}
+	if cr.n != size {
+		return PutResult{}, fmt.Errorf("azure_blob: put %s: read %d bytes, declared %d", uri, cr.n, size)
 	}
 	return PutResult{
 		URI:       uri,
 		SizeBytes: size,
 		Sha256:    strings.TrimPrefix(uri, "sha256/"),
 	}, nil
+}
+
+// countingReader counts bytes read so Put can verify the declared size.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 func (s *azureStore) Get(ctx context.Context, uri string) (io.ReadCloser, error) {
@@ -239,6 +258,8 @@ func (s *azureStore) Stat(ctx context.Context, uri string) (StatResult, error) {
 		}
 		return StatResult{}, err
 	}
+	// Sha256 comes from the content-addressed URI; it is meaningless for
+	// non-sha256 keys such as probe blobs.
 	st := StatResult{Exists: true, Sha256: strings.TrimPrefix(uri, "sha256/")}
 	if props.ContentType != nil {
 		st.MIME = *props.ContentType
@@ -337,6 +358,9 @@ func isAzureNotFound(err error) bool {
 
 // mapAzureErr normalises SDK errors into the sentinels in store.go so the
 // retrieval handler can tell "blob gone" (410) from "store unhealthy" (502).
+// Any 404 maps to ErrBlobMissing, including ContainerNotFound. This leniency
+// is deliberate and mirrors Stat and isS3NotFound; a missing container is
+// caught by Probe at boot.
 func mapAzureErr(err error) error {
 	if err == nil {
 		return nil

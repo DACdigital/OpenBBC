@@ -79,6 +79,8 @@ func TestNewAzureBlob_Endpoint(t *testing.T) {
 		{"localhost", "http://localhost:10000/devstoreaccount1/", "http://localhost:10000/devstoreaccount1/artifacts", false},
 		{"plain http public host", "http://example.com/", "", true},
 		{"bad scheme", "ftp://x", "", true},
+		{"query rejected", "https://x.blob.core.windows.net/?sv=1", "", true},
+		{"fragment rejected", "https://x.blob.core.windows.net/#f", "", true},
 		{"not absolute", "acct.blob.core.windows.net", "", true},
 	}
 	for _, tc := range cases {
@@ -188,7 +190,6 @@ func TestAzureBlob_SignDefaultsAndNoOverrides(t *testing.T) {
 // stall the test in backoff.
 type fakeAzure struct {
 	byMethod map[string]fakeResp
-	calls    []string
 }
 
 type fakeResp struct {
@@ -198,7 +199,6 @@ type fakeResp struct {
 }
 
 func (f *fakeAzure) Do(req *http.Request) (*http.Response, error) {
-	f.calls = append(f.calls, req.Method+" "+req.URL.Path)
 	r, ok := f.byMethod[req.Method]
 	if !ok {
 		r = fakeResp{status: http.StatusCreated}
@@ -359,3 +359,45 @@ func TestAzureBlob_ProbeHappyPath(t *testing.T) {
 type transportFunc func(*http.Request) (*http.Response, error)
 
 func (fn transportFunc) Do(req *http.Request) (*http.Response, error) { return fn(req) }
+
+func TestAzureBlob_PutHeadersAndResult(t *testing.T) {
+	var gotCT string
+	s, err := newAzureBlob(azureOpts(nil), time.Minute, &azcore.ClientOptions{
+		Transport: transportFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPut {
+				// UploadStream stages blocks, then commits them (comp=blocklist)
+				// with the blob headers; capture whichever PUT carries it. The SDK sets
+				// the key in lowercase, so index the map directly (Get would canonicalise).
+				if v := req.Header["x-ms-blob-content-type"]; len(v) > 0 {
+					gotCT = v[0]
+				}
+				_, _ = io.Copy(io.Discard, req.Body)
+			}
+			return &http.Response{StatusCode: http.StatusCreated, Header: http.Header{}, Body: http.NoBody, Request: req}, nil
+		}),
+		Retry: policy.RetryOptions{MaxRetries: -1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := "hello world"
+	got, err := s.Put(t.Context(), "sha256/abc123", "image/png", strings.NewReader(payload), int64(len(payload)))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if gotCT != "image/png" {
+		t.Errorf("x-ms-blob-content-type = %q, want image/png", gotCT)
+	}
+	want := PutResult{URI: "sha256/abc123", SizeBytes: int64(len(payload)), Sha256: "abc123"}
+	if got != want {
+		t.Fatalf("PutResult = %+v, want %+v", got, want)
+	}
+}
+
+func TestAzureBlob_PutShortReadFails(t *testing.T) {
+	s := fakeAzureStore(t, &fakeAzure{byMethod: map[string]fakeResp{}})
+	_, err := s.Put(t.Context(), "sha256/abc", "text/plain", strings.NewReader("short"), 100)
+	if err == nil || !strings.Contains(err.Error(), "read 5 bytes, declared 100") {
+		t.Fatalf("Put err = %v, want size mismatch", err)
+	}
+}
