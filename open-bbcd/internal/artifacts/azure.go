@@ -17,7 +17,6 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
-	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/sas"
 )
 
@@ -30,8 +29,12 @@ import (
 // are a 302 to a read-only Blob service SAS signed locally with the
 // account key, carrying SignOptions as rsct/rscd response overrides.
 type azureStore struct {
-	container     *container.Client
-	cred          *container.SharedKeyCredential
+	// containerURL is endpoint+container with no trailing slash. Blob
+	// clients are built per call from it; the azblob container package is
+	// deliberately not imported (it drags Apache Arrow into the binary).
+	containerURL  string
+	cred          *blob.SharedKeyCredential
+	clientOpts    *azcore.ClientOptions // may be nil
 	account       string
 	containerName string
 	// insecure is true when ENDPOINT is plain http (Azurite); SAS URLs
@@ -58,7 +61,7 @@ func NewAzureBlob(options map[string]string, signTTL time.Duration) (ArtifactSto
 
 // newAzureBlob is NewAzureBlob with injectable client options so tests
 // can swap the HTTP transport and disable retries.
-func newAzureBlob(options map[string]string, signTTL time.Duration, clientOpts *container.ClientOptions) (*azureStore, error) {
+func newAzureBlob(options map[string]string, signTTL time.Duration, clientOpts *azcore.ClientOptions) (*azureStore, error) {
 	account := strings.TrimSpace(options["ACCOUNT_NAME"])
 	key := strings.TrimSpace(options["ACCOUNT_KEY"])
 	containerName := strings.TrimSpace(options["CONTAINER"])
@@ -85,18 +88,15 @@ func newAzureBlob(options map[string]string, signTTL time.Duration, clientOpts *
 		return nil, err
 	}
 
-	cred, err := container.NewSharedKeyCredential(account, key)
+	cred, err := blob.NewSharedKeyCredential(account, key)
 	if err != nil {
 		return nil, fmt.Errorf("azure_blob: ACCOUNT_KEY rejected by the SDK")
 	}
-	client, err := container.NewClientWithSharedKeyCredential(endpoint+containerName, cred, clientOpts)
-	if err != nil {
-		return nil, fmt.Errorf("azure_blob: %w", err)
-	}
 
 	return &azureStore{
-		container:     client,
+		containerURL:  endpoint + containerName,
 		cred:          cred,
+		clientOpts:    clientOpts,
 		account:       account,
 		containerName: containerName,
 		insecure:      insecure,
@@ -144,11 +144,35 @@ func isLocalHost(host string) bool {
 	return !strings.Contains(host, ".")
 }
 
+// blobURL builds the blob URL. Blob names are always sha256/<hex> or
+// _probe/<hex>, so no path escaping is needed.
+func (s *azureStore) blobURL(uri string) string { return s.containerURL + "/" + uri }
+
+func (s *azureStore) blobClient(uri string) (*blob.Client, error) {
+	var o *blob.ClientOptions
+	if s.clientOpts != nil {
+		o = &blob.ClientOptions{ClientOptions: *s.clientOpts}
+	}
+	return blob.NewClientWithSharedKeyCredential(s.blobURL(uri), s.cred, o)
+}
+
+func (s *azureStore) blockBlobClient(uri string) (*blockblob.Client, error) {
+	var o *blockblob.ClientOptions
+	if s.clientOpts != nil {
+		o = &blockblob.ClientOptions{ClientOptions: *s.clientOpts}
+	}
+	return blockblob.NewClientWithSharedKeyCredential(s.blobURL(uri), s.cred, o)
+}
+
 func (s *azureStore) Kind() string                    { return azureBlobKind }
 func (s *azureStore) PreferredDelivery() DeliveryMode { return DeliverySignedURL }
 
 func (s *azureStore) Put(ctx context.Context, uri, mime string, r io.Reader, size int64) (PutResult, error) {
-	_, err := s.container.NewBlockBlobClient(uri).UploadStream(ctx, r, &blockblob.UploadStreamOptions{
+	bb, err := s.blockBlobClient(uri)
+	if err != nil {
+		return PutResult{}, err
+	}
+	_, err = bb.UploadStream(ctx, r, &blockblob.UploadStreamOptions{
 		HTTPHeaders: &blob.HTTPHeaders{BlobContentType: &mime},
 	})
 	if err != nil {
@@ -162,7 +186,11 @@ func (s *azureStore) Put(ctx context.Context, uri, mime string, r io.Reader, siz
 }
 
 func (s *azureStore) Get(ctx context.Context, uri string) (io.ReadCloser, error) {
-	resp, err := s.container.NewBlobClient(uri).DownloadStream(ctx, nil)
+	bc, err := s.blobClient(uri)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := bc.DownloadStream(ctx, nil)
 	if err != nil {
 		return nil, mapAzureErr(err)
 	}
@@ -193,11 +221,15 @@ func (s *azureStore) Sign(_ context.Context, uri string, ttl time.Duration, opts
 	if err != nil {
 		return "", fmt.Errorf("azure_blob: sign: %w", err)
 	}
-	return s.container.NewBlobClient(uri).URL() + "?" + qp.Encode(), nil
+	return s.blobURL(uri) + "?" + qp.Encode(), nil
 }
 
 func (s *azureStore) Stat(ctx context.Context, uri string) (StatResult, error) {
-	props, err := s.container.NewBlobClient(uri).GetProperties(ctx, nil)
+	bc, err := s.blobClient(uri)
+	if err != nil {
+		return StatResult{}, err
+	}
+	props, err := bc.GetProperties(ctx, nil)
 	if err != nil {
 		// Any 404 — BlobNotFound or ContainerNotFound — is "not there",
 		// matching isS3NotFound's lenient NoSuchBucket handling. Probe
@@ -221,7 +253,11 @@ func (s *azureStore) Stat(ctx context.Context, uri string) (StatResult, error) {
 // matching S3 RemoveObject's idempotence.
 func (s *azureStore) Delete(ctx context.Context, uri string) error {
 	include := blob.DeleteSnapshotsOptionTypeInclude
-	_, err := s.container.NewBlobClient(uri).Delete(ctx, &blob.DeleteOptions{DeleteSnapshots: &include})
+	bc, err := s.blobClient(uri)
+	if err != nil {
+		return err
+	}
+	_, err = bc.Delete(ctx, &blob.DeleteOptions{DeleteSnapshots: &include})
 	if err != nil && azureErrorCode(err) != "BlobNotFound" {
 		return err
 	}

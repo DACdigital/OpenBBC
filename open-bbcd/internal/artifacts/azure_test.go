@@ -11,7 +11,6 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 )
 
 // azuriteKey is Azurite's published well-known dev account key — not a
@@ -97,7 +96,7 @@ func TestNewAzureBlob_Endpoint(t *testing.T) {
 			if err != nil {
 				t.Fatalf("newAzureBlob: %v", err)
 			}
-			if got := s.container.URL(); got != tc.wantURL {
+			if got := s.containerURL; got != tc.wantURL {
 				t.Fatalf("container URL = %q, want %q", got, tc.wantURL)
 			}
 		})
@@ -221,11 +220,9 @@ func (f *fakeAzure) Do(req *http.Request) (*http.Response, error) {
 
 func fakeAzureStore(t *testing.T, f *fakeAzure) *azureStore {
 	t.Helper()
-	s, err := newAzureBlob(azureOpts(nil), time.Minute, &container.ClientOptions{
-		ClientOptions: azcore.ClientOptions{
-			Transport: f,
-			Retry:     policy.RetryOptions{MaxRetries: -1},
-		},
+	s, err := newAzureBlob(azureOpts(nil), time.Minute, &azcore.ClientOptions{
+		Transport: f,
+		Retry:     policy.RetryOptions{MaxRetries: -1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -330,25 +327,23 @@ func TestAzureBlob_ProbeHappyPath(t *testing.T) {
 	// PUT → 201; first HEAD (probe blob) → 200; DELETE → 202; second
 	// HEAD (missing key) → 404 BlobNotFound.
 	heads := 0
-	s, err := newAzureBlob(azureOpts(nil), time.Minute, &container.ClientOptions{
-		ClientOptions: azcore.ClientOptions{
-			Transport: transportFunc(func(req *http.Request) (*http.Response, error) {
-				status, h := http.StatusCreated, http.Header{}
-				switch req.Method {
-				case http.MethodHead:
-					heads++
-					status = http.StatusOK
-					if heads > 1 {
-						status = http.StatusNotFound
-						h.Set("x-ms-error-code", "BlobNotFound")
-					}
-				case http.MethodDelete:
-					status = http.StatusAccepted
+	s, err := newAzureBlob(azureOpts(nil), time.Minute, &azcore.ClientOptions{
+		Transport: transportFunc(func(req *http.Request) (*http.Response, error) {
+			status, h := http.StatusCreated, http.Header{}
+			switch req.Method {
+			case http.MethodHead:
+				heads++
+				status = http.StatusOK
+				if heads > 1 {
+					status = http.StatusNotFound
+					h.Set("x-ms-error-code", "BlobNotFound")
 				}
-				return &http.Response{StatusCode: status, Header: h, Body: http.NoBody, Request: req}, nil
-			}),
-			Retry: policy.RetryOptions{MaxRetries: -1},
-		},
+			case http.MethodDelete:
+				status = http.StatusAccepted
+			}
+			return &http.Response{StatusCode: status, Header: h, Body: http.NoBody, Request: req}, nil
+		}),
+		Retry: policy.RetryOptions{MaxRetries: -1},
 	})
 	if err != nil {
 		t.Fatal(err)
