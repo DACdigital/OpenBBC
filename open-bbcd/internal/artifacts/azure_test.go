@@ -1,10 +1,17 @@
 package artifacts
 
 import (
+	"errors"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 )
 
 // azuriteKey is Azurite's published well-known dev account key — not a
@@ -176,3 +183,184 @@ func TestAzureBlob_SignDefaultsAndNoOverrides(t *testing.T) {
 		t.Errorf("ttl<=0 should use constructor TTL (3m); se=%v", se)
 	}
 }
+
+// fakeAzure answers every request with the status/code/headers the test
+// configured for that HTTP method. Retries are disabled so a 5xx does not
+// stall the test in backoff.
+type fakeAzure struct {
+	byMethod map[string]fakeResp
+	calls    []string
+}
+
+type fakeResp struct {
+	status  int
+	code    string
+	headers map[string]string
+}
+
+func (f *fakeAzure) Do(req *http.Request) (*http.Response, error) {
+	f.calls = append(f.calls, req.Method+" "+req.URL.Path)
+	r, ok := f.byMethod[req.Method]
+	if !ok {
+		r = fakeResp{status: http.StatusCreated}
+	}
+	h := http.Header{}
+	if r.code != "" {
+		h.Set("x-ms-error-code", r.code)
+	}
+	for k, v := range r.headers {
+		h.Set(k, v)
+	}
+	return &http.Response{
+		StatusCode: r.status,
+		Header:     h,
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+	}, nil
+}
+
+func fakeAzureStore(t *testing.T, f *fakeAzure) *azureStore {
+	t.Helper()
+	s, err := newAzureBlob(azureOpts(nil), time.Minute, &container.ClientOptions{
+		ClientOptions: azcore.ClientOptions{
+			Transport: f,
+			Retry:     policy.RetryOptions{MaxRetries: -1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestAzureBlob_StatNotFound(t *testing.T) {
+	for _, code := range []string{"BlobNotFound", "ContainerNotFound"} {
+		t.Run(code, func(t *testing.T) {
+			s := fakeAzureStore(t, &fakeAzure{byMethod: map[string]fakeResp{
+				http.MethodHead: {status: 404, code: code},
+			}})
+			st, err := s.Stat(t.Context(), "sha256/abc")
+			if err != nil || st.Exists {
+				t.Fatalf("Stat = %+v, %v; want Exists=false, nil", st, err)
+			}
+		})
+	}
+}
+
+func TestAzureBlob_StatExists(t *testing.T) {
+	s := fakeAzureStore(t, &fakeAzure{byMethod: map[string]fakeResp{
+		http.MethodHead: {status: 200, headers: map[string]string{"Content-Type": "image/png", "Content-Length": "42"}},
+	}})
+	st, err := s.Stat(t.Context(), "sha256/abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Exists || st.MIME != "image/png" || st.SizeBytes != 42 || st.Sha256 != "abc" {
+		t.Fatalf("Stat = %+v", st)
+	}
+}
+
+func TestAzureBlob_StatServerErrorIsNotNotFound(t *testing.T) {
+	s := fakeAzureStore(t, &fakeAzure{byMethod: map[string]fakeResp{
+		http.MethodHead: {status: 500, code: "InternalError"},
+	}})
+	if _, err := s.Stat(t.Context(), "sha256/abc"); err == nil {
+		t.Fatal("want error on 500")
+	}
+}
+
+func TestAzureBlob_GetMissingIsErrBlobMissing(t *testing.T) {
+	s := fakeAzureStore(t, &fakeAzure{byMethod: map[string]fakeResp{
+		http.MethodGet: {status: 404, code: "BlobNotFound"},
+	}})
+	_, err := s.Get(t.Context(), "sha256/abc")
+	if !errors.Is(err, ErrBlobMissing) {
+		t.Fatalf("Get err = %v, want ErrBlobMissing", err)
+	}
+}
+
+func TestAzureBlob_DeleteMissingIsNil(t *testing.T) {
+	s := fakeAzureStore(t, &fakeAzure{byMethod: map[string]fakeResp{
+		http.MethodDelete: {status: 404, code: "BlobNotFound"},
+	}})
+	if err := s.Delete(t.Context(), "sha256/abc"); err != nil {
+		t.Fatalf("Delete of missing blob = %v, want nil", err)
+	}
+}
+
+func TestAzureBlob_DeleteOtherErrorSurfaces(t *testing.T) {
+	s := fakeAzureStore(t, &fakeAzure{byMethod: map[string]fakeResp{
+		http.MethodDelete: {status: 403, code: "AuthenticationFailed"},
+	}})
+	if err := s.Delete(t.Context(), "sha256/abc"); err == nil {
+		t.Fatal("want error on 403")
+	}
+}
+
+func TestAzureBlob_ProbeHints(t *testing.T) {
+	cases := []struct {
+		status   int
+		code     string
+		wantHint string
+	}{
+		{403, "AuthenticationFailed", "wrong or rotated ACCOUNT_KEY"},
+		{403, "AuthorizationFailure", "firewall"},
+		{403, "KeyBasedAuthenticationNotPermitted", "allowSharedKeyAccess=false"},
+		{404, "ContainerNotFound", "CONTAINER must exist"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.code, func(t *testing.T) {
+			s := fakeAzureStore(t, &fakeAzure{byMethod: map[string]fakeResp{
+				http.MethodPut: {status: tc.status, code: tc.code},
+			}})
+			err := s.Probe(t.Context())
+			if !errors.Is(err, ErrProbeFailed) {
+				t.Fatalf("Probe err = %v, want ErrProbeFailed", err)
+			}
+			for _, want := range []string{tc.code, tc.wantHint, `"acct"`, `"artifacts"`} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Probe err %q missing %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestAzureBlob_ProbeHappyPath(t *testing.T) {
+	// PUT → 201; first HEAD (probe blob) → 200; DELETE → 202; second
+	// HEAD (missing key) → 404 BlobNotFound.
+	heads := 0
+	s, err := newAzureBlob(azureOpts(nil), time.Minute, &container.ClientOptions{
+		ClientOptions: azcore.ClientOptions{
+			Transport: transportFunc(func(req *http.Request) (*http.Response, error) {
+				status, h := http.StatusCreated, http.Header{}
+				switch req.Method {
+				case http.MethodHead:
+					heads++
+					status = http.StatusOK
+					if heads > 1 {
+						status = http.StatusNotFound
+						h.Set("x-ms-error-code", "BlobNotFound")
+					}
+				case http.MethodDelete:
+					status = http.StatusAccepted
+				}
+				return &http.Response{StatusCode: status, Header: h, Body: http.NoBody, Request: req}, nil
+			}),
+			Retry: policy.RetryOptions{MaxRetries: -1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Probe(t.Context()); err != nil {
+		t.Fatalf("Probe = %v", err)
+	}
+	if heads != 2 {
+		t.Fatalf("HEAD calls = %d, want 2", heads)
+	}
+}
+
+type transportFunc func(*http.Request) (*http.Response, error)
+
+func (fn transportFunc) Do(req *http.Request) (*http.Response, error) { return fn(req) }
