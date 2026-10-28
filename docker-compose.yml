@@ -84,6 +84,34 @@ services:
       timeout: 5s
       retries: 10
 
+  # Local Azure Blob emulator for the azure_blob artifact-store kind.
+  # Same profile as minio. --skipApiVersionCheck lets the azblob SDK's
+  # newer x-ms-version through. The integration test creates its own
+  # container; for open-bbcd create one first, e.g.
+  #   az storage container create -n openbbc-artifacts \
+  #     --connection-string "UseDevelopmentStorage=true"
+  #
+  # Env vars for open-bbcd (Azurite's published dev account — not a secret):
+  #   ARTIFACT_STORE_AZ_KIND=azure_blob
+  #   ARTIFACT_STORE_AZ_ACCOUNT_NAME=devstoreaccount1
+  #   ARTIFACT_STORE_AZ_ACCOUNT_KEY=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
+  #   ARTIFACT_STORE_AZ_CONTAINER=openbbc-artifacts
+  #   ARTIFACT_STORE_AZ_ENDPOINT=http://azurite:10000/devstoreaccount1/
+  #   ARTIFACT_STORE_DEFAULT=AZ
+  #   ARTIFACT_MAX_UPLOAD_MB=25
+  # Note: SAS redirects to http://azurite:10000 resolve only inside the
+  # compose network (same caveat as http://minio:9000) — a browser on the
+  # host needs ENDPOINT=http://127.0.0.1:10000/devstoreaccount1/ instead.
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    profiles: [artifacts, dev-full]
+    ports:
+      - "10000:10000"
+    command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck --location /data
+    volumes:
+      - azurite-data:/data
+
 volumes:
   postgres-data:
   minio-data:
+  azurite-data:

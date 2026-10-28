@@ -33,6 +33,7 @@ type adapterFactory func(options map[string]string, ttl time.Duration) (Artifact
 
 var adapterFactories = map[string]adapterFactory{
 	s3CompatibleKind: NewS3Compatible,
+	azureBlobKind:    NewAzureBlob,
 }
 
 // Load constructs a Registry from parsed configuration. Callers should
@@ -182,7 +183,7 @@ func supportedKindsList() string {
 	// Enumerated statically because iterating adapterFactories has
 	// nondeterministic order and the error message benefits from a
 	// stable presentation.
-	return "s3_compatible"
+	return "s3_compatible, azure_blob"
 }
 
 // LockedSessionChecker reports whether a given (store_id, uri) pair is in

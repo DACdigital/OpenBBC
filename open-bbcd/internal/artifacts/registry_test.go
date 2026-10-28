@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -365,5 +366,36 @@ func TestNilRegistryReturnsSafeZeroValues(t *testing.T) {
 	}
 	if !errors.Is(reg.ProbeAll(context.Background()), ErrRegistryDisabled) {
 		t.Error("nil registry ProbeAll should return ErrRegistryDisabled")
+	}
+}
+
+func TestLoad_AzureBlobKind(t *testing.T) {
+	reg, err := Load(config.ArtifactsConfig{
+		DefaultID:    "AZ",
+		SignedURLTTL: time.Minute,
+		Stores: map[string]config.ArtifactStoreConfig{
+			"AZ": {ID: "AZ", Kind: "azure_blob", Options: map[string]string{
+				"ACCOUNT_NAME": "acct",
+				"ACCOUNT_KEY":  azuriteKey,
+				"CONTAINER":    "artifacts",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := reg.Default().Kind(); got != "azure_blob" {
+		t.Fatalf("Default().Kind() = %q", got)
+	}
+}
+
+func TestLoad_UnknownKindListsAzure(t *testing.T) {
+	_, err := Load(config.ArtifactsConfig{
+		DefaultID:    "X",
+		SignedURLTTL: time.Minute,
+		Stores:       map[string]config.ArtifactStoreConfig{"X": {ID: "X", Kind: "nope"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "s3_compatible, azure_blob") {
+		t.Fatalf("err = %v, want supported list 's3_compatible, azure_blob'", err)
 	}
 }
