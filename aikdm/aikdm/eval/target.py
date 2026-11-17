@@ -98,8 +98,14 @@ async def target_turn(
         wire_calls = []
         results = []
         for tc in tool_calls:
-            args = json.loads(tc.function.arguments or "{}")
-            out = tool_caller.call(tc.function.name, args)
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError as e:
+                # Not dispatched: the model sees the parse error as the tool result.
+                args = {"_raw": tc.function.arguments}
+                out = {"source": "error", "result": {"error": f"invalid JSON arguments: {e}"}}
+            else:
+                out = tool_caller.call(tc.function.name, args)
             entry["tool_calls"].append({"name": tc.function.name, "args": args,
                                         "result": out["result"], "source": out["source"]})
             wire_calls.append({"id": tc.id, "type": "function",

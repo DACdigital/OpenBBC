@@ -83,3 +83,32 @@ async def test_budget_exceeded_flag(monkeypatch):
     assert t.budget_exceeded is True
     assert t.span[-1] == {"role": "assistant", "content": target_mod.BUDGET_SENTINEL}
     assert len(t.span) == 9  # 8 tool rounds + sentinel
+
+
+async def test_invalid_tool_args_become_tool_error(monkeypatch):
+    calls = []
+    bad = NS(id="p1", function=NS(name="lookup", arguments="{not json"))
+    responses = iter([_resp(tool_calls=[bad]), _resp("recovered")])
+
+    async def fake(**kw):
+        calls.append(list(kw["messages"]))
+        return next(responses)
+
+    class _NeverCalled:
+        def call(self, name, args):
+            raise AssertionError("tool_caller must not be called on invalid JSON")
+
+    monkeypatch.setattr(target_mod.litellm, "acompletion", fake)
+    t = await target_mod.target_turn(model="m", system_prompt="s", tools_spec=[],
+                                     history=[{"role": "user", "content": "x"}],
+                                     tool_caller=_NeverCalled())
+    call = t.span[0]["tool_calls"][0]
+    assert call["name"] == "lookup"
+    assert call["args"] == {"_raw": "{not json"}
+    assert call["source"] == "error"
+    assert call["result"]["error"].startswith("invalid JSON arguments: ")
+    assert t.span[-1] == {"role": "assistant", "content": "recovered"}
+    assert t.budget_exceeded is False
+    tool_msg = calls[1][-1]
+    assert tool_msg["role"] == "tool" and tool_msg["tool_call_id"] == "p1"
+    assert json.loads(tool_msg["content"]) == call["result"]
