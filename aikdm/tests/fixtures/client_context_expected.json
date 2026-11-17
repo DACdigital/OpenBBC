@@ -1,0 +1,5 @@
+{
+  "u1": "<client_context>{\"big\":123456789012345678901234567890,\"dup\":2,\"html\":\"<b>&</b>\",\"ls\":\"a\\u2028b\",\"sur\":\"�\",\"z\":{\"a\":[1.0,1e3,-0],\"b\":1}}</client_context>\n\nfirst",
+  "u2": "second",
+  "u3": "<client_context>{\"bom\":\"﻿head\",\"long\":\"word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word end\",\"nel\":\"xy\"}</client_context>\n\nthird"
+}

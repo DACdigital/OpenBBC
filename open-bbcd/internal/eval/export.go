@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"gopkg.in/yaml.v3"
 )
@@ -199,6 +201,7 @@ func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
 			}
 			var decoded any
 			if err := json.Unmarshal(raw, &decoded); err == nil {
+				addRenderedClientContext(decoded)
 				transcript[i].Content = decoded
 			} else {
 				transcript[i].Content = string(raw)
@@ -244,4 +247,33 @@ func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
 			Sessions: sessions,
 		},
 	}, nil
+}
+
+// addRenderedClientContext sets rendered = chat.RenderClientContext(canonical)
+// on every client_context block (spec client-context Scope 6). rendered is
+// the replay authority; it exists only in the export, never in storage.
+func addRenderedClientContext(content any) {
+	blocks, ok := content.([]any)
+	if !ok {
+		return
+	}
+	for _, b := range blocks {
+		m, ok := b.(map[string]any)
+		if !ok || m["type"] != "client_context" {
+			continue
+		}
+		if canonical, ok := m["canonical"].(string); ok {
+			m["rendered"] = chat.RenderClientContext(canonical)
+		}
+	}
+}
+
+// WriteYAML encodes p exactly as GET /evals/{id}/export.yaml serves it.
+func WriteYAML(w io.Writer, p *InputPayload) error {
+	enc := yaml.NewEncoder(w)
+	enc.SetIndent(2)
+	if err := enc.Encode(p); err != nil {
+		return err
+	}
+	return enc.Close()
 }
