@@ -1,6 +1,5 @@
-"""LLM judge. Scores a completed simulated transcript against a bag of
-criteria. Not tied to per-message positions — the judge sees the whole
-transcript and rules on each criterion as a session-level rubric item."""
+"""LLM judge. One call per turn: rules on <turn_under_test> only, with earlier
+conversation as <context>."""
 
 from __future__ import annotations
 
@@ -11,22 +10,25 @@ from dataclasses import dataclass
 from google.adk.agents import LlmAgent  # type: ignore[import-untyped]
 from google.adk.runners import InMemoryRunner
 from google.genai import types as _genai_types
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from aikdm.eval.schemas import Judgment
+from aikdm.eval.script import CriterionItem
 
 JUDGE_SYSTEM_PROMPT = """\
 You are aikdm's eval judge.
 
 You receive:
-- A <transcript> block: a full conversation between a simulated user and
-  the tested agent, in JSON.
-- A <criteria> block: a numbered list of acceptance criteria to check
-  against the whole transcript.
+- <context>: the conversation BEFORE the turn under test (JSON). Context only.
+- <turn_under_test>: the user message and the agent's full reply span for
+  this turn (JSON): every assistant message, its tool calls and results, and
+  the final text.
+- <criteria>: a numbered list of acceptance criteria for THIS turn.
 
-For each criterion, decide whether the tested agent's behavior in the
-transcript satisfies it. You are lenient on wording differences and strict
-on substance. Return one entry per criterion in the same order.
+For each criterion, decide whether the agent's behavior in <turn_under_test>
+satisfies it. Tool calls in <turn_under_test> are part of the behavior being
+judged. Do not judge <context>. Be lenient on wording, strict on substance.
+Return exactly one entry per criterion, in the same order.
 
 Return structured output:
 {"judgments":[{"criterion":"<verbatim criterion text>",
@@ -47,12 +49,17 @@ class JudgeResult:
     tokens_out: int
 
 
+class JudgeError(Exception):
+    """Judge call failed, didn't parse, or returned the wrong number of entries."""
+
+
 def build_judge_agent(model) -> LlmAgent:
     return LlmAgent(
         name="aikdm_eval_judge",
         model=model,
         instruction=JUDGE_SYSTEM_PROMPT,
         output_schema=_JudgeOutput,
+        generate_content_config=_genai_types.GenerateContentConfig(temperature=0),
     )
 
 
@@ -84,30 +91,30 @@ async def _adk_run_once(*, agent, user_message_xml: str) -> tuple[str, int, int]
     return response_text, tokens_in, tokens_out
 
 
-async def judge_transcript(
-    *, agent, transcript: list[dict], criteria_items: list[dict],
+async def judge_turn(
+    *, agent, context: list[dict], turn_under_test: list[dict],
+    criteria_items: list[CriterionItem],
 ) -> JudgeResult:
-    """criteria_items is a list of {message_id, criterion} dicts. The judge
-    ignores message_id (session-level rubric) but we thread it through so we
-    can attribute each Judgment back to the original feedback row."""
-    criteria_text = "\n".join(f"{i+1}. {c['criterion']}" for i, c in enumerate(criteria_items))
+    criteria_text = "\n".join(f"{i+1}. {c.criterion}" for i, c in enumerate(criteria_items))
     user_message_xml = (
-        "<transcript>\n" + json.dumps(transcript, indent=2) + "\n</transcript>\n"
+        "<context>\n" + json.dumps(context, indent=2) + "\n</context>\n"
+        "<turn_under_test>\n" + json.dumps(turn_under_test, indent=2) + "\n</turn_under_test>\n"
         "<criteria>\n" + criteria_text + "\n</criteria>"
     )
     raw, t_in, t_out = await _adk_run_once(agent=agent, user_message_xml=user_message_xml)
-    parsed = _JudgeOutput.model_validate_json(raw)
-    judgments: list[Judgment] = []
-    for i, entry in enumerate(parsed.judgments):
-        item = criteria_items[i] if i < len(criteria_items) else {"message_id": ""}
-        judgments.append(Judgment(
-            message_id=item.get("message_id", ""),
-            criterion=str(entry.get("criterion", item.get("criterion", ""))),
-            passed=bool(entry.get("passed", False)),
-            reason=str(entry.get("reason", "")),
-        ))
+    try:
+        parsed = _JudgeOutput.model_validate_json(raw)
+    except ValidationError as e:
+        raise JudgeError(f"unparseable judge output: {e.errors()[0]['msg']}") from e
+    if len(parsed.judgments) != len(criteria_items):
+        raise JudgeError(
+            f"expected {len(criteria_items)} judgments, got {len(parsed.judgments)}")
+    judgments = [
+        Judgment(message_id=item.message_id, criterion=item.criterion,
+                 passed=bool(entry.get("passed", False)),
+                 reason=str(entry.get("reason", "")))
+        for item, entry in zip(criteria_items, parsed.judgments, strict=True)
+    ]
     passed = sum(1 for j in judgments if j.passed)
-    return JudgeResult(
-        judgments=judgments, passed=passed, total=len(judgments),
-        tokens_in=t_in, tokens_out=t_out,
-    )
+    return JudgeResult(judgments=judgments, passed=passed, total=len(judgments),
+                       tokens_in=t_in, tokens_out=t_out)
