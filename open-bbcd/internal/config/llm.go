@@ -82,6 +82,19 @@ func (c *Config) LLMModel() string {
 	return c.Anthropic.DefaultModel
 }
 
+// RuntimeModel is the model this open-bbcd runs agents on, as configured.
+// Bifrost adapter: "<provider>/<model>". Anthropic adapter, or a hand-built
+// config with an empty LLM block: LLMModel() as is. It is never prefixed
+// here; comparisons go through modelmeta.CanonicalModel, so an
+// OPENBBC_DEFAULT_MODEL that already carries "anthropic/" is not prefixed
+// twice.
+func (c *Config) RuntimeModel() string {
+	if c.LLM.Adapter == LLMAdapterBifrost {
+		return c.LLM.Provider + "/" + c.LLM.Model
+	}
+	return c.LLMModel()
+}
+
 // parseLLMFromEnv reads os.Environ()-style KEY=VALUE strings and resolves
 // the LLM adapter config. Exposed for testing; production goes through Load.
 func parseLLMFromEnv(environ []string, anthropic AnthropicConfig) (LLMConfig, error) {

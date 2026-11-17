@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -29,6 +30,12 @@ type AgentDetailStore interface {
 	Delete(ctx context.Context, agentID string) error
 }
 
+// TrainedFromLookup is the training module's read behind the Versions tab's
+// "Trained on <target>" line (repository.TrainingSessionRepository).
+type TrainedFromLookup interface {
+	TrainedFromByVersionIDs(ctx context.Context, versionIDs []string) (map[string]repository.TrainedFrom, error)
+}
+
 // AgentDetailHandler serves the tabbed agent detail page at
 // /agents/{agent_id}/configure/* — Versions / Inputs / Architecture.
 // Architecture is editable when the agent is pre-finalize (reads/writes
@@ -40,8 +47,16 @@ type AgentDetailHandler struct {
 	backendRepo     *repository.ToolBackendRepository
 	agentWiringRepo *repository.AgentWiringRepository
 	evalRepo        *repository.EvalRepository
+	trainedFrom     TrainedFromLookup // nil: no "Trained on" line
 	schema          *types.WizardSchema
 	tmpl            *template.Template
+}
+
+// WithTrainedFrom wires the training-session lookup behind the Versions
+// tab's "Trained on <target>" line. Left nil (tests), the line is omitted.
+func (h *AgentDetailHandler) WithTrainedFrom(l TrainedFromLookup) *AgentDetailHandler {
+	h.trainedFrom = l
+	return h
 }
 
 func NewAgentDetailHandler(
@@ -115,6 +130,8 @@ type agentDetailPageData struct {
 	CurrentDeployedVersionNum int
 	CurrentDeployedVersionID  string
 	EvalStats                 map[string]versionStat
+	// TrainedFrom maps version id → the training session that produced it.
+	TrainedFrom map[string]repository.TrainedFrom
 
 	// Inputs tab payload.
 	WizardFields []wizardFieldView
@@ -256,6 +273,22 @@ func (h *AgentDetailHandler) Versions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	data.EvalStats = stats
+	// "Trained on <target>" per version, read from the training module.
+	// Like the eval rollup, a failed lookup is not fatal: the line is
+	// simply omitted.
+	if h.trainedFrom != nil {
+		ids := make([]string, 0, len(versions))
+		for _, v := range versions {
+			if v.Version != nil {
+				ids = append(ids, v.Version.ID)
+			}
+		}
+		if tf, err := h.trainedFrom.TrainedFromByVersionIDs(r.Context(), ids); err == nil {
+			data.TrainedFrom = tf
+		} else {
+			slog.Default().Warn("trained_from lookup failed", "agent_id", agentID, "err", err)
+		}
+	}
 	renderTemplate(w, h.tmpl, "layout", data)
 }
 

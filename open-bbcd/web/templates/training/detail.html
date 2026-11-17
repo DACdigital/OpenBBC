@@ -28,7 +28,12 @@
       <div class="agent-meta-item"><dt>Score</dt><dd>{{printf "%.4f" (deref .Session.InitialScore)}} → {{printf "%.4f" (deref .Session.FinalScore)}}</dd></div>
     {{end}}
     {{if .Session.StoppedReason}}<div class="agent-meta-item"><dt>Stopped</dt><dd>{{deref .Session.StoppedReason}}</dd></div>{{end}}
+    {{template "model_target_row" .ModelMeta}}
+    <div class="agent-meta-item"><dt>Teacher model</dt><dd>{{or .ModelMeta.Models.Teacher "—"}}</dd></div>
+    {{template "model_meta_rows" .ModelMeta}}
   </dl>
+
+  {{template "model_mismatch_notice" .ModelMeta}}
 
   {{if eq (printf "%s" .Session.Status) "FAILED"}}
     <p class="warn-text">Error: {{.Session.ErrorMessage}}</p>

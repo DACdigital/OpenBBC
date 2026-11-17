@@ -89,6 +89,14 @@ def test_train_agent_produces_bundle_and_report(monkeypatch, tmp_path: Path):
     assert report["stopped_reason"] == "max_epochs"
     assert report["epochs"][0]["promoted"] is True
     assert report["final_bundle_path"].endswith("bundle.yaml")
+    assert report["models"] == {
+        "teacher_model": "claude-haiku-4-5",
+        "judge_model": "claude-haiku-4-5",
+        "user_simulator_model": "claude-haiku-4-5",
+        "target_agent_model": "claude-haiku-4-5",
+        "user_turn_mode": "verbatim",
+        "history_mode": "simulated",
+    }
 
     # CSV report has one row per epoch with the right columns.
     with open(out_dir / "training-report.csv", encoding="utf-8") as f:

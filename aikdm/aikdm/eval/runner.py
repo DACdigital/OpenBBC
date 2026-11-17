@@ -7,14 +7,20 @@ after a target failure in simulated history mode."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, get_args
 
 from aikdm.eval import judge as judge_mod
 from aikdm.eval import script as script_mod
 from aikdm.eval import simulator as sim_mod
 from aikdm.eval import target as target_mod
 from aikdm.eval.history import reference_entries
-from aikdm.eval.schemas import InputSession, Judgment, ResultSession
+from aikdm.eval.schemas import (
+    HistoryMode,
+    InputSession,
+    Judgment,
+    ResultSession,
+    UserTurnMode,
+)
 
 UNMAPPED_PREFIX = "[unmapped message_id {id}, judged against last turn] "
 
@@ -55,12 +61,12 @@ async def run_session(
     judge_agent,
     target_model: str,
     tool_caller,
-    user_turn_mode: Literal["verbatim", "paraphrase"] = "verbatim",
-    history_mode: Literal["simulated", "reference"] = "simulated",
+    user_turn_mode: UserTurnMode = "verbatim",
+    history_mode: HistoryMode = "simulated",
 ) -> SessionOutcome:
-    if user_turn_mode not in ("verbatim", "paraphrase"):
+    if user_turn_mode not in get_args(UserTurnMode):
         raise ValueError(f"invalid user_turn_mode: {user_turn_mode!r}")
-    if history_mode not in ("simulated", "reference"):
+    if history_mode not in get_args(HistoryMode):
         raise ValueError(f"invalid history_mode: {history_mode!r}")
     script = script_mod.compile_script(session)
     if script.turn_count == 0:

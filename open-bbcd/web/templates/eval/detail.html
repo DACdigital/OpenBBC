@@ -51,7 +51,11 @@
         </ul>
       </dd></div>
     {{end}}
+    {{template "model_target_row" .ModelMeta}}
+    {{template "model_meta_rows" .ModelMeta}}
   </dl>
+
+  {{template "model_mismatch_notice" .ModelMeta}}
 
   {{if .Eval.ErrorMessage}}
     <p class="warn-text">Error: {{.Eval.ErrorMessage}}</p>

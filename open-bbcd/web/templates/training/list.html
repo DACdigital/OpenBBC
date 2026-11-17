@@ -11,6 +11,7 @@
           <th class="col-date">Requested</th>
           <th>Source</th>
           <th>Trained version</th>
+          <th>Target model</th>
           <th class="col-count">Score</th>
           <th class="col-status">Status</th>
         </tr>
@@ -29,6 +30,8 @@
               <a class="agent-link" href="/agent_versions/{{deref .Session.NewVersionID}}/configure/prompts">v{{.NewVersionNum}} ↗</a>
             {{else}}—{{end}}
           </td>
+          {{$m := reportModels .Session.TrainingReport}}
+          <td>{{or $m.Target "—"}}</td>
           <td class="col-count">
             {{if and .Session.InitialScore .Session.FinalScore}}
               {{printf "%.2f" (deref .Session.InitialScore)}} → {{printf "%.2f" (deref .Session.FinalScore)}}

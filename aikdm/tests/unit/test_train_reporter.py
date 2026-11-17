@@ -8,7 +8,7 @@ import io
 from pathlib import Path
 
 from aikdm.train.reporter import ProgressEmitter, write_report
-from aikdm.train.schemas import EpochRecord, SectionPatch, TrainingReport
+from aikdm.train.schemas import EpochRecord, SectionPatch, TrainingModels, TrainingReport
 
 
 def _report(epochs: list[EpochRecord]) -> TrainingReport:
@@ -18,6 +18,11 @@ def _report(epochs: list[EpochRecord]) -> TrainingReport:
         total_epochs_run=len(epochs), stopped_reason="max_epochs",
         epochs=epochs,
         final_bundle_path="/tmp/bundle.yaml",
+        models=TrainingModels(
+            teacher_model="claude-haiku-4-5", judge_model="claude-haiku-4-5",
+            user_simulator_model="claude-haiku-4-5", target_agent_model="claude-haiku-4-5",
+            user_turn_mode="verbatim", history_mode="simulated",
+        ),
     )
 
 
@@ -35,6 +40,7 @@ def test_write_report_creates_both_json_and_csv(tmp_path: Path):
     j = json.loads((tmp_path / "training-report.json").read_text())
     assert j["schema_version"] == "training-report-v1"
     assert j["epochs"][0]["promoted"] is True
+    assert j["models"]["target_agent_model"] == "claude-haiku-4-5"
 
     with open(tmp_path / "training-report.csv", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))

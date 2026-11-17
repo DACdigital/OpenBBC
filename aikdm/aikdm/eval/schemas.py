@@ -6,6 +6,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# Eval modes, shared by Settings (config.py), the eval runner, AikdmMeta and
+# the training report's models block.
+UserTurnMode = Literal["verbatim", "paraphrase"]
+HistoryMode = Literal["simulated", "reference"]
+
 
 class InputToolCall(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -98,8 +103,8 @@ class AikdmMeta(BaseModel):
     target_agent_model: str
     duration_seconds: float
     aikdm_version: str = "0.1.0"
-    user_turn_mode: Literal["verbatim", "paraphrase"] = "verbatim"
-    history_mode: Literal["simulated", "reference"] = "simulated"
+    user_turn_mode: UserTurnMode = "verbatim"
+    history_mode: HistoryMode = "simulated"
 
 
 class EvalResult(BaseModel):

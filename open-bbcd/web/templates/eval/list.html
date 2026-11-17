@@ -10,6 +10,7 @@
           <th>Created</th>
           <th>Agent</th>
           <th>Dataset</th>
+          <th>Target / judge</th>
           <th class="col-status">Status</th>
           <th class="col-count">Score</th>
         </tr>
@@ -20,6 +21,8 @@
           <td class="col-date">{{.Eval.CreatedAt.Format "2006-01-02 15:04"}}</td>
           <td><a class="agent-link" href="/agent_versions/{{.Eval.AgentVersionID}}/configure">{{.AgentName}} v{{.AgentVersionNum}}</a></td>
           <td>{{.DatasetName}} v{{.DatasetVersionNum}}</td>
+          {{$m := evalModels .Eval.AikdmMeta}}
+          <td>{{if or $m.Target $m.Judge}}{{or $m.Target "—"}} / {{or $m.Judge "—"}}{{else}}—{{end}}</td>
           <td><span class="badge badge-{{statusClass (printf "%s" .Eval.Status)}}">{{.Eval.Status}}</span></td>
           <td class="col-count">{{with .Eval.Score}}{{pct .}}{{else}}—{{end}}</td>
         </tr>

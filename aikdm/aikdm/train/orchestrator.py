@@ -19,7 +19,7 @@ from aikdm.eval.orchestrator import run_eval             # test seam
 from aikdm.eval.schemas import EvalInput, EvalResult
 from aikdm.train.patcher import apply_patches
 from aikdm.train.reporter import ProgressEmitter
-from aikdm.train.schemas import EpochRecord, SectionPatch, TrainingReport
+from aikdm.train.schemas import EpochRecord, SectionPatch, TrainingModels, TrainingReport
 from aikdm.train.teacher import build_teacher_agent, propose_patches   # test seams
 
 
@@ -33,6 +33,7 @@ async def run_training(
 ) -> tuple[dict[str, Any], TrainingReport]:
     """Runs the loop. Returns (final_bundle, TrainingReport)."""
     emit = emitter or ProgressEmitter()
+    models_used = _training_models(settings)
 
     teacher_model = models.build_model("teacher", settings)
     teacher_agent = build_teacher_agent(teacher_model)
@@ -54,6 +55,7 @@ async def run_training(
             stopped_reason="perfect_score",
             epochs=[],
             final_bundle_path="",
+            models=models_used,
         )
 
     tried: list[SectionPatch] = []
@@ -172,8 +174,22 @@ async def run_training(
         stopped_reason=stopped_reason,      # already a valid Literal value
         epochs=epoch_records,
         final_bundle_path="",               # populated by the CLI when it knows the out dir
+        models=models_used,
     )
     return best_bundle, report
+
+
+def _training_models(settings: Settings) -> TrainingModels:
+    """The report's `models` block: the configured strings, unnormalized
+    (same convention as the eval result's aikdm_meta)."""
+    return TrainingModels(
+        teacher_model=settings.model_teacher,
+        judge_model=settings.model_judge,
+        user_simulator_model=settings.model_user_simulator,
+        target_agent_model=settings.model_target,
+        user_turn_mode=settings.eval_user_turn_mode,
+        history_mode=settings.eval_history_mode,
+    )
 
 
 def _with_bundle(base: EvalInput, bundle: dict[str, Any]) -> EvalInput:

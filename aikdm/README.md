@@ -29,12 +29,18 @@ Output is YAML with `metadata`, `main_prompt`, `capabilities[]`, `skills[]`, and
 | Var | Required | Default | Purpose |
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` | one per provider used | — | provider credential |
-| `AIKDM_MODEL_GENERATOR` | no | `claude-opus-4-7` | generator model |
-| `AIKDM_MODEL_CRITIC` | no | `claude-opus-4-7` | critic model |
+| `AIKDM_MODEL_GENERATOR` | no | `claude-haiku-4-5` | generator model (`generate-agent`) |
+| `AIKDM_MODEL_CRITIC` | no | `claude-haiku-4-5` | critic model (`generate-agent`) |
+| `AIKDM_MODEL_TARGET` | no | `claude-haiku-4-5` | model the agent under test runs on in `evaluate` / `train-agent` (the scoring target; the back office flags it when it differs from open-bbcd's `OPENBBC_DEFAULT_MODEL`) |
+| `AIKDM_MODEL_JUDGE` | no | `claude-haiku-4-5` | judge model that grades each criterion |
+| `AIKDM_MODEL_USER_SIMULATOR` | no | `claude-haiku-4-5` | user-simulator model (rewords user turns in `paraphrase` mode) |
+| `AIKDM_MODEL_TEACHER` | no | `claude-haiku-4-5` | teacher model that proposes prompt patches in `train-agent` |
 | `AIKDM_CRITIC_ROUNDS` | no | `2` | max critic loop rounds |
 | `AIKDM_LOG_LEVEL` | no | `info` | human log level |
 | `AIKDM_EVAL_USER_TURN_MODE` | no | `verbatim` | eval user turns: `verbatim` sends them as recorded; `paraphrase` has the simulator LLM reword them |
 | `AIKDM_EVAL_HISTORY_MODE` | no | `simulated` | eval history: `simulated` shows the target its own earlier replies; `reference` shows the recorded reference replies (requires `verbatim`) |
+
+`load_settings` needs a provider key for all six `AIKDM_MODEL_*` models, so when you switch provider, switch all six.
 
 ## Eval and training modes
 
@@ -68,13 +74,16 @@ How a session is replayed:
 | `paraphrase` | `reference` | Rejected at startup (`ConfigError`). |
 
 Rules of thumb:
-- **Compare scores only within one combination.** Each result records it in
-  `aikdm_meta.user_turn_mode` / `aikdm_meta.history_mode`. Keep the same combination for a
+- **Compare scores only within one combination.** Each eval records it in
+  `aikdm_meta.user_turn_mode` / `aikdm_meta.history_mode`, each training report in
+  `models.user_turn_mode` / `models.history_mode`. Keep the same combination for a
   whole training run and for any eval you compare against it.
-- **Set the variables where aikdm actually runs.** When evals and trainings are started from
-  the back office, open-bbcd launches aikdm and passes its own environment through. So set
-  the variables in open-bbcd's environment (e.g. `open-bbcd/.env` or the deployment's env
-  values), not in your shell.
+- **Set the variables where aikdm actually runs.** Evals and trainings queued from the back
+  office are run by the aikdm runner, not by open-bbcd: the Helm `evals` / `trainings`
+  CronJobs (set `aikdmRunner.extraEnv`), or the `aikdm` docker-compose service (export the
+  variables in the shell that runs `docker compose`). open-bbcd's own environment has no
+  effect on them. Each eval result records the models and modes in `aikdm_meta`; each
+  training report records them in `models`.
 - **Inconclusive judgments** (`inconclusive: true`: target crash, turn not reached, judge
   error) count as failed in the score, but the training teacher ignores them, so it doesn't
   patch prompts to fix infrastructure errors.

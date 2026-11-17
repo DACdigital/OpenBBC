@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/eval"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/modelmeta"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -33,6 +34,9 @@ type EvalHandler struct {
 	detailTmpl    *template.Template
 	modalTmpl     *template.Template
 	perAVTmpl     *template.Template
+	// runtimeModel is the model this open-bbcd runs agents on
+	// (config.Config.RuntimeModel). "" disables the detail page's mismatch notice.
+	runtimeModel string
 }
 
 func NewEvalHandler(
@@ -47,6 +51,7 @@ func NewEvalHandler(
 		"add":         func(a, b int) int { return a + b },
 		"sub":         func(a, b int) int { return a - b },
 		"pct":         func(f float64) string { return formatPercent(f) },
+		"evalModels":  modelmeta.ParseModels,
 		"deref": func(v any) any {
 			switch p := v.(type) {
 			case *string:
@@ -77,6 +82,7 @@ func NewEvalHandler(
 	}
 	detailTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
+		"templates/partials/model_meta.html",
 		"templates/eval/detail.html",
 	)
 	if err != nil {
@@ -99,6 +105,14 @@ func NewEvalHandler(
 		repo: repo, dataset: dataset, adapter: adapter, trainingStore: trainingStore,
 		listTmpl: listTmpl, detailTmpl: detailTmpl, modalTmpl: modalTmpl, perAVTmpl: perAVTmpl,
 	}, nil
+}
+
+// WithRuntimeModel sets the runtime model named in the detail page's
+// scoring/runtime mismatch notice (cfg.RuntimeModel() in newAPI). The
+// default "" shows no notice.
+func (h *EvalHandler) WithRuntimeModel(model string) *EvalHandler {
+	h.runtimeModel = model
+	return h
 }
 
 // Create handles POST /agent_versions/{version_id}/evals.
@@ -404,6 +418,7 @@ func (h *EvalHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 	renderTemplate(w, h.detailTmpl, "layout", map[string]any{
 		"Active":                "evals",
 		"Eval":                  e,
+		"ModelMeta":             modelmeta.NewView(modelmeta.ParseModels(e.AikdmMeta), h.runtimeModel),
 		"AgentName":             agentName,
 		"AgentVersionNum":       agentVersionNum,
 		"DatasetName":           datasetName,

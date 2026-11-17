@@ -8,6 +8,7 @@ import (
 
 	"github.com/lib/pq"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/modelmeta"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -464,6 +465,47 @@ func (r *TrainingSessionRepository) EnrichRows(ctx context.Context, sessions []*
 		lbl := labels[s.ID]
 		lbl.Session = s
 		out = append(out, lbl)
+	}
+	return out, rows.Err()
+}
+
+// TrainedFrom names the training session that produced an agent version and
+// the target model it was scored against. TargetModel is "" when the
+// session's report predates aikdm recording models.
+type TrainedFrom struct {
+	SessionID   string
+	TargetModel string
+}
+
+// TrainedFromByVersionIDs maps each of versionIDs that a training session
+// produced (training_sessions.new_version_id) to that session. Versions no
+// session produced are absent from the map. new_version_id is indexed but
+// not unique, so DISTINCT ON keeps one row per version: the most recently
+// completed session. The target model is read with modelmeta.ParseModels, the same
+// helper the training detail page uses.
+func (r *TrainingSessionRepository) TrainedFromByVersionIDs(ctx context.Context, versionIDs []string) (map[string]TrainedFrom, error) {
+	out := map[string]TrainedFrom{}
+	if len(versionIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (new_version_id)
+		       new_version_id::text, id::text, training_report->'models'
+		FROM training_sessions
+		WHERE new_version_id = ANY($1::uuid[])
+		ORDER BY new_version_id, completed_at DESC NULLS LAST
+	`, pq.Array(versionIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var versionID, sessionID string
+		var models []byte
+		if err := rows.Scan(&versionID, &sessionID, &models); err != nil {
+			return nil, err
+		}
+		out[versionID] = TrainedFrom{SessionID: sessionID, TargetModel: modelmeta.ParseModels(models).Target}
 	}
 	return out, rows.Err()
 }

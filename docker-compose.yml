@@ -43,6 +43,17 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # aikdm models and eval modes: a bare key passes the host value through
+      # only when it is set. ${VAR:-} would pass "" instead, which aikdm reads
+      # as a value (an empty model; an invalid mode), not as "use the default".
+      AIKDM_MODEL_TARGET:
+      AIKDM_MODEL_JUDGE:
+      AIKDM_MODEL_USER_SIMULATOR:
+      AIKDM_MODEL_TEACHER:
+      AIKDM_MODEL_GENERATOR:
+      AIKDM_MODEL_CRITIC:
+      AIKDM_EVAL_USER_TURN_MODE:
+      AIKDM_EVAL_HISTORY_MODE:
     volumes:
       - ./aikdm-work:/work
     working_dir: /work

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/handler"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/DACdigital/OpenBBC/open-bbcd/web"
 	"gopkg.in/yaml.v3"
@@ -701,5 +702,70 @@ func TestAgentDetail_Delete_VersionReferenced_409(t *testing.T) {
 	h.Delete(rec, req)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// stubTrainedFrom is the training-session lookup behind the Versions tab.
+type stubTrainedFrom struct {
+	gotIDs []string
+	out    map[string]repository.TrainedFrom
+}
+
+func (s *stubTrainedFrom) TrainedFromByVersionIDs(_ context.Context, ids []string) (map[string]repository.TrainedFrom, error) {
+	s.gotIDs = ids
+	return s.out, nil
+}
+
+func TestVersionsTab_TrainedOnLink(t *testing.T) {
+	store := &stubAgentDetailStore{groups: []types.AgentGroup{{
+		AgentID: "a1",
+		Versions: []types.AgentVersionListItem{
+			{Version: &types.AgentVersion{ID: "v1", AgentID: "a1", Status: "READY"}, VersionNum: 1},
+			{Version: &types.AgentVersion{ID: "v2", AgentID: "a1", Status: "READY"}, VersionNum: 2},
+			{Version: &types.AgentVersion{ID: "v3", AgentID: "a1", Status: "READY"}, VersionNum: 3},
+		},
+	}}}
+	lookup := &stubTrainedFrom{out: map[string]repository.TrainedFrom{
+		"v2": {SessionID: "ts-9", TargetModel: "claude-haiku-4-5"},
+		"v3": {SessionID: "ts-old"}, // report predates models: show nothing
+	}}
+	h := newAgentDetailHandler(t, store).WithTrainedFrom(lookup)
+
+	req := httptest.NewRequest(http.MethodGet, "/agents/a1/configure/versions", nil)
+	req.SetPathValue("agent_id", "a1")
+	rec := httptest.NewRecorder()
+	h.Versions(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if want := `Trained on <a href="/training-sessions/ts-9">claude-haiku-4-5</a>`; !strings.Contains(body, want) {
+		t.Errorf("body missing %q", want)
+	}
+	if n := strings.Count(body, "Trained on"); n != 1 {
+		t.Errorf("got %d \"Trained on\" lines, want 1 (v2 only)", n)
+	}
+	if strings.Join(lookup.gotIDs, ",") != "v1,v2,v3" {
+		t.Errorf("lookup ids = %v, want [v1 v2 v3]", lookup.gotIDs)
+	}
+}
+
+func TestVersionsTab_NoTrainedOnWithoutLookup(t *testing.T) {
+	store := &stubAgentDetailStore{groups: []types.AgentGroup{{
+		AgentID: "a1",
+		Versions: []types.AgentVersionListItem{
+			{Version: &types.AgentVersion{ID: "v1", AgentID: "a1", Status: "READY"}, VersionNum: 1},
+		},
+	}}}
+	h := newAgentDetailHandler(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/agents/a1/configure/versions", nil)
+	req.SetPathValue("agent_id", "a1")
+	rec := httptest.NewRecorder()
+	h.Versions(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "Trained on") {
+		t.Error("no lookup wired: no \"Trained on\" line")
 	}
 }

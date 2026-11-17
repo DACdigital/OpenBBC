@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/modelmeta"
 )
 
 var anthropicDefaults = AnthropicConfig{APIKey: "ak", DefaultModel: "claude-sonnet-4-6", MaxTokens: 4096}
@@ -125,6 +127,56 @@ func TestLLMModel_FallsBackToAnthropicDefault(t *testing.T) {
 	c.LLM.Model = "gpt-4o"
 	if got := c.LLMModel(); got != "gpt-4o" {
 		t.Fatalf("LLMModel() = %q", got)
+	}
+}
+
+func TestRuntimeModel(t *testing.T) {
+	cases := []struct {
+		name           string
+		cfg            Config
+		raw, canonical string
+	}{
+		{
+			name:      "anthropic adapter, bare id",
+			cfg:       Config{LLM: LLMConfig{Adapter: LLMAdapterAnthropic, Model: "claude-sonnet-4-6"}},
+			raw:       "claude-sonnet-4-6",
+			canonical: "anthropic/claude-sonnet-4-6",
+		},
+		{
+			name:      "anthropic adapter, already prefixed",
+			cfg:       Config{LLM: LLMConfig{Adapter: LLMAdapterAnthropic, Model: "anthropic/claude-sonnet-4-6"}},
+			raw:       "anthropic/claude-sonnet-4-6",
+			canonical: "anthropic/claude-sonnet-4-6",
+		},
+		{
+			name:      "empty LLM block falls back to Anthropic.DefaultModel",
+			cfg:       Config{Anthropic: AnthropicConfig{DefaultModel: "claude-sonnet-4-6"}},
+			raw:       "claude-sonnet-4-6",
+			canonical: "anthropic/claude-sonnet-4-6",
+		},
+		{
+			name:      "bifrost adapter",
+			cfg:       Config{LLM: LLMConfig{Adapter: LLMAdapterBifrost, Provider: "openai", Model: "gpt-4o"}},
+			raw:       "openai/gpt-4o",
+			canonical: "openai/gpt-4o",
+		},
+		{
+			name:      "bifrost adapter, anthropic provider",
+			cfg:       Config{LLM: LLMConfig{Adapter: LLMAdapterBifrost, Provider: "anthropic", Model: "claude-haiku-4-5"}},
+			raw:       "anthropic/claude-haiku-4-5",
+			canonical: "anthropic/claude-haiku-4-5",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.cfg.RuntimeModel()
+			if got != c.raw {
+				t.Fatalf("RuntimeModel = %q, want %q", got, c.raw)
+			}
+			if can := modelmeta.CanonicalModel(got); can != c.canonical {
+				t.Fatalf("CanonicalModel(RuntimeModel) = %q, want %q", can, c.canonical)
+			}
+		})
 	}
 }
 

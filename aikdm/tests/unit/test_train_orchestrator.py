@@ -292,3 +292,61 @@ def test_stops_when_promoted_candidate_hits_perfect_score(monkeypatch):
     assert report.total_epochs_run == 1
     assert report.final_score == 1.0
     assert report.epochs[0].promoted is True
+
+
+def _distinct_settings() -> Settings:
+    return Settings(
+        model_generator="claude-haiku-4-5", model_critic="claude-haiku-4-5",
+        model_user_simulator="gemini-2.0-flash", model_judge="openai/gpt-4o",
+        model_target="claude-sonnet-4-6", model_teacher="claude-opus-4-7",
+        eval_user_turn_mode="paraphrase", eval_history_mode="simulated",
+    )
+
+
+_EXPECTED_MODELS = {
+    "teacher_model": "claude-opus-4-7",
+    "judge_model": "openai/gpt-4o",
+    "user_simulator_model": "gemini-2.0-flash",
+    "target_agent_model": "claude-sonnet-4-6",
+    "user_turn_mode": "paraphrase",
+    "history_mode": "simulated",
+}
+
+
+def test_report_records_models_on_perfect_baseline(monkeypatch):
+    async def fake_run_eval(inp, settings):     # noqa: ARG001
+        return _result(1.0)
+
+    monkeypatch.setattr(orch_mod, "run_eval", fake_run_eval)
+    monkeypatch.setattr(orch_mod, "build_teacher_agent", lambda m: object())
+    monkeypatch.setattr(orch_mod.models, "build_model", lambda role, s: object())
+
+    _final, report = asyncio.run(orch_mod.run_training(
+        _input(), _distinct_settings(), epochs=3, patience=1,
+    ))
+    assert report.stopped_reason == "perfect_score"
+    assert report.models.model_dump() == _EXPECTED_MODELS
+
+
+def test_report_records_models_after_epochs(monkeypatch):
+    scores = iter([0.4, 0.6])
+    async def fake_run_eval(inp, settings):     # noqa: ARG001
+        return _result(next(scores))
+    async def fake_propose(*, agent, bundle, eval_result, tried):   # noqa: ARG001
+        return teacher_mod.TeacherTurn(
+            output=TeacherOutput(patches=[
+                SectionPatch(section_id="main_prompt", new="tighter", rationale="x"),
+            ]),
+            tokens_in=1, tokens_out=1,
+        )
+
+    monkeypatch.setattr(orch_mod, "run_eval", fake_run_eval)
+    monkeypatch.setattr(orch_mod, "propose_patches", fake_propose)
+    monkeypatch.setattr(orch_mod, "build_teacher_agent", lambda m: object())
+    monkeypatch.setattr(orch_mod.models, "build_model", lambda role, s: object())
+
+    _final, report = asyncio.run(orch_mod.run_training(
+        _input(), _distinct_settings(), epochs=1, patience=1,
+    ))
+    assert report.stopped_reason == "max_epochs"
+    assert report.models.model_dump() == _EXPECTED_MODELS
