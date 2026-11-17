@@ -100,25 +100,35 @@ type TurnRunner interface {
 var _ TurnRunner = (*chat.Orchestrator)(nil)
 
 type ChatHandler struct {
-	agents       ChatAgentReader
-	chats        ChatSessionStore
-	headerOvr    HeaderOverridesStore
-	backends     VersionBackendLister
-	orch         TurnRunner
-	transport    transport.Factory
-	feedbackRepo *repository.FeedbackRepository
-	datasetRepo  *repository.DatasetRepository
-	logger       *slog.Logger
-	sessionsTmpl *template.Template
-	viewTmpl     *template.Template
-	childTmpl    *template.Template
-	headersTmpl  *template.Template
-	pending      PendingArtifactLister
+	agents                ChatAgentReader
+	chats                 ChatSessionStore
+	headerOvr             HeaderOverridesStore
+	backends              VersionBackendLister
+	orch                  TurnRunner
+	transport             transport.Factory
+	feedbackRepo          *repository.FeedbackRepository
+	datasetRepo           *repository.DatasetRepository
+	clientContextMaxBytes int
+	logger                *slog.Logger
+	sessionsTmpl          *template.Template
+	viewTmpl              *template.Template
+	childTmpl             *template.Template
+	headersTmpl           *template.Template
+	pending               PendingArtifactLister
 }
 
 // WithPendingArtifacts enables the pending-artifact chips in the chat view.
 func (h *ChatHandler) WithPendingArtifacts(l PendingArtifactLister) *ChatHandler {
 	h.pending = l
+	return h
+}
+
+// WithClientContextMaxBytes sets the client_context cap
+// (OPENBBC_CLIENT_CONTEXT_MAX_BYTES). n < 1 keeps the current value.
+func (h *ChatHandler) WithClientContextMaxBytes(n int) *ChatHandler {
+	if n > 0 {
+		h.clientContextMaxBytes = n
+	}
 	return h
 }
 
@@ -183,6 +193,7 @@ func NewChatHandler(
 		agents: agents, chats: chats, headerOvr: headerOvr, backends: backends,
 		orch: orch, transport: tf, feedbackRepo: feedbackRepo, datasetRepo: datasetRepo,
 		logger: logger, sessionsTmpl: sessionsTmpl, viewTmpl: viewTmpl, childTmpl: childTmpl, headersTmpl: headersTmpl,
+		clientContextMaxBytes: defaultClientContextMaxBytes,
 	}, nil
 }
 
@@ -857,6 +868,9 @@ func (h *ChatHandler) UpdateSessionTitle(w http.ResponseWriter, r *http.Request)
 // TurnRequest is the body of POST /turn — implemented in B24.
 type TurnRequest struct {
 	Input []TurnInputBlock `json:"input"`
+	// ClientContext is an optional JSON object shown to the model on this
+	// turn and every replay (spec client-context). null/absent: none.
+	ClientContext json.RawMessage `json:"client_context,omitempty"`
 }
 
 // TurnInputBlock is the wire shape for one content block in the turn
@@ -897,6 +911,12 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ccBlock, err := clientContextBlock(req.ClientContext, h.clientContextMaxBytes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// Refuse turns on locked sessions (session belongs to a closed dataset version).
 	// Check before writing SSE headers so we can return a clean JSON error.
 	if session, err := h.chats.GetSession(r.Context(), sessionID, versionID); err == nil {
@@ -933,6 +953,11 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, types.ErrEmptyTurn.Error(), http.StatusBadRequest)
 			return
 		}
+	}
+
+	// The block goes first and never counts toward the empty-turn rule.
+	if ccBlock != nil {
+		input = append([]llm.Block{ccBlock}, input...)
 	}
 
 	// Set SSE-friendly response headers BEFORE constructing the sink:

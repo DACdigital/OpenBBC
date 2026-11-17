@@ -45,6 +45,8 @@ type DeployedHandler struct {
 	transport transport.Factory
 	chatStore chat.ChatStore // unused at the handler layer; orchestrator was constructed with it
 	logger    *slog.Logger
+
+	clientContextMaxBytes int
 }
 
 func NewDeployedHandler(
@@ -61,7 +63,17 @@ func NewDeployedHandler(
 	return &DeployedHandler{
 		agents: agents, store: store, orch: orch,
 		transport: tf, chatStore: chatStore, logger: logger,
+		clientContextMaxBytes: defaultClientContextMaxBytes,
 	}
+}
+
+// WithClientContextMaxBytes sets the client_context cap
+// (OPENBBC_CLIENT_CONTEXT_MAX_BYTES). n < 1 keeps the current value.
+func (h *DeployedHandler) WithClientContextMaxBytes(n int) *DeployedHandler {
+	if n > 0 {
+		h.clientContextMaxBytes = n
+	}
+	return h
 }
 
 // requireDeployed resolves the chain root's currently-deployed version.
@@ -275,6 +287,9 @@ type turnRequest struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"input"`
+	// ClientContext is an optional JSON object shown to the model on this
+	// turn and every replay (spec client-context). null/absent: none.
+	ClientContext json.RawMessage `json:"client_context"`
 }
 
 // Turn runs one chat turn against the currently-deployed version of the chain.
@@ -297,6 +312,11 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	var req turnRequest
 	if err := DecodeJSON(r, &req); err != nil {
 		Error(w, err)
+		return
+	}
+	ccBlock, err := clientContextBlock(req.ClientContext, h.clientContextMaxBytes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if req.UserID == "" {
@@ -334,6 +354,11 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, types.ErrEmptyTurn.Error(), http.StatusBadRequest)
 			return
 		}
+	}
+
+	// The block goes first and never counts toward the empty-turn rule.
+	if ccBlock != nil {
+		input = append([]llm.Block{ccBlock}, input...)
 	}
 
 	w.Header().Set("Content-Type", h.transport.ContentType())
