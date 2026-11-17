@@ -32,6 +32,20 @@ type TextBlock struct {
 
 func (TextBlock) isBlock() {}
 
+// ClientContextBlock is a client-supplied JSON object attached to a user
+// turn (spec client-context). Canonical is the canonical JSON text produced
+// once, at ingest, by chat.CanonicalizeClientContext; nothing re-canonicalizes
+// it. Persisted as {"type":"client_context","canonical":…,"context":…}.
+//
+// It never reaches a provider adapter: before every Generate call the
+// orchestrator's render pass (chat.renderArtifactsForLLM) replaces it with a
+// TextBlock holding chat.RenderClientContext(Canonical).
+type ClientContextBlock struct {
+	Canonical string
+}
+
+func (ClientContextBlock) isBlock() {}
+
 type ToolUseBlock struct {
 	ID    string
 	Name  string

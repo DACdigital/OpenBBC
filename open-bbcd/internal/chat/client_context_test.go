@@ -3,8 +3,10 @@ package chat
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -62,5 +64,60 @@ func TestCanonicalizeClientContext_NUL(t *testing.T) {
 func TestRenderClientContext(t *testing.T) {
 	if got := RenderClientContext(`{"a":"<x>"}`); got != `<client_context>{"a":"<x>"}</client_context>` {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestCodec_ClientContextRoundTrip(t *testing.T) {
+	in := []llm.Block{
+		llm.ClientContextBlock{Canonical: `{"a":1e3,"h":"<x>"}`},
+		llm.TextBlock{Text: "hi"},
+		llm.ArtifactRefBlock{StoreID: "MAIN", URI: "sha256/abc", MIME: "image/png", SizeBytes: 7, Sha256: "abc"},
+	}
+	raw, err := blocksToJSON(in)
+	if err != nil {
+		t.Fatalf("blocksToJSON: %v", err)
+	}
+	if got := blockTypes(t, raw); !reflect.DeepEqual(got, []string{"client_context", "text", "artifact_ref"}) {
+		t.Fatalf("types = %v", got)
+	}
+	var rawBlocks []json.RawMessage
+	if err := json.Unmarshal(raw, &rawBlocks); err != nil {
+		t.Fatal(err)
+	}
+	if got := parseBlocks(rawBlocks); !reflect.DeepEqual(got, in) {
+		t.Fatalf("round trip:\n got %#v\nwant %#v", got, in)
+	}
+}
+
+func TestCodec_ClientContextJSONShape(t *testing.T) {
+	canonical := `{"a":1e3,"h":"<x>"}`
+	raw, err := blocksToJSON([]llm.Block{llm.ClientContextBlock{Canonical: canonical}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blocks []struct {
+		Type      string         `json:"type"`
+		Canonical string         `json:"canonical"`
+		Context   map[string]any `json:"context"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		t.Fatalf("%v (%s)", err, raw)
+	}
+	b := blocks[0]
+	if b.Type != "client_context" || b.Canonical != canonical {
+		t.Fatalf("block = %+v (%s)", b, raw)
+	}
+	if b.Context["h"] != "<x>" || b.Context["a"] != float64(1000) {
+		t.Fatalf("context = %#v", b.Context)
+	}
+}
+
+func TestCodec_ClientContextWithoutCanonicalIsSkipped(t *testing.T) {
+	got := parseBlocks([]json.RawMessage{
+		json.RawMessage(`{"type":"client_context","context":{"a":1}}`),
+		json.RawMessage(`{"type":"text","text":"hi"}`),
+	})
+	if !reflect.DeepEqual(got, []llm.Block{llm.TextBlock{Text: "hi"}}) {
+		t.Fatalf("got %#v", got)
 	}
 }

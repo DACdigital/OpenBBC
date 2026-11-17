@@ -675,6 +675,17 @@ func parseBlocks(raw []json.RawMessage) []llm.Block {
 			}
 			_ = json.Unmarshal(r, &b)
 			out = append(out, llm.TextBlock{Text: b.Text})
+		case "client_context":
+			// canonical is the only source for rendering; context is
+			// informational (JSONB-normalized) and ignored here.
+			var b struct {
+				Canonical string `json:"canonical"`
+			}
+			_ = json.Unmarshal(r, &b)
+			if b.Canonical == "" {
+				continue
+			}
+			out = append(out, llm.ClientContextBlock{Canonical: b.Canonical})
 		case "tool_use":
 			var b struct {
 				ID    string          `json:"id"`
@@ -713,6 +724,12 @@ func blocksToJSON(blocks []llm.Block) (json.RawMessage, error) {
 		switch x := b.(type) {
 		case llm.TextBlock:
 			out = append(out, map[string]any{"type": "text", "text": x.Text})
+		case llm.ClientContextBlock:
+			out = append(out, map[string]any{
+				"type":      "client_context",
+				"canonical": x.Canonical,
+				"context":   json.RawMessage(x.Canonical),
+			})
 		case llm.ToolUseBlock:
 			out = append(out, map[string]any{
 				"type":  "tool_use",
