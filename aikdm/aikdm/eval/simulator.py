@@ -30,7 +30,7 @@ Rules:
   Never answer the agent's question instead of sending the intent.
 - Never add, merge, split, or skip messages. Exactly one message: the intent.
 - Keep every id, number, date, name, and any pasted JSON or document
-  verbatim. Fix obvious typos only in ordinary words.
+  verbatim.
 - Same language and register as the reference user.
 - Plain message text only: no quotes, no JSON wrapper, no commentary.
 

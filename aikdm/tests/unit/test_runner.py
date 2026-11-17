@@ -1,5 +1,9 @@
 # tests/unit/test_runner.py
+import json
+from types import SimpleNamespace as NS
+
 import pytest
+from pydantic import ValidationError
 
 from aikdm.eval import judge as judge_mod
 from aikdm.eval import runner as runner_mod
@@ -39,7 +43,7 @@ def _two_turn_session(criteria=None):
 def rec(monkeypatch):
     """Records target/judge/simulator calls; behaviour configurable per test."""
     state = {"target": [], "judge": [], "sim": [], "target_fail": set(), "budget": set(),
-             "judge_fail": set(), "sim_out": None}
+             "judge_fail": set(), "sim_out": None, "spans": {}}
 
     async def fake_target(*, model, system_prompt, tools_spec, history, tool_caller):
         k = len(state["target"]) + 1
@@ -51,7 +55,7 @@ def rec(monkeypatch):
                 span=[{"role": "assistant", "content": target_mod.BUDGET_SENTINEL}],
                 tokens_in=1, tokens_out=1, tool_call_count=8, budget_exceeded=True)
         return target_mod.TargetTurn(
-            span=[{"role": "assistant", "content": f"gen reply {k}?"}],
+            span=state["spans"].get(k) or [{"role": "assistant", "content": f"gen reply {k}?"}],
             tokens_in=1, tokens_out=1, tool_call_count=0)
 
     async def fake_judge(*, agent, context, turn_under_test, criteria_items):
@@ -114,7 +118,15 @@ async def test_paraphrase_called_exactly_n_times(rec):
     assert rec["target"][0][-1]["content"] == "P:first?"
 
 
-@pytest.mark.parametrize("bad", ["", RuntimeError("sim down")])
+def _validation_error():
+    try:
+        sim_mod._SimulatorOutput.model_validate_json("nope")
+    except ValidationError as e:
+        return e
+    raise AssertionError("expected ValidationError")
+
+
+@pytest.mark.parametrize("bad", ["", RuntimeError("sim down"), _validation_error()])
 async def test_paraphrase_failure_falls_back_to_verbatim(rec, bad):
     rec["sim_out"] = bad
     await _run(_two_turn_session(), user_turn_mode="paraphrase")
@@ -220,3 +232,51 @@ async def test_empty_script_all_inconclusive(rec):
 async def test_no_criteria_scores_one(rec):
     out = await _run(_two_turn_session([]))
     assert out.result.score == 1.0 and out.result.total_criteria == 0
+
+
+async def test_tool_calls_appear_in_turn_under_test(rec):
+    rec["spans"] = {1: [
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"name": "lookup", "args": {}, "result": 1, "source": "mocked"}]},
+        {"role": "assistant", "content": "done"}]}
+    await _run(_two_turn_session())
+    turn = rec["judge"][0]["turn"]
+    assert turn[1]["tool_calls"] == [
+        {"name": "lookup", "args": {}, "result": 1, "source": "mocked"}]
+    assert turn[-1]["content"] == "done"
+
+
+async def test_tool_round_replayed_well_formed_on_next_turn(rec, monkeypatch):
+    monkeypatch.undo()  # drop the rec fakes for target; keep a local judge below
+    calls = []
+    responses = iter([
+        NS(choices=[NS(message=NS(content="", tool_calls=[NS(
+            id="p1", function=NS(name="lookup", arguments="{}"))]))], usage=None),
+        NS(choices=[NS(message=NS(content="answer 1", tool_calls=[]))], usage=None),
+        NS(choices=[NS(message=NS(content="answer 2", tool_calls=[]))], usage=None),
+    ])
+
+    async def fake_acompletion(**kw):
+        calls.append([dict(m) for m in kw["messages"]])
+        return next(responses)
+
+    async def fake_judge(*, agent, context, turn_under_test, criteria_items):
+        js = [Judgment(message_id=c.message_id, criterion=c.criterion, passed=True,
+                       reason="ok") for c in criteria_items]
+        return judge_mod.JudgeResult(judgments=js, passed=len(js), total=len(js),
+                                     tokens_in=0, tokens_out=0)
+
+    monkeypatch.setattr(target_mod.litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(judge_mod, "judge_turn", fake_judge)
+    out = await _run(_two_turn_session())
+    assert out.result.score == 1.0
+    assert len(calls) == 3  # turn 1: tool round + answer; turn 2: direct answer
+    msgs = calls[2]
+    idx = next(i for i, m in enumerate(msgs) if m.get("tool_calls"))
+    asst, tool = msgs[idx], msgs[idx + 1]
+    assert asst["role"] == "assistant"
+    assert asst["tool_calls"][0]["function"]["name"] == "lookup"
+    assert tool["role"] == "tool" and tool["tool_call_id"] == asst["tool_calls"][0]["id"]
+    assert all("name" not in tc and "args" not in tc
+               for m in msgs for tc in m.get("tool_calls", []))
+    assert json.dumps(msgs)  # serialisable

@@ -109,9 +109,12 @@ async def judge_turn(
     if len(parsed.judgments) != len(criteria_items):
         raise JudgeError(
             f"expected {len(criteria_items)} judgments, got {len(parsed.judgments)}")
+    for i, entry in enumerate(parsed.judgments):
+        if not isinstance(entry.get("passed"), bool):
+            raise JudgeError(f"judge entry {i} has no boolean 'passed'")
     judgments = [
         Judgment(message_id=item.message_id, criterion=item.criterion,
-                 passed=bool(entry.get("passed", False)),
+                 passed=entry["passed"],
                  reason=str(entry.get("reason", "")))
         for item, entry in zip(criteria_items, parsed.judgments, strict=True)
     ]

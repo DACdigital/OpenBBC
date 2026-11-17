@@ -85,12 +85,13 @@ def compile_script(session: InputSession) -> Script:
 
     last = len(user_idx)
     mapped: dict[int, list[tuple[int, int, CriterionItem]]] = {}
-    unmapped: list[CriterionItem] = []
+    unmapped: list[tuple[float, str, int, CriterionItem]] = []
     for c in session.criteria:
         k = turn_of.get(c.message_id)
         for n, item in enumerate(c.items):
             if k is None:
-                unmapped.append(CriterionItem(c.message_id, item, unmapped=True))
+                unmapped.append((position.get(c.message_id, float("inf")), c.message_id, n,
+                                 CriterionItem(c.message_id, item, unmapped=True)))
             else:
                 mapped.setdefault(k, []).append(
                     (position[c.message_id], n, CriterionItem(c.message_id, item)))
@@ -100,7 +101,8 @@ def compile_script(session: InputSession) -> Script:
         for k, items in mapped.items()
     }
     if unmapped:
-        per_turn.setdefault(last, []).extend(unmapped)
+        unmapped.sort(key=lambda t: t[:3])
+        per_turn.setdefault(last, []).extend(ci for *_, ci in unmapped)
 
     steps: list[Step] = []
     for k, start in enumerate(user_idx, start=1):

@@ -25,3 +25,8 @@ def test_output_schema_has_no_stop():
 def test_prompt_forbids_answering_instead_of_intent():
     p = sim_mod.USER_SIMULATOR_SYSTEM_PROMPT
     assert "<intent>" in p and "even if" in p
+
+
+def test_prompt_does_not_license_typo_fixing():
+    p = sim_mod.USER_SIMULATOR_SYSTEM_PROMPT
+    assert "typo" not in p and "verbatim" in p
