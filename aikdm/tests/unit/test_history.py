@@ -96,3 +96,24 @@ def test_reference_entries_undeclared_tool_becomes_text():
     ]
     out = reference_entries(span, declared_tools=set())
     assert out == [{"role": "assistant", "content": '[called tool gone with {"q": 1} → {"r": 2}]'}]
+
+
+def test_empty_user_and_final_assistant_get_placeholders():
+    out = to_target_messages(
+        [{"role": "user", "content": ""}, {"role": "assistant", "content": ""}]
+    )
+    assert out == [
+        {"role": "user", "content": "(empty message)"},
+        {"role": "assistant", "content": "(empty reply)"},
+    ]
+
+
+def test_empty_assistant_with_tool_calls_omits_content():
+    out = to_target_messages(
+        [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"name": "lookup", "args": {}, "result": 1}]},
+        ]
+    )
+    assert "content" not in out[1] and out[1]["tool_calls"]

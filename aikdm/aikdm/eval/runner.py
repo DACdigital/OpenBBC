@@ -7,7 +7,7 @@ after a target failure in simulated history mode."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from aikdm.eval import judge as judge_mod
 from aikdm.eval import script as script_mod
@@ -54,9 +54,13 @@ async def run_session(
     judge_agent,
     target_model: str,
     tool_caller,
-    user_turn_mode: str = "verbatim",
-    history_mode: str = "simulated",
+    user_turn_mode: Literal["verbatim", "paraphrase"] = "verbatim",
+    history_mode: Literal["simulated", "reference"] = "simulated",
 ) -> SessionOutcome:
+    if user_turn_mode not in ("verbatim", "paraphrase"):
+        raise ValueError(f"invalid user_turn_mode: {user_turn_mode!r}")
+    if history_mode not in ("simulated", "reference"):
+        raise ValueError(f"invalid history_mode: {history_mode!r}")
     script = script_mod.compile_script(session)
     if script.turn_count == 0:
         js = _inconclusive(script.unrouted, "no user turns in reference transcript")
@@ -141,6 +145,8 @@ async def run_session(
                 judgments += [j.model_copy(update={"reason": _prefixed(c, j.reason)})
                               for c, j in zip(step.criteria, jr.judgments, strict=True)]
             except Exception as e:  # noqa: BLE001 — judge failure is per-turn
+                tokens_in += getattr(e, "tokens_in", 0)
+                tokens_out += getattr(e, "tokens_out", 0)
                 judgments += _inconclusive(step.criteria, f"judge error: {e}")
 
     return _outcome(session, transcript, judgments, tokens_in, tokens_out)

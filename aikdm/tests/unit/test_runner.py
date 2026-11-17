@@ -304,3 +304,21 @@ async def test_criteria_on_turns_1_and_3_only(rec):
     js = out.result.judgments
     assert [(j.message_id, j.criterion, j.reason) for j in js] == [
         ("a1", "t1 crit", "ok"), ("a3", "t3 crit", "ok")]
+
+
+@pytest.mark.parametrize("kw", [{"user_turn_mode": "bogus"}, {"history_mode": "bogus"}])
+async def test_invalid_modes_raise_value_error(rec, kw):
+    with pytest.raises(ValueError):
+        await _run(_two_turn_session(), **kw)
+
+
+async def test_judge_error_tokens_counted(rec, monkeypatch):
+    async def bad_judge(*, agent, context, turn_under_test, criteria_items):
+        raise judge_mod.JudgeError("bad", tokens_in=7, tokens_out=3)
+
+    monkeypatch.setattr(judge_mod, "judge_turn", bad_judge)
+    s = InputSession(session_id="s", transcript=[_m("u1", "user", "hi"),
+                                                 _m("a1", "assistant")],
+                     criteria=[InputCriterion(message_id="a1", rating="up", items=["c"])])
+    out = await _run(s)
+    assert out.tokens_in == 1 + 7 and out.tokens_out == 1 + 3

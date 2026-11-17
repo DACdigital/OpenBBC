@@ -21,13 +21,13 @@ def to_target_messages(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if role == "user":
             turn += 1
             n = 0
-            out.append({"role": "user", "content": e.get("content") or ""})
+            out.append({"role": "user", "content": e.get("content") or "(empty message)"})
             continue
         if role != "assistant":
             continue
         calls = e.get("tool_calls") or []
         if not calls:
-            out.append({"role": "assistant", "content": e.get("content") or ""})
+            out.append({"role": "assistant", "content": e.get("content") or "(empty reply)"})
             continue
         ids = []
         tool_calls = []

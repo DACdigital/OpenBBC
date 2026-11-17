@@ -64,9 +64,10 @@ async def test_unparseable_raises_judge_error(monkeypatch):
         return "not json", 1, 1
 
     monkeypatch.setattr(judge_mod, "_adk_run_once", fake_run)
-    with pytest.raises(judge_mod.JudgeError):
+    with pytest.raises(judge_mod.JudgeError) as ei:
         await judge_mod.judge_turn(agent=object(), context=[], turn_under_test=TURN,
                                    criteria_items=ITEMS)
+    assert (ei.value.tokens_in, ei.value.tokens_out) == (1, 1)
 
 
 def test_judge_agent_temperature_zero():

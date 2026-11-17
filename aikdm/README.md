@@ -33,6 +33,8 @@ Output is YAML with `metadata`, `main_prompt`, `capabilities[]`, `skills[]`, and
 | `AIKDM_MODEL_CRITIC` | no | `claude-opus-4-7` | critic model |
 | `AIKDM_CRITIC_ROUNDS` | no | `2` | max critic loop rounds |
 | `AIKDM_LOG_LEVEL` | no | `info` | human log level |
+| `AIKDM_EVAL_USER_TURN_MODE` | no | `verbatim` | eval user turns: `verbatim` sends them as recorded; `paraphrase` has the simulator LLM reword them |
+| `AIKDM_EVAL_HISTORY_MODE` | no | `simulated` | eval history: `simulated` shows the target its own earlier replies; `reference` shows the recorded reference replies (requires `verbatim`) |
 
 ## Exit codes
 

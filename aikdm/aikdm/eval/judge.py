@@ -50,7 +50,13 @@ class JudgeResult:
 
 
 class JudgeError(Exception):
-    """Judge output invalid (unparseable, wrong count, non-boolean passed)."""
+    """Judge output invalid (unparseable, wrong count, non-boolean passed).
+    tokens_in/out: usage of the judge call that produced the invalid output."""
+
+    def __init__(self, message: str, tokens_in: int = 0, tokens_out: int = 0):
+        super().__init__(message)
+        self.tokens_in = tokens_in
+        self.tokens_out = tokens_out
 
 
 def build_judge_agent(model) -> LlmAgent:
@@ -105,13 +111,15 @@ async def judge_turn(
     try:
         parsed = _JudgeOutput.model_validate_json(raw)
     except ValidationError as e:
-        raise JudgeError(f"unparseable judge output: {e.errors()[0]['msg']}") from e
+        raise JudgeError(f"unparseable judge output: {e.errors()[0]['msg']}",
+                         t_in, t_out) from e
     if len(parsed.judgments) != len(criteria_items):
         raise JudgeError(
-            f"expected {len(criteria_items)} judgments, got {len(parsed.judgments)}")
+            f"expected {len(criteria_items)} judgments, got {len(parsed.judgments)}",
+            t_in, t_out)
     for i, entry in enumerate(parsed.judgments):
         if not isinstance(entry.get("passed"), bool):
-            raise JudgeError(f"judge entry {i} has no boolean 'passed'")
+            raise JudgeError(f"judge entry {i} has no boolean 'passed'", t_in, t_out)
     judgments = [
         Judgment(message_id=item.message_id, criterion=item.criterion,
                  passed=entry["passed"],
