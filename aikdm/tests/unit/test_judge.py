@@ -44,18 +44,17 @@ async def test_count_mismatch_raises(monkeypatch, payload):
                                    criteria_items=ITEMS)
 
 
-@pytest.mark.parametrize("payload", [
-    '{"judgments":[{"criterion":"c1","reason":"x"},{"passed":true}]}',
-    '{"judgments":[{"passed":true},{"passed":"false"}]}',
+@pytest.mark.parametrize(("payload", "bad_idx"), [
+    ('{"judgments":[{"criterion":"c1","reason":"x"},{"passed":true}]}', 0),
+    ('{"judgments":[{"passed":true},{"passed":"false"}]}', 1),
 ])
-async def test_non_boolean_passed_raises(monkeypatch, payload):
+async def test_non_boolean_passed_raises(monkeypatch, payload, bad_idx):
     async def fake_run(*, agent, user_message_xml):
         return payload, 1, 1
 
     monkeypatch.setattr(judge_mod, "_adk_run_once", fake_run)
-    bad = 0 if '"reason":"x"' in payload else 1
     with pytest.raises(judge_mod.JudgeError,
-                       match=f"judge entry {bad} has no boolean 'passed'"):
+                       match=f"judge entry {bad_idx} has no boolean 'passed'"):
         await judge_mod.judge_turn(agent=object(), context=[], turn_under_test=TURN,
                                    criteria_items=ITEMS)
 

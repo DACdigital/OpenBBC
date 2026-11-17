@@ -50,7 +50,7 @@ class JudgeResult:
 
 
 class JudgeError(Exception):
-    """Judge call failed, didn't parse, or returned the wrong number of entries."""
+    """Judge output invalid (unparseable, wrong count, non-boolean passed)."""
 
 
 def build_judge_agent(model) -> LlmAgent:

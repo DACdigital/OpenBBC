@@ -49,7 +49,9 @@ def to_target_messages(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _text_of(content: Any) -> str:
+def text_blocks(content: Any) -> str:
+    """Flatten message content: string as-is; content-block arrays → text
+    blocks joined by a blank line (other blocks omitted); anything else → ""."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -69,7 +71,7 @@ def reference_entries(
     for m in span:
         if m.role != "assistant":
             continue
-        text = _text_of(m.content)
+        text = text_blocks(m.content)
         structured = []
         as_text = []
         for c in m.tool_calls:

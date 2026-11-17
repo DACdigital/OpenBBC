@@ -1,5 +1,4 @@
 # tests/unit/test_runner.py
-import json
 from types import SimpleNamespace as NS
 
 import pytest
@@ -246,8 +245,7 @@ async def test_tool_calls_appear_in_turn_under_test(rec):
     assert turn[-1]["content"] == "done"
 
 
-async def test_tool_round_replayed_well_formed_on_next_turn(rec, monkeypatch):
-    monkeypatch.undo()  # drop the rec fakes for target; keep a local judge below
+async def test_tool_round_replayed_well_formed_on_next_turn(monkeypatch):
     calls = []
     responses = iter([
         NS(choices=[NS(message=NS(content="", tool_calls=[NS(
@@ -279,4 +277,30 @@ async def test_tool_round_replayed_well_formed_on_next_turn(rec, monkeypatch):
     assert tool["role"] == "tool" and tool["tool_call_id"] == asst["tool_calls"][0]["id"]
     assert all("name" not in tc and "args" not in tc
                for m in msgs for tc in m.get("tool_calls", []))
-    assert json.dumps(msgs)  # serialisable
+    assert [m["role"] for m in msgs] == [
+        "system", "user", "assistant", "tool", "assistant", "user"]
+
+
+async def test_criteria_on_turns_1_and_3_only(rec):
+    s = InputSession(session_id="s", transcript=[
+        _m("u1", "user", "one"), _m("a1", "assistant", "ref 1"),
+        _m("u2", "user", "two"), _m("a2", "assistant", "ref 2"),
+        _m("u3", "user", "three"), _m("a3", "assistant", "ref 3"),
+    ], criteria=[
+        InputCriterion(message_id="a1", rating="up", items=["t1 crit"]),
+        InputCriterion(message_id="a3", rating="up", items=["t3 crit"]),
+    ])
+    out = await _run(s)
+    assert len(rec["target"]) == 3
+    assert len(rec["judge"]) == 2
+    third = rec["judge"][1]
+    assert [c.criterion for c in third["items"]] == ["t3 crit"]
+    assert third["context"] == [
+        {"role": "user", "content": "one"}, {"role": "assistant", "content": "gen reply 1?"},
+        {"role": "user", "content": "two"}, {"role": "assistant", "content": "gen reply 2?"},
+    ]
+    assert third["turn"] == [{"role": "user", "content": "three"},
+                             {"role": "assistant", "content": "gen reply 3?"}]
+    js = out.result.judgments
+    assert [(j.message_id, j.criterion, j.reason) for j in js] == [
+        ("a1", "t1 crit", "ok"), ("a3", "t3 crit", "ok")]

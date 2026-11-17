@@ -4,8 +4,6 @@ from types import SimpleNamespace as NS
 
 from aikdm.eval import target as target_mod
 
-BUDGET = "(target agent exceeded tool-call budget)"
-
 
 def _resp(content="", tool_calls=None):
     msg = NS(content=content, tool_calls=tool_calls or [])
@@ -83,5 +81,5 @@ async def test_budget_exceeded_flag(monkeypatch):
                                      history=[{"role": "user", "content": "x"}],
                                      tool_caller=_Caller())
     assert t.budget_exceeded is True
-    assert t.span[-1] == {"role": "assistant", "content": BUDGET}
+    assert t.span[-1] == {"role": "assistant", "content": target_mod.BUDGET_SENTINEL}
     assert len(t.span) == 9  # 8 tool rounds + sentinel

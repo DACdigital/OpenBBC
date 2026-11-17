@@ -28,7 +28,16 @@ class SessionOutcome:
     error: str = ""
 
 
-def _inconclusive(items, reason: str) -> list[Judgment]:
+@dataclass
+class _Turn:
+    """Executor state for one turn k."""
+    user: dict[str, Any] | None = None           # user entry sent to the target
+    context: list[dict[str, Any]] | None = None  # history before the user entry
+    span: list[dict[str, Any]] | None = None     # generated reply span (on success)
+    error: str | None = None                     # target error (on failure)
+
+
+def _inconclusive(items: list[script_mod.CriterionItem], reason: str) -> list[Judgment]:
     return [Judgment(message_id=c.message_id, criterion=c.criterion, passed=False,
                      inconclusive=True, reason=_prefixed(c, reason)) for c in items]
 
@@ -59,17 +68,15 @@ async def run_session(
     ref_transcript = [m.model_dump() for m in session.transcript]
 
     transcript: list[dict[str, Any]] = []       # result: user k + generated span k
-    reference_history: list[dict[str, Any]] = []
-    user_entry: dict[int, dict[str, Any]] = {}
-    context: dict[int, list[dict[str, Any]]] = {}
-    spans: dict[int, list[dict[str, Any]]] = {}
-    target_error: dict[int, str] = {}
+    reference_history: list[dict[str, Any]] = []  # reference history mode only
+    turns: dict[int, _Turn] = {}
     stopped: tuple[int, str] | None = None      # (turn j, cause) — simulated mode only
     judgments: list[Judgment] = []
     tokens_in = tokens_out = 0
 
     for step in script.steps:
         k = step.turn
+        turn = turns.setdefault(k, _Turn())
         if isinstance(step, script_mod.UserStep):
             if stopped:
                 continue
@@ -85,45 +92,49 @@ async def run_session(
                     text = t.content.strip() or verbatim
                 except Exception:  # noqa: BLE001 — simulator can never fail a session
                     text = verbatim
-            user_entry[k] = {"role": "user", "content": text}
+            turn.user = {"role": "user", "content": text}
 
         elif isinstance(step, script_mod.AgentStep):
-            ref_user = {"role": "user", "content": script_mod.render_user_turn(
-                _ref_user(script, k))}
             if not stopped:
-                before = list(reference_history if history_mode == "reference" else transcript)
-                context[k] = before
+                assert turn.user is not None
+                turn.context = list(
+                    reference_history if history_mode == "reference" else transcript)
                 try:
                     tt = await target_mod.target_turn(
                         model=target_model, system_prompt=system_prompt, tools_spec=tools_spec,
-                        history=before + [user_entry[k]], tool_caller=tool_caller)
+                        history=turn.context + [turn.user], tool_caller=tool_caller)
                     tokens_in += tt.tokens_in
                     tokens_out += tt.tokens_out
-                    spans[k] = tt.span
-                    transcript.extend([user_entry[k], *tt.span])
+                    turn.span = tt.span
+                    transcript.extend([turn.user, *tt.span])
                     if tt.budget_exceeded and history_mode == "simulated":
                         stopped = (k, "exceeded tool-call budget")
                 except Exception as e:  # noqa: BLE001 — becomes an inconclusive verdict
-                    target_error[k] = str(e)
-                    transcript.append(user_entry[k])
+                    turn.error = str(e)
+                    transcript.append(turn.user)
                     if history_mode == "simulated":
                         stopped = (k, f"target error: {e}")
-            reference_history.extend(
-                [ref_user, *reference_entries(step.ref_span, declared_tools=declared)])
+            if history_mode == "reference":
+                ref_user = {"role": "user",
+                            "content": script_mod.render_user_turn(step.ref_user)}
+                reference_history.extend(
+                    [ref_user, *reference_entries(step.ref_span, declared_tools=declared)])
 
         else:  # JudgeStep
-            if k in target_error:
+            if turn.error is not None:
                 judgments += _inconclusive(step.criteria,
-                                           f"turn {k} target error: {target_error[k]}")
+                                           f"turn {k} target error: {turn.error}")
                 continue
-            if k not in spans:
-                j, cause = stopped  # type: ignore[misc]
+            if turn.span is None:
+                assert stopped is not None
+                j, cause = stopped
                 judgments += _inconclusive(step.criteria, f"turn {k} not reached: turn {j} {cause}")
                 continue
+            assert turn.user is not None and turn.context is not None
             try:
                 jr = await judge_mod.judge_turn(
-                    agent=judge_agent, context=context[k],
-                    turn_under_test=[user_entry[k], *spans[k]],
+                    agent=judge_agent, context=turn.context,
+                    turn_under_test=[turn.user, *turn.span],
                     criteria_items=step.criteria)
                 tokens_in += jr.tokens_in
                 tokens_out += jr.tokens_out
@@ -135,12 +146,10 @@ async def run_session(
     return _outcome(session, transcript, judgments, tokens_in, tokens_out)
 
 
-def _ref_user(script: script_mod.Script, k: int):
-    return next(s.ref_message for s in script.steps
-                if isinstance(s, script_mod.UserStep) and s.turn == k)
-
-
-def _outcome(session, transcript, judgments, tokens_in, tokens_out) -> SessionOutcome:
+def _outcome(
+    session: InputSession, transcript: list[dict[str, Any]], judgments: list[Judgment],
+    tokens_in: int, tokens_out: int,
+) -> SessionOutcome:
     total = len(judgments)
     passed = sum(1 for j in judgments if j.passed)
     score = passed / total if total else 1.0

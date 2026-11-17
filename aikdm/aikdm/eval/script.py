@@ -6,8 +6,8 @@ list is fixed at compile time; the executor in runner.py may only skip steps."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
+from aikdm.eval.history import text_blocks
 from aikdm.eval.schemas import InputMessage, InputSession
 
 
@@ -15,14 +15,7 @@ def render_user_turn(ref_message: InputMessage) -> str:
     """Text the target sees for a reference user turn. String content as-is;
     content-block arrays → text blocks joined by a blank line; other blocks
     omitted. Single seam extended by the client-context spec."""
-    content: Any = ref_message.content
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        texts = [b.get("text", "") for b in content
-                 if isinstance(b, dict) and b.get("type") == "text"]
-        return "\n\n".join(t for t in texts if t)
-    return ""
+    return text_blocks(ref_message.content)
 
 
 @dataclass(frozen=True)
@@ -41,6 +34,7 @@ class UserStep:
 @dataclass(frozen=True)
 class AgentStep:
     turn: int
+    ref_user: InputMessage
     ref_span: list[InputMessage]
 
 
@@ -107,7 +101,8 @@ def compile_script(session: InputSession) -> Script:
     steps: list[Step] = []
     for k, start in enumerate(user_idx, start=1):
         steps.append(UserStep(turn=k, ref_message=transcript[start]))
-        steps.append(AgentStep(turn=k, ref_span=list(spans[k])))
+        steps.append(AgentStep(turn=k, ref_user=transcript[start],
+                               ref_span=list(spans[k])))
         if per_turn.get(k):
             steps.append(JudgeStep(turn=k, criteria=per_turn[k]))
     return Script(steps=steps, turn_count=last)
