@@ -41,6 +41,19 @@ class EpochRecord(BaseModel):
     error: str = ""
 
 
+class TrainingModels(BaseModel):
+    """Models and eval modes that produced a training run. Values are the
+    strings as configured in Settings, not normalized. Key names match the
+    eval contract's AikdmMeta (aikdm/eval/schemas.py), plus teacher_model."""
+    model_config = ConfigDict(extra="forbid")
+    teacher_model: str
+    judge_model: str
+    user_simulator_model: str
+    target_agent_model: str
+    user_turn_mode: Literal["verbatim", "paraphrase"]
+    history_mode: Literal["simulated", "reference"]
+
+
 class TrainingReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["training-report-v1"] = "training-report-v1"
@@ -51,3 +64,4 @@ class TrainingReport(BaseModel):
     stopped_reason: Literal["max_epochs", "plateau", "perfect_score"]
     epochs: list[EpochRecord] = Field(default_factory=list)
     final_bundle_path: str
+    models: TrainingModels
