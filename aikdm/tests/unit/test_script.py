@@ -1,4 +1,6 @@
 # tests/unit/test_script.py
+import logging
+
 from aikdm.eval.schemas import InputCriterion, InputMessage, InputSession
 from aikdm.eval.script import (
     AgentStep,
@@ -7,6 +9,7 @@ from aikdm.eval.script import (
     UserStep,
     compile_script,
     render_user_turn,
+    strip_client_context,
 )
 
 
@@ -172,3 +175,60 @@ def test_three_turns_full_step_sequence_and_ref_spans():
         x.turn: [m.message_id for m in x.ref_span] for x in sc.steps if isinstance(x, AgentStep)
     }
     assert spans == {1: ["a1t", "t1", "a1"], 2: ["a2"], 3: ["a3"]}
+
+
+CC1 = {"type": "client_context", "canonical": '{"p":1}', "context": {"p": 1},
+       "rendered": '<client_context>{"p":1}</client_context>'}
+CC2 = {"type": "client_context", "canonical": '{"p":2}', "context": {"p": 2},
+       "rendered": '<client_context>{"p":2}</client_context>'}
+
+
+def test_render_user_turn_client_context_first_verbatim():
+    content = [{"type": "text", "text": "a"}, CC1, {"type": "text", "text": "b"}]
+    assert render_user_turn(_m("u", "user", content)) == CC1["rendered"] + "\n\na\n\nb"
+
+
+def test_render_user_turn_multiple_contexts_in_order():
+    content = [CC1, CC2, {"type": "text", "text": "hi"}]
+    assert render_user_turn(_m("u", "user", content)) == "\n\n".join(
+        [CC1["rendered"], CC2["rendered"], "hi"])
+
+
+def test_render_user_turn_context_only():
+    assert render_user_turn(_m("u", "user", [CC1])) == CC1["rendered"]
+
+
+def test_render_user_turn_skips_block_without_rendered():
+    legacy = {"type": "client_context", "canonical": "{}", "context": {}}
+    assert render_user_turn(_m("u", "user", [legacy, {"type": "text", "text": "hi"}])) == "hi"
+
+
+def test_compile_script_warns_once_per_session_for_missing_rendered(caplog):
+    legacy = {"type": "client_context", "canonical": "{}", "context": {}}
+    s = _session([_m("u1", "user", [legacy, {"type": "text", "text": "a"}]),
+                  _m("a1", "assistant"),
+                  _m("u2", "user", [legacy, {"type": "text", "text": "b"}]),
+                  _m("a2", "assistant")], [])
+    with caplog.at_level(logging.WARNING, logger="aikdm.eval.script"):
+        compile_script(s)
+    records = [r for r in caplog.records if "client_context" in r.getMessage()]
+    assert len(records) == 1
+    assert "session s" in records[0].getMessage() and "2" in records[0].getMessage()
+
+
+def test_compile_script_no_warning_when_rendered_present(caplog):
+    s = _session([_m("u1", "user", [CC1, {"type": "text", "text": "a"}]),
+                  _m("a1", "assistant")], [])
+    with caplog.at_level(logging.WARNING, logger="aikdm.eval.script"):
+        compile_script(s)
+    assert not [r for r in caplog.records if "client_context" in r.getMessage()]
+
+
+def test_strip_client_context():
+    msg = {"message_id": "u", "role": "user",
+           "content": [CC1, {"type": "text", "text": "hi"}], "tool_calls": []}
+    out = strip_client_context(msg)
+    assert out["content"] == [{"type": "text", "text": "hi"}]
+    assert msg["content"][0] is CC1  # input not mutated
+    assert strip_client_context({"role": "user", "content": "plain"}) == {
+        "role": "user", "content": "plain"}
