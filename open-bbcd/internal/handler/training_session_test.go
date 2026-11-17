@@ -587,3 +587,122 @@ func TestUIDetail_ShowsErrorForFailed(t *testing.T) {
 		t.Errorf("body should render error message")
 	}
 }
+
+// reportWithModels is a training report as aikdm writes it after
+// eval-training-model-meta.
+const reportWithModels = `{"schema_version":"training-report-v1","input_eval_id":"e-1","initial_score":0.4,"final_score":0.7,"total_epochs_run":0,"stopped_reason":"max_epochs","epochs":[],"final_bundle_path":"","models":{"teacher_model":"claude-opus-4-7","judge_model":"openai/gpt-4o","user_simulator_model":"gemini-2.0-flash","target_agent_model":"claude-haiku-4-5","user_turn_mode":"paraphrase","history_mode":"simulated"}}`
+
+// reportWithoutModels is a report written before aikdm recorded models.
+const reportWithoutModels = `{"schema_version":"training-report-v1","input_eval_id":"e-1","initial_score":0.4,"final_score":0.7,"total_epochs_run":0,"stopped_reason":"max_epochs","epochs":[],"final_bundle_path":""}`
+
+// renderTrainingDetail renders GET /training-sessions/s-1 for a DONE
+// session with the given report and runtime model.
+func renderTrainingDetail(t *testing.T, report, runtime string) string {
+	t.Helper()
+	stub := &listStub{
+		getSession: &types.TrainingSession{
+			ID: "s-1", SourceEvalID: "e-1", ParentVersionID: "av-1",
+			Status: types.TrainingSessionStatusDone, TrainingReport: json.RawMessage(report),
+		},
+		views: []repository.TrainingSessionRowView{{AgentName: "AcmeAgent", ParentVersionNum: 1}},
+	}
+	h := newTrainingHandler(t, stub).WithRuntimeModel(runtime)
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions/s-1", nil)
+	req.SetPathValue("session_id", "s-1")
+	rec := httptest.NewRecorder()
+	h.UIDetail(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	return rec.Body.String()
+}
+
+const trainingRuntimeNotice = "this open-bbcd runs agents on"
+
+func TestUIDetail_ShowsTrainingModels(t *testing.T) {
+	body := renderTrainingDetail(t, reportWithModels, "")
+	for _, want := range []string{
+		"<dt>Target model</dt><dd>claude-haiku-4-5</dd>",
+		"<dt>Teacher model</dt><dd>claude-opus-4-7</dd>",
+		"<dt>Judge model</dt><dd>openai/gpt-4o</dd>",
+		"<dt>User-simulator model</dt><dd>gemini-2.0-flash</dd>",
+		"<dt>User-turn mode</dt><dd>paraphrase</dd>",
+		"<dt>History mode</dt><dd>simulated</dd>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
+func TestUIDetail_ReportWithoutModelsShowsDash(t *testing.T) {
+	body := renderTrainingDetail(t, reportWithoutModels, "claude-sonnet-4-6")
+	for _, dt := range []string{"Target model", "Teacher model", "Judge model", "User-simulator model", "User-turn mode", "History mode"} {
+		if want := "<dt>" + dt + "</dt><dd>—</dd>"; !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+	if strings.Contains(body, trainingRuntimeNotice) {
+		t.Error("no mismatch notice when the target model is unknown")
+	}
+}
+
+func TestUIDetail_TrainingRuntimeModelNotice(t *testing.T) {
+	cases := []struct {
+		runtime    string
+		wantNotice bool
+	}{
+		{"claude-sonnet-4-6", true},
+		{"openai/gpt-4o", true},
+		{"claude-haiku-4-5", false},
+		{"anthropic/claude-haiku-4-5", false}, // bare vs prefixed is a match
+		{"", false},                           // runtime model not wired
+	}
+	for _, c := range cases {
+		t.Run(c.runtime, func(t *testing.T) {
+			body := renderTrainingDetail(t, reportWithModels, c.runtime)
+			want := "Scored on claude-haiku-4-5; this open-bbcd runs agents on " + c.runtime + "."
+			if got := strings.Contains(body, want); got != c.wantNotice {
+				t.Errorf("notice %q present = %v, want %v", want, got, c.wantNotice)
+			}
+			if !c.wantNotice && strings.Contains(body, trainingRuntimeNotice) {
+				t.Errorf("unexpected notice for runtime %q", c.runtime)
+			}
+		})
+	}
+}
+
+func TestUIList_ShowsTargetModel(t *testing.T) {
+	withModels := &types.TrainingSession{
+		ID: "s-1", SourceEvalID: "e-1", Status: types.TrainingSessionStatusDone,
+		TrainingReport: json.RawMessage(reportWithModels),
+	}
+	legacy := &types.TrainingSession{
+		ID: "s-2", SourceEvalID: "e-2", Status: types.TrainingSessionStatusDone,
+		TrainingReport: json.RawMessage(reportWithoutModels),
+	}
+	stub := &listStub{
+		sessions: []*types.TrainingSession{withModels, legacy},
+		views: []repository.TrainingSessionRowView{
+			{Session: withModels, AgentName: "AcmeAgent", ParentVersionNum: 1},
+			{Session: legacy, AgentName: "AcmeAgent", ParentVersionNum: 1},
+		},
+	}
+	h := newTrainingHandler(t, stub)
+	req := httptest.NewRequest(http.MethodGet, "/training-sessions", nil)
+	rec := httptest.NewRecorder()
+	h.UIList(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "<th>Target model</th>") {
+		t.Error("list missing Target model column")
+	}
+	if !strings.Contains(body, "<td>claude-haiku-4-5</td>") {
+		t.Error("list missing target model cell")
+	}
+	if !strings.Contains(body, "<td>—</td>") {
+		t.Error("legacy report must render — in the Target model column")
+	}
+}
