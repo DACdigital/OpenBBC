@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 from functools import cache
-from typing import Literal
 
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from aikdm.eval.schemas import HistoryMode, UserTurnMode
 
 
 class ConfigError(Exception):
@@ -51,8 +52,8 @@ class Settings(BaseSettings):
     critic_rounds: int = Field(default=2, ge=1)
     parallelism: int = Field(default=10, ge=1)
     log_level: str = "info"
-    eval_user_turn_mode: Literal["verbatim", "paraphrase"] = "verbatim"
-    eval_history_mode: Literal["simulated", "reference"] = "simulated"
+    eval_user_turn_mode: UserTurnMode = "verbatim"
+    eval_history_mode: HistoryMode = "simulated"
 
 
 @cache

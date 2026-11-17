@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from aikdm.eval.schemas import HistoryMode, UserTurnMode
+
 
 class SectionPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -50,8 +52,8 @@ class TrainingModels(BaseModel):
     judge_model: str
     user_simulator_model: str
     target_agent_model: str
-    user_turn_mode: Literal["verbatim", "paraphrase"]
-    history_mode: Literal["simulated", "reference"]
+    user_turn_mode: UserTurnMode
+    history_mode: HistoryMode
 
 
 class TrainingReport(BaseModel):
@@ -64,4 +66,5 @@ class TrainingReport(BaseModel):
     stopped_reason: Literal["max_epochs", "plateau", "perfect_score"]
     epochs: list[EpochRecord] = Field(default_factory=list)
     final_bundle_path: str
+    # Required: aikdm only writes reports; stored pre-change reports are never read back by aikdm.
     models: TrainingModels
