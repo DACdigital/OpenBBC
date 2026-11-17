@@ -19,9 +19,7 @@ func TestClientContext_PostgresRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	block, err := json.Marshal(map[string]any{
-		"type": "client_context", "canonical": canonical, "context": json.RawMessage(canonical),
-	})
+	block, err := json.Marshal(chat.ClientContextContent(canonical))
 	if err != nil {
 		t.Fatal(err)
 	}

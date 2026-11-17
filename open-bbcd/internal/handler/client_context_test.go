@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -125,10 +126,13 @@ func TestTurn_ClientContextObjectAccepted(t *testing.T) {
 
 func TestTurn_ClientContextNullOrAbsentUnchanged(t *testing.T) {
 	for _, rt := range turnRoutes() {
-		for _, extra := range []string{hiInput, hiInput + `,"client_context":null`} {
-			t.Run(rt.name, func(t *testing.T) {
+		for _, c := range []struct{ name, extra string }{
+			{"absent", hiInput},
+			{"null", hiInput + `,"client_context":null`},
+		} {
+			t.Run(rt.name+"/"+c.name, func(t *testing.T) {
 				runner := &stubTurnRunner{}
-				w := rt.do(t, runner, rt.body(extra), 0, false)
+				w := rt.do(t, runner, rt.body(c.extra), 0, false)
 				if w.Code != http.StatusOK || len(runner.capturedInput) != 1 {
 					t.Fatalf("status %d input %#v", w.Code, runner.capturedInput)
 				}
@@ -154,8 +158,8 @@ func TestTurn_ClientContextNotObject400(t *testing.T) {
 
 func TestTurn_ClientContextNUL400(t *testing.T) {
 	for _, rt := range turnRoutes() {
-		for _, v := range []string{`{"a\u0000":1}`, `{"a":["x\u0000"]}`} {
-			t.Run(rt.name, func(t *testing.T) {
+		for i, v := range []string{`{"a\u0000":1}`, `{"a":["x\u0000"]}`} {
+			t.Run(fmt.Sprintf("%s/%d", rt.name, i), func(t *testing.T) {
 				runner := &stubTurnRunner{}
 				w := rt.do(t, runner, rt.body(hiInput+`,"client_context":`+v), 0, false)
 				assertRejectedBeforeStream(t, w, runner, `invalid client_context: contains \u0000`)

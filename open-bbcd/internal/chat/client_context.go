@@ -39,7 +39,7 @@ func CanonicalizeClientContext(raw json.RawMessage) (string, error) {
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(obj); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", types.ErrClientContextInvalid, err)
 	}
 	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
@@ -48,6 +48,18 @@ func CanonicalizeClientContext(raw json.RawMessage) (string, error) {
 // exact text the model sees, on the live turn, every replay and the export.
 func RenderClientContext(canonical string) string {
 	return "<client_context>" + canonical + "</client_context>"
+}
+
+// ClientContextContent is the stored shape of one client_context block in a
+// message's content array — the only place it is spelled out. canonical is
+// authoritative; context is the same JSON, informational (JSONB may
+// normalize it).
+func ClientContextContent(canonical string) map[string]any {
+	return map[string]any{
+		"type":      "client_context",
+		"canonical": canonical,
+		"context":   json.RawMessage(canonical),
+	}
 }
 
 // containsNUL reports whether any key or string value holds U+0000.

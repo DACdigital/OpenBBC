@@ -134,6 +134,9 @@ func (a ArtifactsConfig) Enabled() bool { return len(a.Stores) > 0 }
 // the ARTIFACT_STORE_ prefix). Rejects lowercase, dashes, leading digits,
 // and multi-word IDs — all of which would silently produce a confusing
 // store_id in every artifact_ref (flagged by /spec-review).
+// DefaultClientContextMaxBytes is the OPENBBC_CLIENT_CONTEXT_MAX_BYTES default.
+const DefaultClientContextMaxBytes = 65536
+
 var artifactIDPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*$`)
 
 // reservedArtifactIDs are <ID> slugs that would collide with global
@@ -286,7 +289,7 @@ func Load() (*Config, error) {
 	if cfg.Chat.AgentToolMaxParallel, err = positiveIntEnv("AGENT_TOOL_MAX_PARALLEL", 4); err != nil {
 		return nil, err
 	}
-	if cfg.Chat.ClientContextMaxBytes, err = positiveIntEnv("OPENBBC_CLIENT_CONTEXT_MAX_BYTES", 65536); err != nil {
+	if cfg.Chat.ClientContextMaxBytes, err = positiveIntEnv("OPENBBC_CLIENT_CONTEXT_MAX_BYTES", DefaultClientContextMaxBytes); err != nil {
 		return nil, err
 	}
 

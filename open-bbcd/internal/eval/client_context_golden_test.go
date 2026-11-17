@@ -36,10 +36,7 @@ func goldenUserContent(t *testing.T, rawCtx, text string) json.RawMessage {
 		if err != nil {
 			t.Fatalf("canonicalize %s: %v", rawCtx, err)
 		}
-		// Same keys as chat.blocksToJSON writes.
-		blocks = append(blocks, map[string]any{
-			"type": "client_context", "canonical": canonical, "context": json.RawMessage(canonical),
-		})
+		blocks = append(blocks, chat.ClientContextContent(canonical))
 	}
 	blocks = append(blocks, map[string]any{"type": "text", "text": text})
 	b, err := json.Marshal(blocks)

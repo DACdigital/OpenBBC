@@ -126,9 +126,7 @@ func (h *ChatHandler) WithPendingArtifacts(l PendingArtifactLister) *ChatHandler
 // WithClientContextMaxBytes sets the client_context cap
 // (OPENBBC_CLIENT_CONTEXT_MAX_BYTES). n < 1 keeps the current value.
 func (h *ChatHandler) WithClientContextMaxBytes(n int) *ChatHandler {
-	if n > 0 {
-		h.clientContextMaxBytes = n
-	}
+	h.clientContextMaxBytes = clampClientContextMaxBytes(h.clientContextMaxBytes, n)
 	return h
 }
 
@@ -923,9 +921,8 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ccBlock, err := clientContextBlock(req.ClientContext, h.clientContextMaxBytes)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	ccBlock, ok := requestClientContext(w, req.ClientContext, h.clientContextMaxBytes)
+	if !ok {
 		return
 	}
 
@@ -968,9 +965,7 @@ func (h *ChatHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The block goes first and never counts toward the empty-turn rule.
-	if ccBlock != nil {
-		input = append([]llm.Block{ccBlock}, input...)
-	}
+	input = prependClientContext(ccBlock, input)
 
 	// Set SSE-friendly response headers BEFORE constructing the sink:
 	// the sink may flush as soon as it's used, and headers can't change

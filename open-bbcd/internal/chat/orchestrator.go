@@ -295,6 +295,7 @@ func (o *Orchestrator) Turn(
 	// the client_context block (always first) and text; user-role
 	// artifact_refs come solely from the claim.
 	callerInput := make([]llm.Block, 0, len(userInput))
+	// Two passes on purpose: client_context blocks go first whatever order the caller passed.
 	for _, b := range userInput {
 		if cc, ok := b.(llm.ClientContextBlock); ok {
 			callerInput = append(callerInput, cc)
@@ -731,11 +732,7 @@ func blocksToJSON(blocks []llm.Block) (json.RawMessage, error) {
 		case llm.TextBlock:
 			out = append(out, map[string]any{"type": "text", "text": x.Text})
 		case llm.ClientContextBlock:
-			out = append(out, map[string]any{
-				"type":      "client_context",
-				"canonical": x.Canonical,
-				"context":   json.RawMessage(x.Canonical),
-			})
+			out = append(out, ClientContextContent(x.Canonical))
 		case llm.ToolUseBlock:
 			out = append(out, map[string]any{
 				"type":  "tool_use",

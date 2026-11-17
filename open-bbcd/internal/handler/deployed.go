@@ -70,9 +70,7 @@ func NewDeployedHandler(
 // WithClientContextMaxBytes sets the client_context cap
 // (OPENBBC_CLIENT_CONTEXT_MAX_BYTES). n < 1 keeps the current value.
 func (h *DeployedHandler) WithClientContextMaxBytes(n int) *DeployedHandler {
-	if n > 0 {
-		h.clientContextMaxBytes = n
-	}
+	h.clientContextMaxBytes = clampClientContextMaxBytes(h.clientContextMaxBytes, n)
 	return h
 }
 
@@ -289,7 +287,7 @@ type turnRequest struct {
 	} `json:"input"`
 	// ClientContext is an optional JSON object shown to the model on this
 	// turn and every replay (spec client-context). null/absent: none.
-	ClientContext json.RawMessage `json:"client_context"`
+	ClientContext json.RawMessage `json:"client_context,omitempty"`
 }
 
 // Turn runs one chat turn against the currently-deployed version of the chain.
@@ -314,9 +312,8 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	ccBlock, err := clientContextBlock(req.ClientContext, h.clientContextMaxBytes)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	ccBlock, ok := requestClientContext(w, req.ClientContext, h.clientContextMaxBytes)
+	if !ok {
 		return
 	}
 	if req.UserID == "" {
@@ -357,9 +354,7 @@ func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The block goes first and never counts toward the empty-turn rule.
-	if ccBlock != nil {
-		input = append([]llm.Block{ccBlock}, input...)
-	}
+	input = prependClientContext(ccBlock, input)
 
 	w.Header().Set("Content-Type", h.transport.ContentType())
 	w.Header().Set("Cache-Control", "no-cache")
