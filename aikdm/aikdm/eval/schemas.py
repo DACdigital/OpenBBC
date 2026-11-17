@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class InputToolCall(BaseModel):
@@ -72,6 +72,13 @@ class Judgment(BaseModel):
     criterion: str
     passed: bool
     reason: str = ""
+    inconclusive: bool = False  # set by the executor for infra outcomes; implies passed=False
+
+    @model_validator(mode="after")
+    def _inconclusive_never_passes(self) -> "Judgment":
+        if self.inconclusive and self.passed:
+            raise ValueError("inconclusive judgment must have passed=False")
+        return self
 
 
 class ResultSession(BaseModel):
@@ -91,6 +98,8 @@ class AikdmMeta(BaseModel):
     target_agent_model: str
     duration_seconds: float
     aikdm_version: str = "0.1.0"
+    user_turn_mode: Literal["verbatim", "paraphrase"] = "verbatim"
+    history_mode: Literal["simulated", "reference"] = "simulated"
 
 
 class EvalResult(BaseModel):
