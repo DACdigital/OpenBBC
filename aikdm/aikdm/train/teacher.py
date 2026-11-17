@@ -207,6 +207,8 @@ def _render_last_eval(eval_result: dict[str, Any]) -> str:
                         '  <judgments>']
     for sess in eval_result.get("sessions", []) or []:
         for j in sess.get("judgments", []) or []:
+            if j.get("inconclusive"):
+                continue  # infra outcome (crash / judge error), not agent behaviour
             lines.append(
                 f'    <judgment criterion="{_esc(j.get("criterion",""))}" '
                 f'passed="{str(bool(j.get("passed", False))).lower()}" '

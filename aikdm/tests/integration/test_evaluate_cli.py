@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-from aikdm.eval import runner as runner_mod
 from aikdm.eval import simulator as sim_mod
 from aikdm.eval import target as target_mod
 from aikdm.eval import judge as judge_mod
@@ -9,26 +8,23 @@ from aikdm.eval.schemas import Judgment
 
 
 def test_evaluate_cli_produces_result_shape(monkeypatch, tmp_path):
-    async def fake_next(*, agent, reference_transcript, simulated_so_far):
-        if not simulated_so_far:
-            return sim_mod.SimulatorTurn(content="hi", stop=False, tokens_in=0, tokens_out=0)
-        return sim_mod.SimulatorTurn(content="", stop=True, tokens_in=0, tokens_out=0)
-
-    async def fake_target(*, model, system_prompt, tools_spec, conversation, tool_caller):
+    async def fake_target(*, model, system_prompt, tools_spec, history, tool_caller):
+        assert history[-1] == {"role": "user", "content": "hi"}   # verbatim replay
         return target_mod.TargetTurn(
-            assistant_message={"role": "assistant", "content": "hello, how can I help?"},
+            span=[{"role": "assistant", "content": "hello, how can I help?"}],
             tokens_in=1, tokens_out=1, tool_call_count=0,
         )
 
-    async def fake_judge(*, agent, transcript, criteria_items):
+    async def fake_judge(*, agent, context, turn_under_test, criteria_items):
+        assert [c.criterion for c in criteria_items] == ["Greets politely"]
         return judge_mod.JudgeResult(
-            judgments=[Judgment(message_id="m-a-1", criterion="Greets politely", passed=True, reason="ok")],
+            judgments=[Judgment(message_id="m-a-1", criterion="Greets politely",
+                                passed=True, reason="ok")],
             passed=1, total=1, tokens_in=1, tokens_out=1,
         )
 
-    monkeypatch.setattr(sim_mod, "next_user_turn", fake_next)
     monkeypatch.setattr(target_mod, "target_turn", fake_target)
-    monkeypatch.setattr(judge_mod, "judge_transcript", fake_judge)
+    monkeypatch.setattr(judge_mod, "judge_turn", fake_judge)
 
     # Stub build_model so we don't need API keys.
     from aikdm import models
@@ -64,3 +60,9 @@ def test_evaluate_cli_produces_result_shape(monkeypatch, tmp_path):
     assert data["passed_criteria"] == 1
     assert data["score"] == 1.0
     assert len(data["sessions"]) == 1
+
+    sess = data["sessions"][0]
+    assert [m["role"] for m in sess["transcript"]] == ["user", "assistant"]
+    assert sess["judgments"][0]["inconclusive"] is False
+    assert data["aikdm_meta"]["user_turn_mode"] == "verbatim"
+    assert data["aikdm_meta"]["history_mode"] == "simulated"
