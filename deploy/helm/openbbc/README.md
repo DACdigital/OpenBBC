@@ -115,6 +115,7 @@ password. Pin it explicitly for reproducible dry-runs.
 | `hostAliases` | `[]` | `/etc/hosts` entries on every pod (open-bbcd and the aikdm CronJobs), e.g. an LLM gateway with no DNS record. |
 | `aikdmRunner.image.repository` | `ghcr.io/dacdigital/openbbc/aikdm-runner` | Built from `Dockerfile.aikdm-runner` by CI. |
 | `aikdmRunner.secrets.existingSecret` | `""` | Recommended for prod. Secret keys are envFrom-loaded verbatim by cron pods — set at least one of `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`GEMINI_API_KEY`. |
+| `aikdmRunner.extraEnv` | `{}` | Plain env vars on the evals and trainings CronJob containers (not alphas). They override same-named keys from the aikdm Secret. Use it for `AIKDM_MODEL_TARGET` / `_JUDGE` / `_USER_SIMULATOR` / `_TEACHER` / `_GENERATOR` / `_CRITIC` and `AIKDM_EVAL_USER_TURN_MODE` / `AIKDM_EVAL_HISTORY_MODE`. aikdm needs a provider key for all six models at startup, so when you switch provider, set all six to it and put that provider's key in the Secret. Unset → aikdm defaults (`claude-haiku-4-5`, `verbatim`, `simulated`). The BO flags evals/trainings whose target differs from open-bbcd's `OPENBBC_DEFAULT_MODEL`. |
 | `aikdmRunner.cronjobs.alphas.schedule` | `*/5 * * * *` | One aikdm LLM call (~30–60s) per finalized version. |
 | `aikdmRunner.cronjobs.evals.schedule` | `*/10 * * * *` | Evals are seconds-per-run. |
 | `aikdmRunner.cronjobs.trainings.schedule` | `*/15 * * * *` | Trainings are minutes-per-epoch. |

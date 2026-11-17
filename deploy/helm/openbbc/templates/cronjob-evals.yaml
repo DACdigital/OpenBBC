@@ -47,6 +47,10 @@ spec:
               env:
                 - name: OPENBBCD_URL
                   value: {{ include "openbbc.openbbcdUrl" . | quote }}
+                {{- range $k, $v := .Values.aikdmRunner.extraEnv }}
+                - name: {{ $k | quote }}
+                  value: {{ $v | quote }}
+                {{- end }}
               envFrom:
                 - secretRef:
                     name: {{ include "openbbc.aikdmSecretName" . }}
