@@ -23,6 +23,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/agui"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/jsonl"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/ui"
 	"github.com/DACdigital/OpenBBC/open-bbcd/web"
 	"gopkg.in/yaml.v3"
 )
@@ -223,6 +224,9 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	if err != nil {
 		fatal("init eval handler", err)
 	}
+	runtimeModel := ui.RuntimeModel(cfg)
+	evalHandler.WithRuntimeModel(runtimeModel)
+	agentDetailHandler.WithTrainedFrom(trainingSessionRepo)
 
 	trainingHandler, err := NewTrainingSessionHandler(&trainingSessionStore{
 		sessions: trainingSessionRepo,
@@ -232,6 +236,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	if err != nil {
 		fatal("training session handler", err)
 	}
+	trainingHandler.WithRuntimeModel(runtimeModel)
 
 	chatHandler, err := NewChatHandler(versionRepo, chatRepo, chatRepo, &chatBackendLister{wiring: wiringRepo, agentWiring: agentWiringRepo}, orchestrator, transportFactory, feedbackRepo, datasetRepo, web.Assets, logger)
 	if err != nil {
