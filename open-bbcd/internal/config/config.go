@@ -57,6 +57,11 @@ type ChatConfig struct {
 	// AGENT_TOOL_MAX_PARALLEL); defaults 3 and 4.
 	AgentToolMaxDepth    int
 	AgentToolMaxParallel int
+
+	// ClientContextMaxBytes caps the canonical JSON text of one turn's
+	// client_context (OPENBBC_CLIENT_CONTEXT_MAX_BYTES, integer >= 1,
+	// default 65536). Measured on the canonical string the model sees.
+	ClientContextMaxBytes int
 }
 
 // positiveIntEnv reads name as an integer >= 1, returning def when unset.
@@ -279,6 +284,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.Chat.AgentToolMaxParallel, err = positiveIntEnv("AGENT_TOOL_MAX_PARALLEL", 4); err != nil {
+		return nil, err
+	}
+	if cfg.Chat.ClientContextMaxBytes, err = positiveIntEnv("OPENBBC_CLIENT_CONTEXT_MAX_BYTES", 65536); err != nil {
 		return nil, err
 	}
 
