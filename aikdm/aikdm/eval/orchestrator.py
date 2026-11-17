@@ -17,7 +17,7 @@ from aikdm.eval import judge as judge_mod
 from aikdm.eval import runner as runner_mod
 from aikdm.eval import simulator as sim_mod
 from aikdm.eval import target as target_mod
-from aikdm.eval.schemas import AikdmMeta, EvalInput, EvalResult, ResultSession
+from aikdm.eval.schemas import AikdmMeta, EvalInput, EvalResult, Judgment, ResultSession
 from aikdm.eval.tool_mock import ToolMock
 from aikdm.eval.tool_real import RealHTTPToolCaller
 
@@ -62,19 +62,26 @@ async def run_eval(inp: EvalInput, settings: Settings) -> EvalResult:
                     judge_agent=judge_agent,
                     target_model=target_model_str,
                     tool_caller=make_caller(session),
+                    user_turn_mode=settings.eval_user_turn_mode,
+                    history_mode=settings.eval_history_mode,
                 )
             except Exception as e:
-                # Downgrade single-session error to a zero-score outcome
-                # so other sessions still count.
+                # Failures outside the executor (e.g. tool-caller construction,
+                # script compilation). Every criterion still leaves a record.
+                judgments = [
+                    Judgment(message_id=c.message_id, criterion=item, passed=False,
+                             inconclusive=True, reason=f"session error: {e}")
+                    for c in session.criteria for item in c.items
+                ]
                 return runner_mod.SessionOutcome(
                     session_id=session.session_id,
                     result=ResultSession(
                         session_id=session.session_id,
                         score=0.0,
-                        total_criteria=sum(len(c.items) for c in session.criteria),
+                        total_criteria=len(judgments),
                         passed_criteria=0,
                         transcript=[],
-                        judgments=[],
+                        judgments=judgments,
                     ),
                     tokens_in=0, tokens_out=0,
                     error=str(e),
@@ -91,6 +98,8 @@ async def run_eval(inp: EvalInput, settings: Settings) -> EvalResult:
         user_simulator_model=settings.model_user_simulator,
         judge_model=settings.model_judge,
         target_agent_model=settings.model_target,
+        user_turn_mode=settings.eval_user_turn_mode,
+        history_mode=settings.eval_history_mode,
         duration_seconds=round(time.time() - started, 3),
     )
     return EvalResult(
