@@ -75,7 +75,7 @@ class Judgment(BaseModel):
     inconclusive: bool = False  # set by the executor for infra outcomes; implies passed=False
 
     @model_validator(mode="after")
-    def _inconclusive_never_passes(self) -> "Judgment":
+    def _inconclusive_never_passes(self) -> Judgment:
         if self.inconclusive and self.passed:
             raise ValueError("inconclusive judgment must have passed=False")
         return self
