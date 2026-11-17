@@ -4,14 +4,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/jsonl"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/DACdigital/OpenBBC/open-bbcd/web"
 	"github.com/google/uuid"
 )
 
@@ -226,7 +230,7 @@ func TestChatView_ClientContextCollapsedAboveText(t *testing.T) {
 	body := renderChatView(t, &stubChatStore{messages: []*types.ChatMessage{
 		{ID: uuid.NewString(), Role: types.ChatRoleUser, Content: json.RawMessage(ccUserContent)},
 	}}, nil)
-	ccAt := strings.Index(body, `<details class="client-context">`)
+	ccAt := strings.Index(body, `<details class="client-context"`)
 	textAt := strings.Index(body, `data-raw="hello"`)
 	if ccAt < 0 || textAt < 0 || ccAt > textAt {
 		t.Fatalf("client context section missing or below the text (cc %d, text %d)", ccAt, textAt)
@@ -268,5 +272,76 @@ func TestDeployedGetSession_ReturnsClientContextRaw(t *testing.T) {
 	b := out.Messages[0].Content[0]
 	if b["type"] != "client_context" || b["canonical"] != `{"a":"<x>","b":1}` || b["context"] == nil {
 		t.Fatalf("block = %#v", b)
+	}
+}
+
+var ccControls = []string{
+	`id="chat-context-btn"`,
+	`id="chat-context-modal"`,
+	`id="chat-context-input"`,
+	`id="chat-context-attach-btn"`,
+	`id="chat-context-cancel-btn"`,
+	`id="chat-context-remove-btn"`,
+	`id="chat-context-pending"`,
+	`id="chat-context-chip-remove"`,
+}
+
+func TestChatView_ClientContextControls(t *testing.T) {
+	body := renderChatView(t, &stubChatStore{}, nil)
+	for _, want := range ccControls {
+		if !strings.Contains(body, want) {
+			t.Errorf("unlocked session with bundle missing %q", want)
+		}
+	}
+	// Modal and chip start hidden.
+	for _, want := range []string{`<div class="modal" id="chat-context-modal" hidden>`, `id="chat-context-pending" class="chat-context-pending" hidden>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
+func TestChatView_ClientContextControlsAbsent(t *testing.T) {
+	locked := renderChatView(t, &stubChatStore{locked: true}, nil)
+	nb, err := NewChatHandler(
+		&stubAgentRepo{
+			version: &types.AgentVersion{ID: "v", AgentID: "a"},
+			agent:   &types.Agent{ID: "a", Name: "test"},
+		},
+		&stubChatStore{}, nil, nil, &stubTurnRunner{}, jsonl.NewFactory(), nil, nil, web.Assets, slog.Default(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("GET", "/agent_versions/v/chat/"+testSID, nil)
+	r.SetPathValue("version_id", "v")
+	r.SetPathValue("session_id", testSID)
+	w := httptest.NewRecorder()
+	nb.ChatView(w, r)
+	for name, b := range map[string]string{"locked": locked, "no bundle": w.Body.String()} {
+		if !strings.Contains(b, `id="chat-input"`) {
+			t.Fatalf("%s: chat view not rendered", name)
+		}
+		for _, bad := range ccControls {
+			if strings.Contains(b, bad) {
+				t.Errorf("%s session must not render %q", name, bad)
+			}
+		}
+	}
+}
+
+func TestChatView_ClientContextDataAttributeEscaped(t *testing.T) {
+	body := renderChatView(t, &stubChatStore{messages: []*types.ChatMessage{
+		{ID: uuid.NewString(), Role: types.ChatRoleUser, Content: json.RawMessage(ccUserContent)},
+	}}, nil)
+	m := regexp.MustCompile(`<details class="client-context" data-client-context="([^"]*)">`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("client-context section has no data-client-context attribute")
+	}
+	if strings.ContainsAny(m[1], "<>") {
+		t.Fatalf("attribute not escaped: %q", m[1])
+	}
+	if got, want := html.UnescapeString(m[1]), "{\n  \"a\": \"<x>\",\n  \"b\": 1\n}"; got != want {
+		t.Fatalf("data-client-context = %q, want %q", got, want)
 	}
 }

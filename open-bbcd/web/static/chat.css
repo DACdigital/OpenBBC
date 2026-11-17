@@ -245,6 +245,29 @@
 
 .chat-attach { flex: 0 0 auto; align-self: flex-start; }
 
+/* Client context: composer chip + modal. The layout's .modal rule sets
+   display:flex, which overrides the browser's [hidden] { display: none }. */
+#chat-context-modal[hidden],
+#chat-context-remove-btn[hidden] { display: none; }
+.chat-context-pending { display: flex; margin: 0 0 0.4rem; }
+.chat-context-pending[hidden] { display: none; }
+.chat-context-chip-label { border: 0; background: none; color: inherit; cursor: pointer; font: inherit; padding: 0; }
+.chat-context-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #e6edf3;
+  padding: 0.5rem;
+  resize: vertical;
+}
+.chat-context-input:focus { outline: none; border-color: #388bfd; }
+.chat-context-error { color: #ffa198; font-size: 13px; }
+.chat-context-error[hidden] { display: none; }
+
 .chat-input textarea {
   flex: 1;
   padding: 0.5rem 0.75rem;
