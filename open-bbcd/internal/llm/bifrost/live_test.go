@@ -17,7 +17,8 @@ import (
 // Live smoke (spec acceptance "Live smoke"): runs only with
 // OPENBBC_LIVE_LLM_TEST=1, against every allow-listed provider whose
 // <PROVIDER>_API_KEY is set. Override a provider's model with
-// OPENBBC_LIVE_MODEL_<PROVIDER> (e.g. OPENBBC_LIVE_MODEL_OPENAI=gpt-4o-mini).
+// OPENBBC_LIVE_MODEL_<PROVIDER> (e.g. OPENBBC_LIVE_MODEL_OPENAI=gpt-4o-mini)
+// and its endpoint with <PROVIDER>_BASE_URL (e.g. a Bifrost gateway).
 // Defaults are small, tool-capable models, one per allow-listed provider
 // (config.bifrostProviders); keep the two in step.
 var liveModels = map[string]string{
@@ -58,7 +59,8 @@ func liveLLM(t *testing.T, provider string) (*LLM, bool) {
 	if m := liveModelOverride(provider); m != "" {
 		model = m
 	}
-	l, err := New(context.Background(), config.LLMConfig{Adapter: "bifrost", Provider: provider, Model: model, APIKey: key}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cfg := config.LLMConfig{Adapter: "bifrost", Provider: provider, Model: model, APIKey: key, BaseURL: os.Getenv(config.BaseURLEnv(provider))}
+	l, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("%s: New: %v", provider, err)
 	}
