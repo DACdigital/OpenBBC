@@ -15,7 +15,8 @@ def _env(monkeypatch, **kwargs):
               "AIKDM_MODEL_GENERATOR", "AIKDM_MODEL_CRITIC",
               "AIKDM_MODEL_USER_SIMULATOR", "AIKDM_MODEL_JUDGE",
               "AIKDM_MODEL_TARGET", "AIKDM_MODEL_TEACHER",
-              "AIKDM_CRITIC_ROUNDS", "AIKDM_LOG_LEVEL"):
+              "AIKDM_CRITIC_ROUNDS", "AIKDM_LOG_LEVEL",
+              "AIKDM_EVAL_USER_TURN_MODE", "AIKDM_EVAL_HISTORY_MODE"):
         monkeypatch.delenv(k, raising=False)
     for k, v in kwargs.items():
         monkeypatch.setenv(k, v)
@@ -74,3 +75,30 @@ def test_defaults_include_teacher(monkeypatch):
     _env(monkeypatch, ANTHROPIC_API_KEY="sk-xxx")
     s = load_settings()
     assert s.model_teacher == "claude-haiku-4-5"
+
+
+def test_eval_mode_defaults(monkeypatch):
+    _env(monkeypatch, ANTHROPIC_API_KEY="sk-xxx")
+    s = load_settings()
+    assert s.eval_user_turn_mode == "verbatim"
+    assert s.eval_history_mode == "simulated"
+
+
+def test_eval_modes_from_env(monkeypatch):
+    _env(monkeypatch, ANTHROPIC_API_KEY="sk-xxx",
+         AIKDM_EVAL_USER_TURN_MODE="paraphrase", AIKDM_EVAL_HISTORY_MODE="simulated")
+    s = load_settings()
+    assert s.eval_user_turn_mode == "paraphrase"
+
+
+def test_invalid_eval_mode_is_config_error(monkeypatch):
+    _env(monkeypatch, ANTHROPIC_API_KEY="sk-xxx", AIKDM_EVAL_USER_TURN_MODE="loud")
+    with pytest.raises(ConfigError):
+        load_settings()
+
+
+def test_reference_plus_paraphrase_rejected(monkeypatch):
+    _env(monkeypatch, ANTHROPIC_API_KEY="sk-xxx",
+         AIKDM_EVAL_USER_TURN_MODE="paraphrase", AIKDM_EVAL_HISTORY_MODE="reference")
+    with pytest.raises(ConfigError, match="reference"):
+        load_settings()

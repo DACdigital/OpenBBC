@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from functools import cache
+from typing import Literal
 
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -50,6 +51,8 @@ class Settings(BaseSettings):
     critic_rounds: int = Field(default=2, ge=1)
     parallelism: int = Field(default=10, ge=1)
     log_level: str = "info"
+    eval_user_turn_mode: Literal["verbatim", "paraphrase"] = "verbatim"
+    eval_history_mode: Literal["simulated", "reference"] = "simulated"
 
 
 @cache
@@ -64,6 +67,11 @@ def load_settings() -> Settings:
         s = Settings()
     except ValidationError as e:
         raise ConfigError(str(e)) from e
+
+    if s.eval_history_mode == "reference" and s.eval_user_turn_mode == "paraphrase":
+        raise ConfigError(
+            "AIKDM_EVAL_HISTORY_MODE=reference requires AIKDM_EVAL_USER_TURN_MODE=verbatim"
+        )
 
     providers = {
         _provider_of(s.model_generator),
