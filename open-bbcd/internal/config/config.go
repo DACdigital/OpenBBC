@@ -17,6 +17,7 @@ type Config struct {
 	Database  DatabaseConfig
 	Discovery DiscoveryConfig
 	Anthropic AnthropicConfig
+	LLM       LLMConfig
 	Chat      ChatConfig
 	Artifacts ArtifactsConfig
 }
@@ -39,7 +40,9 @@ type DiscoveryConfig struct {
 // request when missing. This lets the rest of the service work in environments
 // without an Anthropic key (development, CI for non-chat features).
 type AnthropicConfig struct {
-	APIKey       string `env:"ANTHROPIC_API_KEY"`
+	APIKey string `env:"ANTHROPIC_API_KEY"`
+	// DefaultModel is the anthropic adapter's model. On the bifrost adapter the
+	// raw OPENBBC_DEFAULT_MODEL (<provider>/<model>) is parsed by parseLLMFromEnv.
 	DefaultModel string `env:"OPENBBC_DEFAULT_MODEL" envDefault:"claude-sonnet-4-6"`
 	MaxTokens    int    `env:"OPENBBC_MAX_TOKENS" envDefault:"4096"`
 }
@@ -284,6 +287,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.Artifacts = artifacts
+
+	llmCfg, err := parseLLMFromEnv(os.Environ(), cfg.Anthropic)
+	if err != nil {
+		return nil, err
+	}
+	cfg.LLM = llmCfg
 
 	return cfg, nil
 }
