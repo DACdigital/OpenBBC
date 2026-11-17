@@ -502,3 +502,144 @@ func TestEvalHandler_ListJSON_EmptyResult_ReturnsEmptyArray(t *testing.T) {
 		t.Errorf("body = %q, want []", body)
 	}
 }
+
+// evalMetaJSON is an aikdm_meta as aikdm writes it, plus an unknown key.
+const evalMetaJSON = `{"user_simulator_model":"gemini-2.0-flash","judge_model":"openai/gpt-4o","target_agent_model":"claude-haiku-4-5","duration_seconds":1.5,"aikdm_version":"0.1.0","user_turn_mode":"verbatim","history_mode":"reference","future_key":"ignored"}`
+
+// setEvalMeta overwrites an eval's aikdm_meta directly.
+func setEvalMeta(t *testing.T, db *sql.DB, evalID, meta string) {
+	t.Helper()
+	if _, err := db.Exec(`UPDATE evals SET aikdm_meta = $2::jsonb WHERE id = $1::uuid`, evalID, meta); err != nil {
+		t.Fatalf("setEvalMeta: %v", err)
+	}
+}
+
+// renderEvalDetail renders GET /evals/{id} and returns the body.
+func renderEvalDetail(t *testing.T, h *EvalHandler, evalID string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/evals/"+evalID, nil)
+	req.SetPathValue("eval_id", evalID)
+	rec := httptest.NewRecorder()
+	h.UIDetail(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("UIDetail = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	return rec.Body.String()
+}
+
+const runtimeNotice = "this open-bbcd runs agents on"
+
+func TestEvalHandler_UIDetail_ShowsModels(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+	db := getEvalTestDB(t, h)
+	evalID := insertDoneEval(t, db, versionID, dvID, 0.5)
+	setEvalMeta(t, db, evalID, evalMetaJSON)
+
+	body := renderEvalDetail(t, h, evalID)
+	for _, want := range []string{
+		"<dt>Target model</dt><dd>claude-haiku-4-5</dd>",
+		"<dt>Judge model</dt><dd>openai/gpt-4o</dd>",
+		"<dt>User-simulator model</dt><dd>gemini-2.0-flash</dd>",
+		"<dt>User-turn mode</dt><dd>verbatim</dd>",
+		"<dt>History mode</dt><dd>reference</dd>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("detail missing %q", want)
+		}
+	}
+	if strings.Contains(body, "future_key") {
+		t.Error("unknown aikdm_meta keys must not be rendered")
+	}
+}
+
+func TestEvalHandler_UIDetail_ModelsDashWhenMetaEmpty(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+	h.WithRuntimeModel("claude-sonnet-4-6")
+	db := getEvalTestDB(t, h)
+	evalID := insertDoneEval(t, db, versionID, dvID, 0.5) // aikdm_meta defaults to {}
+
+	body := renderEvalDetail(t, h, evalID)
+	for _, dt := range []string{"Target model", "Judge model", "User-simulator model", "User-turn mode", "History mode"} {
+		if want := "<dt>" + dt + "</dt><dd>—</dd>"; !strings.Contains(body, want) {
+			t.Errorf("detail missing %q", want)
+		}
+	}
+	if strings.Contains(body, runtimeNotice) {
+		t.Error("no mismatch notice when the target model is unknown")
+	}
+}
+
+func TestEvalHandler_UIDetail_RuntimeModelNotice(t *testing.T) {
+	cases := []struct {
+		runtime    string
+		wantNotice bool
+	}{
+		{"claude-sonnet-4-6", true},
+		{"openai/gpt-4o", true},
+		{"claude-haiku-4-5", false},
+		{"anthropic/claude-haiku-4-5", false}, // bare vs prefixed is a match
+		{"", false},                           // runtime model not wired
+	}
+	for _, c := range cases {
+		t.Run(c.runtime, func(t *testing.T) {
+			h, versionID, dvID := setupEvalAPI(t)
+			h.WithRuntimeModel(c.runtime)
+			db := getEvalTestDB(t, h)
+			evalID := insertDoneEval(t, db, versionID, dvID, 0.5)
+			setEvalMeta(t, db, evalID, evalMetaJSON)
+
+			body := renderEvalDetail(t, h, evalID)
+			want := "Scored on claude-haiku-4-5; this open-bbcd runs agents on " + c.runtime + "."
+			if got := strings.Contains(body, want); got != c.wantNotice {
+				t.Errorf("notice %q present = %v, want %v", want, got, c.wantNotice)
+			}
+			if !c.wantNotice && strings.Contains(body, runtimeNotice) {
+				t.Errorf("unexpected notice for runtime %q", c.runtime)
+			}
+		})
+	}
+}
+
+func TestEvalHandler_Lists_ShowTargetAndJudge(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+	db := getEvalTestDB(t, h)
+	setEvalMeta(t, db, insertDoneEval(t, db, versionID, dvID, 0.5), evalMetaJSON)
+
+	reqAll := httptest.NewRequest(http.MethodGet, "/evals", nil)
+	recAll := httptest.NewRecorder()
+	h.UIList(recAll, reqAll)
+
+	reqAV := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/evals", nil)
+	reqAV.SetPathValue("version_id", versionID)
+	recAV := httptest.NewRecorder()
+	h.UIListByAgentVersion(recAV, reqAV)
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{"UIList": recAll, "UIListByAgentVersion": recAV} {
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s = %d", name, rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "<th>Target / judge</th>") {
+			t.Errorf("%s: missing Target / judge column", name)
+		}
+		if !strings.Contains(body, "<td>claude-haiku-4-5 / openai/gpt-4o</td>") {
+			t.Errorf("%s: missing target / judge cell", name)
+		}
+	}
+}
+
+func TestEvalHandler_Lists_DashWhenMetaEmpty(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+	db := getEvalTestDB(t, h)
+	_ = insertDoneEval(t, db, versionID, dvID, 0.5) // aikdm_meta = {}
+
+	req := httptest.NewRequest(http.MethodGet, "/evals", nil)
+	rec := httptest.NewRecorder()
+	h.UIList(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("UIList = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "<td>—</td>") {
+		t.Error("an eval without aikdm_meta must render — in the Target / judge column")
+	}
+}
