@@ -1,4 +1,4 @@
-package ui
+package modelmeta
 
 import "encoding/json"
 

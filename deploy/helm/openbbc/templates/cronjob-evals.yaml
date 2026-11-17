@@ -48,6 +48,9 @@ spec:
                 - name: OPENBBCD_URL
                   value: {{ include "openbbc.openbbcdUrl" . | quote }}
                 {{- range $k, $v := .Values.aikdmRunner.extraEnv }}
+                {{- if eq $k "OPENBBCD_URL" }}
+                {{- fail "aikdmRunner.extraEnv: OPENBBCD_URL is reserved (set by the chart; use aikdmRunner.openbbcdUrlOverride instead)" }}
+                {{- end }}
                 - name: {{ $k | quote }}
                   value: {{ $v | quote }}
                 {{- end }}

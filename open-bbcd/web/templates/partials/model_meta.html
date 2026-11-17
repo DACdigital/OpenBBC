@@ -1,0 +1,12 @@
+{{/* Model metadata partials shared by the eval and training detail pages.
+     Each takes a modelmeta.View. Leading indentation of the first line comes
+     from the call site; later lines carry their own so the rendered markup
+     matches the inline rows they replace. */}}
+{{define "model_target_row"}}<div class="agent-meta-item"><dt>Target model</dt><dd>{{or .Models.Target "—"}}</dd></div>{{end}}
+{{define "model_meta_rows"}}<div class="agent-meta-item"><dt>Judge model</dt><dd>{{or .Models.Judge "—"}}</dd></div>
+    <div class="agent-meta-item"><dt>User-simulator model</dt><dd>{{or .Models.UserSimulator "—"}}</dd></div>
+    <div class="agent-meta-item"><dt>User-turn mode</dt><dd>{{or .Models.UserTurnMode "—"}}</dd></div>
+    <div class="agent-meta-item"><dt>History mode</dt><dd>{{or .Models.HistoryMode "—"}}</dd></div>{{end}}
+{{define "model_mismatch_notice"}}{{if .Mismatch}}
+    <p class="warn-text">Scored on {{.Models.Target}}; this open-bbcd runs agents on {{.Runtime}}.</p>
+  {{end}}{{end}}

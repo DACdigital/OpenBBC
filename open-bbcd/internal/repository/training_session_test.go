@@ -413,41 +413,59 @@ func TestTrainedFromByVersionIDs(t *testing.T) {
 	ctx := context.Background()
 
 	evalID, parentID := seedEvalForTraining(t, db)
-	trained := seedAgentVersion(t, db) // produced by two sessions
-	legacy := seedAgentVersion(t, db)  // produced before reports carried models
-	other := seedAgentVersion(t, db)   // not produced by training
+	trained := seedAgentVersion(t, db)    // produced by two sessions
+	legacy := seedAgentVersion(t, db)     // produced before reports carried models
+	other := seedAgentVersion(t, db)      // not produced by training
+	unfinished := seedAgentVersion(t, db) // one session never completed
+	noReport := seedAgentVersion(t, db)   // training_report is NULL
 
-	insertDone := func(newVersionID, completedAt, report string) string {
+	// insert adds a session; nil completedAt / report store SQL NULL.
+	insert := func(status, newVersionID string, completedAt, report any) string {
 		t.Helper()
 		var id string
 		if err := db.QueryRow(`
 			INSERT INTO training_sessions
 				(source_eval_id, parent_version_id, new_version_id, status, completed_at, training_report)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, 'DONE', $4::timestamptz, $5::jsonb)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::timestamptz, $6::jsonb)
 			RETURNING id::text
-		`, evalID, parentID, newVersionID, completedAt, report).Scan(&id); err != nil {
+		`, evalID, parentID, newVersionID, status, completedAt, report).Scan(&id); err != nil {
 			t.Fatalf("insert session: %v", err)
 		}
 		return id
+	}
+	insertDone := func(newVersionID string, completedAt, report any) string {
+		t.Helper()
+		return insert("DONE", newVersionID, completedAt, report)
 	}
 	// The later-completed session is inserted first, so insertion order
 	// cannot pick the winner.
 	latest := insertDone(trained, "2026-11-02T10:00:00Z", `{"models":{"target_agent_model":"openai/gpt-4o","judge_model":"x"}}`)
 	_ = insertDone(trained, "2026-11-01T10:00:00Z", `{"models":{"target_agent_model":"claude-haiku-4-5"}}`)
 	legacySession := insertDone(legacy, "2026-11-01T10:00:00Z", `{"schema_version":"training-report-v1","final_score":0.7}`)
+	// A session with completed_at NULL sorts last (NULLS LAST), so the
+	// completed one wins even though it is older and inserted second.
+	_ = insert("FAILED", unfinished, nil, `{"models":{"target_agent_model":"claude-sonnet-4-6"}}`)
+	completed := insertDone(unfinished, "2026-10-01T10:00:00Z", `{"models":{"target_agent_model":"claude-haiku-4-5"}}`)
+	noReportSession := insertDone(noReport, "2026-11-01T10:00:00Z", nil)
 
-	got, err := repo.TrainedFromByVersionIDs(ctx, []string{trained, legacy, other})
+	got, err := repo.TrainedFromByVersionIDs(ctx, []string{trained, legacy, other, unfinished, noReport})
 	if err != nil {
 		t.Fatalf("TrainedFromByVersionIDs: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("got %d entries, want 2: %+v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("got %d entries, want 4: %+v", len(got), got)
 	}
 	if want := (TrainedFrom{SessionID: latest, TargetModel: "openai/gpt-4o"}); got[trained] != want {
 		t.Errorf("trained = %+v, want %+v (latest completed session wins)", got[trained], want)
 	}
 	if want := (TrainedFrom{SessionID: legacySession}); got[legacy] != want {
 		t.Errorf("legacy = %+v, want %+v", got[legacy], want)
+	}
+	if want := (TrainedFrom{SessionID: completed, TargetModel: "claude-haiku-4-5"}); got[unfinished] != want {
+		t.Errorf("unfinished = %+v, want %+v (completed session beats completed_at NULL)", got[unfinished], want)
+	}
+	if want := (TrainedFrom{SessionID: noReportSession}); got[noReport] != want {
+		t.Errorf("noReport = %+v, want %+v (NULL training_report gives an empty target)", got[noReport], want)
 	}
 	if _, ok := got[other]; ok {
 		t.Errorf("version not produced by training must be absent, got %+v", got[other])

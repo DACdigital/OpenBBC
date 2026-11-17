@@ -51,16 +51,11 @@
         </ul>
       </dd></div>
     {{end}}
-    <div class="agent-meta-item"><dt>Target model</dt><dd>{{or .Models.Target "—"}}</dd></div>
-    <div class="agent-meta-item"><dt>Judge model</dt><dd>{{or .Models.Judge "—"}}</dd></div>
-    <div class="agent-meta-item"><dt>User-simulator model</dt><dd>{{or .Models.UserSimulator "—"}}</dd></div>
-    <div class="agent-meta-item"><dt>User-turn mode</dt><dd>{{or .Models.UserTurnMode "—"}}</dd></div>
-    <div class="agent-meta-item"><dt>History mode</dt><dd>{{or .Models.HistoryMode "—"}}</dd></div>
+    {{template "model_target_row" .ModelMeta}}
+    {{template "model_meta_rows" .ModelMeta}}
   </dl>
 
-  {{if .ModelMismatch}}
-    <p class="warn-text">Scored on {{.Models.Target}}; this open-bbcd runs agents on {{.RuntimeModel}}.</p>
-  {{end}}
+  {{template "model_mismatch_notice" .ModelMeta}}
 
   {{if .Eval.ErrorMessage}}
     <p class="warn-text">Error: {{.Eval.ErrorMessage}}</p>

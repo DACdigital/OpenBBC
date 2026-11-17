@@ -28,17 +28,12 @@
       <div class="agent-meta-item"><dt>Score</dt><dd>{{printf "%.4f" (deref .Session.InitialScore)}} → {{printf "%.4f" (deref .Session.FinalScore)}}</dd></div>
     {{end}}
     {{if .Session.StoppedReason}}<div class="agent-meta-item"><dt>Stopped</dt><dd>{{deref .Session.StoppedReason}}</dd></div>{{end}}
-    <div class="agent-meta-item"><dt>Target model</dt><dd>{{or .Models.Target "—"}}</dd></div>
-    <div class="agent-meta-item"><dt>Teacher model</dt><dd>{{or .Models.Teacher "—"}}</dd></div>
-    <div class="agent-meta-item"><dt>Judge model</dt><dd>{{or .Models.Judge "—"}}</dd></div>
-    <div class="agent-meta-item"><dt>User-simulator model</dt><dd>{{or .Models.UserSimulator "—"}}</dd></div>
-    <div class="agent-meta-item"><dt>User-turn mode</dt><dd>{{or .Models.UserTurnMode "—"}}</dd></div>
-    <div class="agent-meta-item"><dt>History mode</dt><dd>{{or .Models.HistoryMode "—"}}</dd></div>
+    {{template "model_target_row" .ModelMeta}}
+    <div class="agent-meta-item"><dt>Teacher model</dt><dd>{{or .ModelMeta.Models.Teacher "—"}}</dd></div>
+    {{template "model_meta_rows" .ModelMeta}}
   </dl>
 
-  {{if .ModelMismatch}}
-    <p class="warn-text">Scored on {{.Models.Target}}; this open-bbcd runs agents on {{.RuntimeModel}}.</p>
-  {{end}}
+  {{template "model_mismatch_notice" .ModelMeta}}
 
   {{if eq (printf "%s" .Session.Status) "FAILED"}}
     <p class="warn-text">Error: {{.Session.ErrorMessage}}</p>

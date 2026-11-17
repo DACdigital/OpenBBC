@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/modelmeta"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/ui"
 	"github.com/DACdigital/OpenBBC/open-bbcd/web"
 )
 
@@ -36,14 +36,14 @@ type TrainingSessionHandler struct {
 	listTmpl   *template.Template
 	detailTmpl *template.Template
 	// runtimeModel is the model this open-bbcd runs agents on
-	// (ui.RuntimeModel). "" disables the detail page's mismatch notice.
+	// (config.Config.RuntimeModel). "" disables the detail page's mismatch notice.
 	runtimeModel string
 }
 
 func NewTrainingSessionHandler(store TrainingSessionStore) (*TrainingSessionHandler, error) {
 	funcs := template.FuncMap{
 		"statusClass":  statusClass,
-		"reportModels": ui.ParseReportModels,
+		"reportModels": modelmeta.ParseReportModels,
 		"pct": func(f float64) string {
 			return fmt.Sprintf("%.1f%%", f*100)
 		},
@@ -79,6 +79,7 @@ func NewTrainingSessionHandler(store TrainingSessionStore) (*TrainingSessionHand
 	detailTmpl, err := template.New("layout").Funcs(funcs).ParseFS(
 		web.Assets,
 		"templates/layout.html",
+		"templates/partials/model_meta.html",
 		"templates/training/detail.html",
 	)
 	if err != nil {
@@ -92,7 +93,7 @@ func NewTrainingSessionHandler(store TrainingSessionStore) (*TrainingSessionHand
 }
 
 // WithRuntimeModel sets the runtime model named in the detail page's
-// scoring/runtime mismatch notice (ui.RuntimeModel(cfg) in newAPI). The
+// scoring/runtime mismatch notice (cfg.RuntimeModel() in newAPI). The
 // default "" shows no notice.
 func (h *TrainingSessionHandler) WithRuntimeModel(model string) *TrainingSessionHandler {
 	h.runtimeModel = model
@@ -345,13 +346,11 @@ type epochView struct {
 }
 
 type trainingDetailPageData struct {
-	Active        string
-	Session       *types.TrainingSession
-	View          repository.TrainingSessionRowView
-	Epochs        []epochView
-	Models        ui.Models
-	RuntimeModel  string
-	ModelMismatch bool
+	Active    string
+	Session   *types.TrainingSession
+	View      repository.TrainingSessionRowView
+	Epochs    []epochView
+	ModelMeta modelmeta.View
 }
 
 func (h *TrainingSessionHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
@@ -371,16 +370,12 @@ func (h *TrainingSessionHandler) UIDetail(w http.ResponseWriter, r *http.Request
 		view = views[0]
 	}
 	epochs := parseEpochsForView(sess.TrainingReport)
-	models := ui.ParseReportModels(sess.TrainingReport)
-
 	renderTemplate(w, h.detailTmpl, "layout", trainingDetailPageData{
-		Active:        "training-sessions",
-		Session:       sess,
-		View:          view,
-		Epochs:        epochs,
-		Models:        models,
-		RuntimeModel:  h.runtimeModel,
-		ModelMismatch: ui.TargetDiffers(models.Target, h.runtimeModel),
+		Active:    "training-sessions",
+		Session:   sess,
+		View:      view,
+		Epochs:    epochs,
+		ModelMeta: modelmeta.NewView(modelmeta.ParseReportModels(sess.TrainingReport), h.runtimeModel),
 	})
 }
 

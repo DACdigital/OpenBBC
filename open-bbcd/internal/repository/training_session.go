@@ -8,8 +8,8 @@ import (
 
 	"github.com/lib/pq"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/modelmeta"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/ui"
 )
 
 type TrainingSessionRepository struct {
@@ -481,7 +481,7 @@ type TrainedFrom struct {
 // produced (training_sessions.new_version_id) to that session. Versions no
 // session produced are absent from the map. new_version_id is indexed but
 // not unique, so DISTINCT ON keeps one row per version: the most recently
-// completed session. The target model is read with ui.ParseModels, the same
+// completed session. The target model is read with modelmeta.ParseModels, the same
 // helper the training detail page uses.
 func (r *TrainingSessionRepository) TrainedFromByVersionIDs(ctx context.Context, versionIDs []string) (map[string]TrainedFrom, error) {
 	out := map[string]TrainedFrom{}
@@ -505,7 +505,7 @@ func (r *TrainingSessionRepository) TrainedFromByVersionIDs(ctx context.Context,
 		if err := rows.Scan(&versionID, &sessionID, &models); err != nil {
 			return nil, err
 		}
-		out[versionID] = TrainedFrom{SessionID: sessionID, TargetModel: ui.ParseModels(models).Target}
+		out[versionID] = TrainedFrom{SessionID: sessionID, TargetModel: modelmeta.ParseModels(models).Target}
 	}
 	return out, rows.Err()
 }

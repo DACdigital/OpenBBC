@@ -1,13 +1,11 @@
-// Package ui holds small display helpers shared by the back-office handlers
-// and the repositories that feed them. Nothing here does I/O. It imports
-// only internal/config, so both handler and repository may import it.
-package ui
+// Package modelmeta parses the model and eval-mode metadata aikdm records
+// (an eval's aikdm_meta, a training report's "models" block) and compares
+// the scoring target model with the model this open-bbcd runs agents on.
+// Nothing here does I/O and it imports nothing internal, so both handler and
+// repository may import it.
+package modelmeta
 
-import (
-	"strings"
-
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
-)
+import "strings"
 
 // CanonicalModel returns s in provider/model form. It is used only to
 // compare model strings; pages always display the configured string.
@@ -32,19 +30,6 @@ func CanonicalModel(s string) string {
 	return s
 }
 
-// RuntimeModel is the model this open-bbcd runs agents on, as configured.
-// Bifrost adapter: "<provider>/<model>". Anthropic adapter, or a hand-built
-// config with an empty LLM block: cfg.LLMModel() as is. It is never
-// prefixed here; comparisons go through CanonicalModel, so an
-// OPENBBC_DEFAULT_MODEL that already carries "anthropic/" is not prefixed
-// twice.
-func RuntimeModel(cfg *config.Config) string {
-	if cfg.LLM.Adapter == config.LLMAdapterBifrost {
-		return cfg.LLM.Provider + "/" + cfg.LLM.Model
-	}
-	return cfg.LLMModel()
-}
-
 // TargetDiffers reports whether the scoring target model and the runtime
 // model differ once both are canonicalized. It is false when either side is
 // unknown (""), so no mismatch notice is shown for missing data.
@@ -53,4 +38,18 @@ func TargetDiffers(target, runtime string) bool {
 		return false
 	}
 	return CanonicalModel(target) != CanonicalModel(runtime)
+}
+
+// View is the model metadata a detail page shows: the parsed Models, the
+// runtime model, and whether the scoring target differs from it.
+type View struct {
+	Models   Models
+	Runtime  string
+	Mismatch bool
+}
+
+// NewView builds a View. Mismatch has TargetDiffers semantics: false when
+// the target or the runtime model is unknown ("").
+func NewView(m Models, runtime string) View {
+	return View{Models: m, Runtime: runtime, Mismatch: TargetDiffers(m.Target, runtime)}
 }

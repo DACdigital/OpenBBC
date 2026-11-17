@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/eval"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/modelmeta"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
-	"github.com/DACdigital/OpenBBC/open-bbcd/internal/ui"
 )
 
 // EvalDetailStore is the narrow interface EvalHandler uses for the detail
@@ -35,7 +35,7 @@ type EvalHandler struct {
 	modalTmpl     *template.Template
 	perAVTmpl     *template.Template
 	// runtimeModel is the model this open-bbcd runs agents on
-	// (ui.RuntimeModel). "" disables the detail page's mismatch notice.
+	// (config.Config.RuntimeModel). "" disables the detail page's mismatch notice.
 	runtimeModel string
 }
 
@@ -51,7 +51,7 @@ func NewEvalHandler(
 		"add":         func(a, b int) int { return a + b },
 		"sub":         func(a, b int) int { return a - b },
 		"pct":         func(f float64) string { return formatPercent(f) },
-		"evalModels":  ui.ParseModels,
+		"evalModels":  modelmeta.ParseModels,
 		"deref": func(v any) any {
 			switch p := v.(type) {
 			case *string:
@@ -82,6 +82,7 @@ func NewEvalHandler(
 	}
 	detailTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
+		"templates/partials/model_meta.html",
 		"templates/eval/detail.html",
 	)
 	if err != nil {
@@ -107,7 +108,7 @@ func NewEvalHandler(
 }
 
 // WithRuntimeModel sets the runtime model named in the detail page's
-// scoring/runtime mismatch notice (ui.RuntimeModel(cfg) in newAPI). The
+// scoring/runtime mismatch notice (cfg.RuntimeModel() in newAPI). The
 // default "" shows no notice.
 func (h *EvalHandler) WithRuntimeModel(model string) *EvalHandler {
 	h.runtimeModel = model
@@ -414,13 +415,10 @@ func (h *EvalHandler) UIDetail(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	models := ui.ParseModels(e.AikdmMeta)
 	renderTemplate(w, h.detailTmpl, "layout", map[string]any{
 		"Active":                "evals",
 		"Eval":                  e,
-		"Models":                models,
-		"RuntimeModel":          h.runtimeModel,
-		"ModelMismatch":         ui.TargetDiffers(models.Target, h.runtimeModel),
+		"ModelMeta":             modelmeta.NewView(modelmeta.ParseModels(e.AikdmMeta), h.runtimeModel),
 		"AgentName":             agentName,
 		"AgentVersionNum":       agentVersionNum,
 		"DatasetName":           datasetName,

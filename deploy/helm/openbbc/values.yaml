@@ -137,7 +137,8 @@ aikdmRunner:
   # models and eval modes aikdm scores and trains with; unset keys keep
   # aikdm's defaults (claude-haiku-4-5, verbatim, simulated). aikdm needs a
   # provider key for all six models at startup, so when switching provider
-  # set all six to it, e.g.:
+  # set all six to it. OPENBBCD_URL is reserved (the chart sets it; use
+  # openbbcdUrlOverride) and the render fails if it is set here. E.g.:
   extraEnv: {}
   #  AIKDM_MODEL_TARGET: openai/gpt-4o
   #  AIKDM_MODEL_JUDGE: openai/gpt-4o

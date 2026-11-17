@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -284,6 +285,8 @@ func (h *AgentDetailHandler) Versions(w http.ResponseWriter, r *http.Request) {
 		}
 		if tf, err := h.trainedFrom.TrainedFromByVersionIDs(r.Context(), ids); err == nil {
 			data.TrainedFrom = tf
+		} else {
+			slog.Default().Warn("trained_from lookup failed", "agent_id", agentID, "err", err)
 		}
 	}
 	renderTemplate(w, h.tmpl, "layout", data)

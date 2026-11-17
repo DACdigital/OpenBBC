@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -639,7 +640,14 @@ func TestEvalHandler_Lists_DashWhenMetaEmpty(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("UIList = %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "<td>—</td>") {
-		t.Error("an eval without aikdm_meta must render — in the Target / judge column")
+	// The Target / judge cell sits between the dataset cell and the status
+	// badge cell; match it there rather than any "—" cell on the page.
+	cell := regexp.MustCompile(`<td>[^<]* v\d+</td>\s*<td>(.*?)</td>\s*<td><span class="badge`)
+	m := cell.FindStringSubmatch(rec.Body.String())
+	if m == nil {
+		t.Fatalf("Target / judge cell not found in list body")
+	}
+	if m[1] != "—" {
+		t.Errorf("Target / judge cell = %q, want %q for an eval without aikdm_meta", m[1], "—")
 	}
 }
