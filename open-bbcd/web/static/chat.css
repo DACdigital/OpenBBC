@@ -194,7 +194,8 @@
 }
 
 .tool-call,
-.tool-result {
+.tool-result,
+.client-context {
   margin: 0.4rem 0;
   padding: 0.25rem 0.5rem;
   background: #0d1117;
@@ -207,7 +208,8 @@
 }
 
 .tool-call > summary,
-.tool-result > summary {
+.tool-result > summary,
+.client-context > summary {
   cursor: pointer;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85rem;
@@ -220,7 +222,8 @@
 }
 
 .tool-call pre.args,
-.tool-result pre {
+.tool-result pre,
+.client-context pre {
   background: #161b22;
   padding: 0.5rem;
   border-radius: 4px;

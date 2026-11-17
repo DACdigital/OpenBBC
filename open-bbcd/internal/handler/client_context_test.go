@@ -11,6 +11,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/transport/jsonl"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
+	"github.com/google/uuid"
 )
 
 func TestClientContextBlock(t *testing.T) {
@@ -196,5 +197,72 @@ func TestTurn_ClientContextWithPendingArtifactAccepted(t *testing.T) {
 				t.Fatalf("input[0] = %#v", runner.capturedInput[0])
 			}
 		})
+	}
+}
+
+const ccUserContent = `[{"type":"client_context","canonical":"{\"a\":\"<x>\",\"b\":1}","context":{"a":"<x>","b":1}},{"type":"text","text":"hello"}]`
+
+func TestBuildMessageViews_ClientContextFirstAndPretty(t *testing.T) {
+	views := buildMessageViews([]*types.ChatMessage{
+		{ID: uuid.NewString(), Role: types.ChatRoleUser, Content: json.RawMessage(ccUserContent)},
+	}, "", nil)
+	if len(views) != 1 || len(views[0].Blocks) != 2 {
+		t.Fatalf("views = %+v", views)
+	}
+	cc, text := views[0].Blocks[0], views[0].Blocks[1]
+	if cc.Kind != "client_context" || text.Kind != "text" {
+		t.Fatalf("kinds = %q, %q", cc.Kind, text.Kind)
+	}
+	if want := "{\n  \"a\": \"<x>\",\n  \"b\": 1\n}"; cc.ClientContext != want {
+		t.Fatalf("pretty = %q, want %q", cc.ClientContext, want)
+	}
+}
+
+func TestChatView_ClientContextCollapsedAboveText(t *testing.T) {
+	body := renderChatView(t, &stubChatStore{messages: []*types.ChatMessage{
+		{ID: uuid.NewString(), Role: types.ChatRoleUser, Content: json.RawMessage(ccUserContent)},
+	}}, nil)
+	ccAt := strings.Index(body, `<details class="client-context">`)
+	textAt := strings.Index(body, `data-raw="hello"`)
+	if ccAt < 0 || textAt < 0 || ccAt > textAt {
+		t.Fatalf("client context section missing or below the text (cc %d, text %d)", ccAt, textAt)
+	}
+	if !strings.Contains(body, "▸ client context") || !strings.Contains(body, "&#34;a&#34;: &#34;&lt;x&gt;&#34;") {
+		t.Fatal("collapsed label or pretty-printed canonical missing")
+	}
+}
+
+func TestChatView_NoClientContextUnchanged(t *testing.T) {
+	body := renderChatView(t, &stubChatStore{messages: []*types.ChatMessage{
+		{ID: uuid.NewString(), Role: types.ChatRoleUser, Content: json.RawMessage(`[{"type":"text","text":"hello"}]`)},
+	}}, nil)
+	if strings.Contains(body, "client-context") || !strings.Contains(body, `data-raw="hello"`) {
+		t.Fatal("older session without the block must render as before")
+	}
+}
+
+func TestDeployedGetSession_ReturnsClientContextRaw(t *testing.T) {
+	store := newStubDeployedStore()
+	store.sessions[testSessionID] = &types.DeployedSession{ID: testSessionID, AgentID: testAgentID, UserID: "u1"}
+	store.messages[testSessionID] = []*types.DeployedMessage{
+		{ID: uuid.NewString(), SessionID: testSessionID, Role: types.ChatRoleUser, Content: json.RawMessage(ccUserContent), Seq: 1},
+	}
+	mux := newDeployedMux(&stubDeployedAgentReader{deployedID: "v1"}, store, &stubTurnRunner{}, jsonl.NewFactory())
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest("GET", "/deployed/"+testAgentID+"/sessions/"+testSessionID+"?user_id=u1", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d", rr.Code)
+	}
+	var out struct {
+		Messages []struct {
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	b := out.Messages[0].Content[0]
+	if b["type"] != "client_context" || b["canonical"] != `{"a":"<x>","b":1}` || b["context"] == nil {
+		t.Fatalf("block = %#v", b)
 	}
 }

@@ -351,13 +351,16 @@ type messageView struct {
 }
 
 type blockView struct {
-	Kind         string // "text" | "tool_call" | "tool_result" | "artifact_ref" | "subagent"
+	Kind         string // "text" | "tool_call" | "tool_result" | "artifact_ref" | "subagent" | "client_context"
 	Text         string
 	ToolName     string
 	ToolArgs     string
 	ToolResult   string
 	ToolIsError  bool
 	ToolIsMocked bool
+
+	// client_context: the stored canonical JSON, pretty-printed.
+	ClientContext string
 
 	// artifact_ref: retrieval path parts and display label.
 	ArtifactStoreID string
@@ -580,6 +583,15 @@ func decodeBlock(r json.RawMessage, artifactBase string) (blockView, bool) {
 			ToolIsError:  b.IsError,
 			ToolIsMocked: strings.Contains(string(b.Content), `"_mocked":true`),
 		}, true
+	case "client_context":
+		var b struct {
+			Canonical string `json:"canonical"`
+		}
+		_ = json.Unmarshal(r, &b)
+		if b.Canonical == "" {
+			return blockView{}, false
+		}
+		return blockView{Kind: "client_context", ClientContext: prettyJSON(json.RawMessage(b.Canonical))}, true
 	case "artifact_ref":
 		var b types.ArtifactRefContent
 		_ = json.Unmarshal(r, &b)
