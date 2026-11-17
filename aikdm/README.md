@@ -36,6 +36,53 @@ Output is YAML with `metadata`, `main_prompt`, `capabilities[]`, `skills[]`, and
 | `AIKDM_EVAL_USER_TURN_MODE` | no | `verbatim` | eval user turns: `verbatim` sends them as recorded; `paraphrase` has the simulator LLM reword them |
 | `AIKDM_EVAL_HISTORY_MODE` | no | `simulated` | eval history: `simulated` shows the target its own earlier replies; `reference` shows the recorded reference replies (requires `verbatim`) |
 
+## Eval and training modes
+
+`evaluate` and `train-agent` score agents with the same eval runner, so the two
+`AIKDM_EVAL_*` settings above apply to both. Training has no separate modes.
+
+How a session is replayed:
+- The recorded session is compiled into a fixed script. N recorded user turns always produce
+  N simulated turns.
+- Each criterion is judged only on the reply to the turn it was written for. The judge runs
+  at temperature 0.
+
+**User turns** (`AIKDM_EVAL_USER_TURN_MODE`): what the "user" sends on turn k.
+- `verbatim` (default): the recorded user message, unchanged. No simulator call, so it is the
+  cheapest and most repeatable.
+- `paraphrase`: the simulator LLM rewords the recorded message to fit the agent's last reply.
+  It changes wording only, never which turn is sent, and falls back to the recorded text if
+  it fails.
+
+**History** (`AIKDM_EVAL_HISTORY_MODE`): what the agent sees as turns 1…k-1.
+- `simulated` (default): its own earlier replies from this run. Tests multi-turn coherence.
+- `reference`: the recorded replies from the original session; only reply k is generated.
+  Each turn is tested in isolation, so an early mistake can't snowball. Least noisy, but
+  multi-turn coherence goes untested.
+
+| User turns | History | Use for |
+|---|---|---|
+| `verbatim` | `simulated` | Default. Realistic full-conversation test. |
+| `verbatim` | `reference` | Most stable score; comparing prompt versions turn by turn. |
+| `paraphrase` | `simulated` | Datasets whose user turns only make sense as answers to the agent ("yes, the second one"). |
+| `paraphrase` | `reference` | Rejected at startup (`ConfigError`). |
+
+Rules of thumb:
+- **Compare scores only within one combination.** Each result records it in
+  `aikdm_meta.user_turn_mode` / `aikdm_meta.history_mode`. Keep the same combination for a
+  whole training run and for any eval you compare against it.
+- **Set the variables where aikdm actually runs.** When evals and trainings are started from
+  the back office, open-bbcd launches aikdm and passes its own environment through. So set
+  the variables in open-bbcd's environment (e.g. `open-bbcd/.env` or the deployment's env
+  values), not in your shell.
+- **Inconclusive judgments** (`inconclusive: true`: target crash, turn not reached, judge
+  error) count as failed in the score, but the training teacher ignores them, so it doesn't
+  patch prompts to fix infrastructure errors.
+- **Expect some noise.** On a 10-session dataset with Haiku, repeated evals of the same
+  version still spread by about 6–9 points (lowest with `reference`). `train-agent` promotes
+  only on a strictly higher score, so an improvement smaller than that can go unpromoted.
+  Use `reference` when you need the most stable signal.
+
 ## Exit codes
 
 | Code | Meaning |
