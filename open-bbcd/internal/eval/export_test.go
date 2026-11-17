@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/chat"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"gopkg.in/yaml.v3"
 )
@@ -217,5 +218,32 @@ func TestExportBuild_ArtifactRefBlocksPassThrough(t *testing.T) {
 	}
 	if _, err := yaml.Marshal(got); err != nil {
 		t.Fatalf("yaml: %v", err)
+	}
+}
+
+func TestExportBuild_ClientContextGetsRendered(t *testing.T) {
+	canonical := `{"a":1e3,"h":"<x>"}`
+	quoted, _ := json.Marshal(canonical)
+	userContent := `[{"type":"client_context","canonical":` + string(quoted) + `,"context":{"a":1000,"h":"<x>"}},{"type":"text","text":"hi"}]`
+	fs := &fakeStore{
+		eval:   &types.Eval{ID: "e-1", AgentVersionID: "av-1", DatasetVersionID: "dv-1", MockMCPTools: true},
+		bundle: []byte(`{"main_prompt":"hi","tools":[]}`),
+		refs:   []*types.DatasetSessionRef{{SessionID: "s-1"}},
+		msgs: map[string][]*types.ChatMessage{"s-1": {
+			{ID: "m-1", Role: types.ChatRoleUser, Content: json.RawMessage(userContent)},
+			{ID: "m-2", Role: types.ChatRoleAssistant, Content: json.RawMessage(`[{"type":"text","text":"ok"}]`)},
+		}},
+	}
+	got, err := Build(context.Background(), fs, "e-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := got.DatasetVersion.Sessions[0].Transcript[0].Content.([]any)
+	cc := blocks[0].(map[string]any)
+	if cc["rendered"] != chat.RenderClientContext(canonical) || cc["canonical"] != canonical || cc["context"] == nil {
+		t.Fatalf("client_context block = %#v", cc)
+	}
+	if _, ok := blocks[1].(map[string]any)["rendered"]; ok {
+		t.Fatal("text block must not get rendered")
 	}
 }

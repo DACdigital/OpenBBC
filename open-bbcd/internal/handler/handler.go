@@ -130,6 +130,8 @@ func statusFor(err error) int {
 		errors.Is(err, types.ErrDatasetMissingCriteria),
 		errors.Is(err, types.ErrTrainingSessionEvalNotEligible),
 		errors.Is(err, types.ErrEmptyTurn),
+		errors.Is(err, types.ErrClientContextInvalid),
+		errors.Is(err, types.ErrClientContextTooLarge),
 		errors.Is(err, types.ErrTargetNotRunnable),
 		errors.Is(err, types.ErrTopologyCycle):
 		status = http.StatusBadRequest

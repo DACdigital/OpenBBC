@@ -1,4 +1,5 @@
 # tests/unit/test_runner.py
+import json
 from types import SimpleNamespace as NS
 
 import pytest
@@ -42,7 +43,7 @@ def _two_turn_session(criteria=None):
 def rec(monkeypatch):
     """Records target/judge/simulator calls; behaviour configurable per test."""
     state = {"target": [], "judge": [], "sim": [], "target_fail": set(), "budget": set(),
-             "judge_fail": set(), "sim_out": None, "spans": {}}
+             "judge_fail": set(), "sim_out": None, "spans": {}, "sim_calls": []}
 
     async def fake_target(*, model, system_prompt, tools_spec, history, tool_caller):
         k = len(state["target"]) + 1
@@ -68,6 +69,9 @@ def rec(monkeypatch):
                                      tokens_in=1, tokens_out=1)
 
     async def fake_sim(*, agent, reference_transcript, simulated_so_far, intent):
+        state["sim_calls"].append({"reference_transcript": reference_transcript,
+                                   "so_far": [dict(e) for e in simulated_so_far],
+                                   "intent": intent})
         state["sim"].append(intent)
         out = state["sim_out"]
         if isinstance(out, Exception):
@@ -322,3 +326,53 @@ async def test_judge_error_tokens_counted(rec, monkeypatch):
                      criteria=[InputCriterion(message_id="a1", rating="up", items=["c"])])
     out = await _run(s)
     assert out.tokens_in == 1 + 7 and out.tokens_out == 1 + 3
+
+
+CC1 = {"type": "client_context", "canonical": '{"p":1}', "context": {"p": 1},
+       "rendered": '<client_context>{"p":1}</client_context>'}
+CC3 = {"type": "client_context", "canonical": '{"p":3}', "context": {"p": 3},
+       "rendered": '<client_context>{"p":3}</client_context>'}
+
+
+def _cc_session():
+    return InputSession(session_id="s", transcript=[
+        _m("u1", "user", [CC1, {"type": "text", "text": "first?"}]),
+        _m("a1", "assistant", "ref reply 1"),
+        _m("u2", "user", [{"type": "text", "text": "second"}]),
+        _m("a2", "assistant", "ref reply 2"),
+        _m("u3", "user", [CC3, {"type": "text", "text": "third"}]),
+        _m("a3", "assistant", "ref reply 3"),
+    ], criteria=[InputCriterion(message_id="a3", rating="up", items=["uses context"])])
+
+
+async def test_verbatim_client_context_first_and_kept_in_history(rec):
+    await _run(_cc_session())
+    assert rec["target"][0][-1]["content"] == CC1["rendered"] + "\n\nfirst?"
+    assert rec["target"][1][-1]["content"] == "second"
+    assert rec["target"][2][-1]["content"] == CC3["rendered"] + "\n\nthird"
+    assert rec["target"][2][0]["content"] == CC1["rendered"] + "\n\nfirst?"
+    assert rec["judge"][0]["turn"][0]["content"] == CC3["rendered"] + "\n\nthird"
+
+
+async def test_paraphrase_never_shows_client_context_to_simulator(rec):
+    await _run(_cc_session(), user_turn_mode="paraphrase")
+    assert rec["sim"] == ["first?", "second", "third"]
+    assert "client_context" not in json.dumps(rec["sim_calls"])
+    assert rec["target"][0][-1]["content"] == CC1["rendered"] + "\n\nP:first?"
+    assert rec["target"][1][-1]["content"] == "P:second"
+    assert rec["target"][2][-1]["content"] == CC3["rendered"] + "\n\nP:third"
+    # the target's own history still carries turn 1's context
+    assert rec["target"][2][0]["content"] == CC1["rendered"] + "\n\nP:first?"
+
+
+async def test_paraphrase_fallback_keeps_client_context(rec):
+    rec["sim_out"] = RuntimeError("sim down")
+    await _run(_cc_session(), user_turn_mode="paraphrase")
+    assert rec["target"][0][-1]["content"] == CC1["rendered"] + "\n\nfirst?"
+
+
+async def test_reference_history_carries_client_context(rec):
+    await _run(_cc_session(), history_mode="reference")
+    assert [e["content"] for e in rec["target"][2]] == [
+        CC1["rendered"] + "\n\nfirst?", "ref reply 1", "second", "ref reply 2",
+        CC3["rendered"] + "\n\nthird"]

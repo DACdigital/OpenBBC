@@ -32,6 +32,7 @@ class SessionOutcome:
 class _Turn:
     """Executor state for one turn k."""
     user: dict[str, Any] | None = None           # user entry sent to the target
+    sim_user: dict[str, Any] | None = None       # user entry as the simulator sees it
     context: list[dict[str, Any]] | None = None  # history before the user entry
     span: list[dict[str, Any]] | None = None     # generated reply span (on success)
     error: str | None = None                     # target error (on failure)
@@ -69,9 +70,12 @@ async def run_session(
     system_prompt = target_mod.build_system_prompt(bundle)
     tools_spec, _ = target_mod.build_tool_specs(bundle)
     declared = {t["function"]["name"] for t in tools_spec}
-    ref_transcript = [m.model_dump() for m in session.transcript]
+    # The simulator never sees client_context blocks (spec client-context Scope 7).
+    ref_transcript = [script_mod.strip_client_context(m.model_dump())
+                      for m in session.transcript]
 
     transcript: list[dict[str, Any]] = []       # result: user k + generated span k
+    sim_transcript: list[dict[str, Any]] = []   # transcript without client_context, for <so_far>
     reference_history: list[dict[str, Any]] = []  # reference history mode only
     turns: dict[int, _Turn] = {}
     stopped: tuple[int, str] | None = None      # (turn j, cause) — simulated mode only
@@ -84,19 +88,21 @@ async def run_session(
         if isinstance(step, script_mod.UserStep):
             if stopped:
                 continue
-            verbatim = script_mod.render_user_turn(step.ref_message)
-            text = verbatim
+            said = script_mod.user_text(step.ref_message)
             if user_turn_mode == "paraphrase":
                 try:
                     t = await sim_mod.next_user_turn(
                         agent=simulator_agent, reference_transcript=ref_transcript,
-                        simulated_so_far=transcript, intent=verbatim)
+                        simulated_so_far=sim_transcript, intent=said)
                     tokens_in += t.tokens_in
                     tokens_out += t.tokens_out
-                    text = t.content.strip() or verbatim
+                    said = t.content.strip() or said
                 except Exception:  # noqa: BLE001 — simulator can never fail a session
-                    text = verbatim
+                    pass  # keep the reference text
+            # The runner, never the simulator, attaches the rendered contexts.
+            text = script_mod.compose_user_turn(step.ref_message, said)
             turn.user = {"role": "user", "content": text}
+            turn.sim_user = {"role": "user", "content": said}
 
         elif isinstance(step, script_mod.AgentStep):
             if not stopped:
@@ -111,11 +117,13 @@ async def run_session(
                     tokens_out += tt.tokens_out
                     turn.span = tt.span
                     transcript.extend([turn.user, *tt.span])
+                    sim_transcript.extend([turn.sim_user, *tt.span])
                     if tt.budget_exceeded and history_mode == "simulated":
                         stopped = (k, "exceeded tool-call budget")
                 except Exception as e:  # noqa: BLE001 — becomes an inconclusive verdict
                     turn.error = str(e)
                     transcript.append(turn.user)
+                    sim_transcript.append(turn.sim_user)
                     if history_mode == "simulated":
                         stopped = (k, f"target error: {e}")
             if history_mode == "reference":

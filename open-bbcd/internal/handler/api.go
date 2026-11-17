@@ -237,6 +237,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	if err != nil {
 		fatal("init chat handler", err)
 	}
+	chatHandler.WithClientContextMaxBytes(cfg.Chat.ClientContextMaxBytes)
 	if artifactHandler != nil {
 		chatHandler.WithPendingArtifacts(chatRepo)
 	}
@@ -256,7 +257,8 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 			WithArtifactUploader(artifactUploader{registry: artifactRegistry})
 	}
 
-	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger)
+	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger).
+		WithClientContextMaxBytes(cfg.Chat.ClientContextMaxBytes)
 	deployHandler := NewDeployHandler(agentRepo, versionRepo, agentWiringRepo)
 
 	mux := http.NewServeMux()

@@ -291,16 +291,23 @@ func (o *Orchestrator) Turn(
 
 	// 5. Persist the user message NOW (before the LLM call), claiming every
 	// pending artifact on the session in the same transaction. A failed
-	// turn still captures what the user asked. Only text comes from the
-	// caller; user-role artifact_refs come solely from the claim.
-	textInput := make([]llm.Block, 0, len(userInput))
+	// turn still captures what the user asked. From the caller come only
+	// the client_context block (always first) and text; user-role
+	// artifact_refs come solely from the claim.
+	callerInput := make([]llm.Block, 0, len(userInput))
+	// Two passes on purpose: client_context blocks go first whatever order the caller passed.
+	for _, b := range userInput {
+		if cc, ok := b.(llm.ClientContextBlock); ok {
+			callerInput = append(callerInput, cc)
+		}
+	}
 	for _, b := range userInput {
 		if tb, ok := b.(llm.TextBlock); ok {
-			textInput = append(textInput, tb)
+			callerInput = append(callerInput, tb)
 		}
 	}
 	userMsgID := uuid.NewString()
-	userContent, err := blocksToJSON(textInput)
+	userContent, err := blocksToJSON(callerInput)
 	if err != nil {
 		return "", failTurn("encode_user_msg", "serialize_user_blocks", err)
 	}
@@ -329,7 +336,7 @@ func (o *Orchestrator) Turn(
 	if err != nil {
 		return "", failTurn("persist_user_msg", "append_user_msg", err)
 	}
-	userBlocks := textInput
+	userBlocks := callerInput
 	for _, ref := range claimed {
 		userBlocks = append(userBlocks, ref)
 	}
@@ -675,6 +682,17 @@ func parseBlocks(raw []json.RawMessage) []llm.Block {
 			}
 			_ = json.Unmarshal(r, &b)
 			out = append(out, llm.TextBlock{Text: b.Text})
+		case "client_context":
+			// canonical is the only source for rendering; context is
+			// informational (JSONB-normalized) and ignored here.
+			var b struct {
+				Canonical string `json:"canonical"`
+			}
+			_ = json.Unmarshal(r, &b)
+			if b.Canonical == "" {
+				continue
+			}
+			out = append(out, llm.ClientContextBlock{Canonical: b.Canonical})
 		case "tool_use":
 			var b struct {
 				ID    string          `json:"id"`
@@ -713,6 +731,8 @@ func blocksToJSON(blocks []llm.Block) (json.RawMessage, error) {
 		switch x := b.(type) {
 		case llm.TextBlock:
 			out = append(out, map[string]any{"type": "text", "text": x.Text})
+		case llm.ClientContextBlock:
+			out = append(out, ClientContextContent(x.Canonical))
 		case llm.ToolUseBlock:
 			out = append(out, map[string]any{
 				"type":  "tool_use",

@@ -100,6 +100,13 @@ var (
 	ErrPendingArtifactCap = errors.New("session already has ARTIFACT_MAX_PENDING pending artifacts")
 	ErrArtifactConsumed   = errors.New("artifact is already part of the conversation and cannot be removed")
 
+	// client_context on turn requests (spec: docs/superpowers/specs/2026-11-17-client-context-design.md).
+	// The handlers write err.Error() verbatim as the plain-text 400 body.
+	// ErrClientContextInvalid is always wrapped: "%w: must be a JSON object"
+	// or "%w: contains \\u0000".
+	ErrClientContextInvalid  = errors.New("invalid client_context")
+	ErrClientContextTooLarge = errors.New("client_context exceeds OPENBBC_CLIENT_CONTEXT_MAX_BYTES")
+
 	// Multi-agent (spec: docs/superpowers/specs/2026-10-01-multiagent-feature-design.md).
 	ErrVersionLocked             = errors.New("version: agent-tool config can only change while the version is INITIALIZING or DRAFT")
 	ErrEvalOrTrainingActive      = errors.New("version: agent-tool config cannot change while an eval or training session is pending or in progress")

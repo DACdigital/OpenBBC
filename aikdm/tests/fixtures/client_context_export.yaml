@@ -1,0 +1,71 @@
+schema_version: eval-input-v1
+eval_id: e-golden
+mock_mcp_tools: true
+agent_version:
+  id: av-golden
+  bundle:
+    main_prompt: sys
+    tools: []
+dataset_version:
+  id: dv-golden
+  sessions:
+    - session_id: s-golden
+      title: client context golden
+      transcript:
+        - message_id: u1
+          role: user
+          content:
+            - canonical: '{"big":123456789012345678901234567890,"dup":2,"html":"<b>&</b>","ls":"a\u2028b","sur":"�","z":{"a":[1.0,1e3,-0],"b":1}}'
+              context:
+                big: 1.2345678901234568e+29
+                dup: 2
+                html: <b>&</b>
+                ls: 'a                   b'
+                sur: �
+                z:
+                  a:
+                    - 1
+                    - 1000
+                    - -0
+                  b: 1
+              rendered: <client_context>{"big":123456789012345678901234567890,"dup":2,"html":"<b>&</b>","ls":"a\u2028b","sur":"�","z":{"a":[1.0,1e3,-0],"b":1}}</client_context>
+              type: client_context
+            - text: first
+              type: text
+        - message_id: a1
+          role: assistant
+          content:
+            - text: one
+              type: text
+        - message_id: u2
+          role: user
+          content:
+            - text: second
+              type: text
+        - message_id: a2
+          role: assistant
+          content:
+            - text: two
+              type: text
+        - message_id: u3
+          role: user
+          content:
+            - canonical: "{\"bom\":\"\uFEFFhead\",\"long\":\"word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word end\",\"nel\":\"x\Ny\"}"
+              context:
+                bom: "\uFEFF\x68\x65\x61\x64"
+                long: word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word end
+                nel: "x\Ny"
+              rendered: "<client_context>{\"bom\":\"\uFEFFhead\",\"long\":\"word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word end\",\"nel\":\"x\Ny\"}</client_context>"
+              type: client_context
+            - text: third
+              type: text
+        - message_id: a3
+          role: assistant
+          content:
+            - text: three
+              type: text
+      criteria:
+        - message_id: a3
+          rating: up
+          items:
+            - uses the context

@@ -5,17 +5,57 @@ list is fixed at compile time; the executor in runner.py may only skip steps."""
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 from aikdm.eval.history import text_blocks
 from aikdm.eval.schemas import InputMessage, InputSession
 
+log = logging.getLogger(__name__)
+
+CLIENT_CONTEXT = "client_context"
+
+
+def _is_client_context(block: Any) -> bool:
+    return isinstance(block, dict) and block.get("type") == CLIENT_CONTEXT
+
+
+def client_context_texts(content: Any) -> list[str]:
+    """The `rendered` strings of a message's client_context blocks, in order.
+    `rendered` (from open-bbcd's export) is replayed verbatim; aikdm never
+    re-serializes `context`. Blocks without a string `rendered` are skipped
+    (compile_script logs one warning per session)."""
+    if not isinstance(content, list):
+        return []
+    return [b["rendered"] for b in content
+            if _is_client_context(b) and isinstance(b.get("rendered"), str)]
+
+
+def user_text(ref_message: InputMessage) -> str:
+    """What the user typed: text blocks only, no client_context."""
+    return text_blocks(ref_message.content)
+
+
+def compose_user_turn(ref_message: InputMessage, text: str) -> str:
+    """The reference turn's rendered client contexts first, then text,
+    joined by a blank line (open-bbcd sends them as separate text parts)."""
+    return "\n\n".join(p for p in [*client_context_texts(ref_message.content), text] if p)
+
 
 def render_user_turn(ref_message: InputMessage) -> str:
-    """Text the target sees for a reference user turn. String content as-is;
-    content-block arrays → text blocks joined by a blank line; other blocks
-    omitted. Single seam extended by the client-context spec."""
-    return text_blocks(ref_message.content)
+    """Text the target sees for a reference user turn: every client_context
+    `rendered` string first, verbatim, then the text blocks."""
+    return compose_user_turn(ref_message, user_text(ref_message))
+
+
+def strip_client_context(message: dict[str, Any]) -> dict[str, Any]:
+    """Copy of a dumped InputMessage without client_context blocks, for the
+    simulator, which must never see or paraphrase them."""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return message
+    return {**message, "content": [b for b in content if not _is_client_context(b)]}
 
 
 @dataclass(frozen=True)
@@ -56,6 +96,13 @@ class Script:
 
 def compile_script(session: InputSession) -> Script:
     transcript = session.transcript
+    missing = sum(
+        1 for m in transcript if m.role == "user" and isinstance(m.content, list)
+        for b in m.content if _is_client_context(b) and not isinstance(b.get("rendered"), str)
+    )
+    if missing:
+        log.warning("session %s: %d client_context block(s) without 'rendered' skipped "
+                    "(export predates client-context)", session.session_id, missing)
     user_idx = [i for i, m in enumerate(transcript) if m.role == "user"]
     position = {m.message_id: i for i, m in enumerate(transcript)}
 

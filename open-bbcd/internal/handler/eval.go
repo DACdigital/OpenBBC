@@ -12,7 +12,6 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/eval"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
-	"gopkg.in/yaml.v3"
 )
 
 // EvalDetailStore is the narrow interface EvalHandler uses for the detail
@@ -204,13 +203,9 @@ func (h *EvalHandler) Export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/yaml")
-	enc := yaml.NewEncoder(w)
-	enc.SetIndent(2)
-	if err := enc.Encode(payload); err != nil {
+	if err := eval.WriteYAML(w, payload); err != nil {
 		Error(w, err)
-		return
 	}
-	_ = enc.Close()
 }
 
 // Result handles POST /evals/{eval_id}/result — accepts eval-result.json.

@@ -84,9 +84,18 @@ func renderArtifactsForLLM(
 	cache *renderCache,
 	logger *slog.Logger,
 ) ([]llm.Message, error) {
+	// Shared copy, run for every provider before the early return below:
+	// client_context blocks become their rendered text here and only here
+	// (spec client-context Scope 4). req.Messages keeps the block form.
 	out := make([]llm.Message, len(in))
 	for i, m := range in {
-		out[i] = llm.Message{Role: m.Role, Content: append([]llm.Block(nil), m.Content...)}
+		content := append([]llm.Block(nil), m.Content...)
+		for j, b := range content {
+			if cc, ok := b.(llm.ClientContextBlock); ok {
+				content[j] = llm.TextBlock{Text: RenderClientContext(cc.Canonical)}
+			}
+		}
+		out[i] = llm.Message{Role: m.Role, Content: content}
 	}
 
 	renderer, providerSupports := provider.(llm.MultimodalRenderer)

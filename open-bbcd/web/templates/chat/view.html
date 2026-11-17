@@ -92,10 +92,36 @@
 </div>
 {{end}}
 
+{{if and .HasBundle (not .Locked)}}
+<div id="chat-context-pending" class="chat-context-pending" hidden>
+  <span class="artifact-chip chat-context-chip">
+    <button type="button" id="chat-context-chip-open" class="chat-context-chip-label" title="Edit client context">client context attached</button>
+    <button type="button" id="chat-context-chip-remove" class="artifact-chip-remove" aria-label="Remove client context">×</button>
+  </span>
+</div>
+
+<div class="modal" id="chat-context-modal" hidden>
+  <div class="modal-content" style="max-width:640px">
+    <h2>Client context for the next message</h2>
+    <p>A JSON object sent with your next message only. The agent sees it as context for that turn.</p>
+    <textarea id="chat-context-input" class="chat-context-input" rows="12" spellcheck="false" placeholder='{"page": "checkout", "cart_items": 3}'></textarea>
+    <div id="chat-context-error" class="chat-context-error" role="alert" hidden></div>
+    <div class="modal-actions">
+      <button type="button" id="chat-context-attach-btn" class="btn-primary">Attach to next message</button>
+      <button type="button" id="chat-context-remove-btn" class="btn-danger" hidden>Remove</button>
+      <button type="button" id="chat-context-cancel-btn" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+{{end}}
+
 <form id="chat-form" class="chat-input" onsubmit="return false;">
   {{if and .ArtifactsEnabled .HasBundle (not .Locked)}}
   <input type="file" id="chat-attach-input" multiple hidden>
   <button type="button" id="chat-attach" class="btn-secondary chat-attach" title="Attach files to your next message" aria-label="Attach files">📎</button>
+  {{end}}
+  {{if and .HasBundle (not .Locked)}}
+  <button type="button" id="chat-context-btn" class="btn-secondary chat-attach" title="Attach a JSON client context to your next message" aria-label="Client context">{ } Context</button>
   {{end}}
   <textarea id="chat-input" rows="2"{{if or (not .HasBundle) .Locked}} disabled{{end}} placeholder="{{if .Locked}}Session is locked (part of a closed dataset version).{{else}}Type a message…  (Enter to send, Shift+Enter for newline){{end}}"></textarea>
   <button type="submit" id="chat-send" class="btn-primary"{{if or (not .HasBundle) .Locked}} disabled{{if .Locked}} title="Session is locked"{{else}} title="Agent has no bundle"{{end}}{{end}}>Send</button>

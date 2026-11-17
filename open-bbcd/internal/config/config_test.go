@@ -125,3 +125,43 @@ func TestLoad_AgentToolLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_ClientContextMaxBytes(t *testing.T) {
+	const name = "OPENBBC_CLIENT_CONTEXT_MAX_BYTES"
+	t.Run("default", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("DATABASE_URL", "postgres://localhost/test")
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Chat.ClientContextMaxBytes != 65536 {
+			t.Fatalf("default = %d, want 65536", cfg.Chat.ClientContextMaxBytes)
+		}
+	})
+	for _, bad := range []string{"0", "-1", "abc", "1.5"} {
+		t.Run(name+"="+bad, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			t.Setenv("DATABASE_URL", "postgres://localhost/test")
+			t.Setenv(name, bad)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("Load err = %v, want error mentioning %s", err, name)
+			}
+		})
+	}
+	t.Run(name+"=1024", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("DATABASE_URL", "postgres://localhost/test")
+		t.Setenv(name, "1024")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Chat.ClientContextMaxBytes != 1024 {
+			t.Fatalf("got %d, want 1024", cfg.Chat.ClientContextMaxBytes)
+		}
+	})
+}

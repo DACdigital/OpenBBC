@@ -1246,3 +1246,39 @@ func TestMultiAgent_TruncatedToolUseDropped(t *testing.T) {
 		})
 	}
 }
+
+// Spec client-context Scope 8: a child's first user message comes only from
+// the agent call's prompt, never from the parent's client_context.
+func TestMultiAgent_ChildNeverGetsClientContext(t *testing.T) {
+	e := newMAEnv(t)
+	e.standardRoot()
+	e.llm.Route(sysRoot, callsStep("", agentCall("researcher", "look up", "P")), textStep("root done"))
+	e.llm.Route(sysW, textStep("W says hi"))
+
+	cc := llm.ClientContextBlock{Canonical: `{"project":"x"}`}
+	if _, err := e.o.Turn(context.Background(), "vR", "R", []llm.Block{cc, llm.TextBlock{Text: "go"}}, &syncRecordingSink{}, TurnOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	rootFirst := e.llm.Requests(sysRoot)[0].Messages[0].Content[0]
+	if tb, ok := rootFirst.(llm.TextBlock); !ok || tb.Text != RenderClientContext(cc.Canonical) {
+		t.Fatalf("root first part = %#v", rootFirst)
+	}
+	calls := e.childCalls()
+	if len(calls) != 1 {
+		t.Fatalf("child calls = %d", len(calls))
+	}
+	for _, m := range e.msgs(calls[0].ChildID) {
+		if strings.Contains(string(m.Content), "client_context") {
+			t.Fatalf("child message carries the block: %s", m.Content)
+		}
+	}
+	for _, req := range e.llm.Requests(sysW) {
+		for _, m := range req.Messages {
+			for _, b := range m.Content {
+				if tb, ok := b.(llm.TextBlock); ok && strings.Contains(tb.Text, "<client_context>") {
+					t.Fatalf("worker saw the parent's context: %q", tb.Text)
+				}
+			}
+		}
+	}
+}

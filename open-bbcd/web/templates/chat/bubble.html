@@ -13,6 +13,11 @@
     {{range $m.Blocks}}
       {{if eq .Kind "text"}}
         <div class="md" data-raw="{{.Text}}">{{.Text}}</div>
+      {{else if eq .Kind "client_context"}}
+        <details class="client-context" data-client-context="{{.ClientContext}}">
+          <summary>▸ client context</summary>
+          <pre>{{.ClientContext}}</pre>
+        </details>
       {{else if eq .Kind "tool_call"}}
         <details class="tool-call">
           <summary>▸ {{.ToolName}}(…)</summary>

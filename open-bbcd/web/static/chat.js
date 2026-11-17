@@ -78,6 +78,13 @@
   function updateSendEnabled() {
     sendBtn.disabled = uploadsInFlight > 0 || deletesInFlight > 0 || turnActive;
     if (attachBtn) attachBtn.disabled = pendingLocked || uploadsInFlight > 0;
+    // The pending context is frozen while a turn is in flight.
+    const ctxBtnEl = document.getElementById('chat-context-btn');
+    if (ctxBtnEl) ctxBtnEl.disabled = turnActive;
+    const ctxRm = document.getElementById('chat-context-chip-remove');
+    if (ctxRm) ctxRm.disabled = turnActive;
+    const ctxOpen = document.getElementById('chat-context-chip-open');
+    if (ctxOpen) ctxOpen.disabled = turnActive;
   }
 
   function setPendingLocked(on) {
@@ -215,6 +222,12 @@
       if (content) content.appendChild(wrap);
     }
     pendingAttachments = [];
+    // The turn (and its client context) is committed: clear the pending
+    // context and remember it as the modal's prefill.
+    if (inFlightContext) {
+      lastSentContext = inFlightContext.text;
+      if (pendingContext === inFlightContext) setPendingContext(null);
+    }
     runStarted = true;
     syncSeq++; // an older in-flight sync must not resurrect claimed chips
     if (pendingBox) pendingBox.replaceChildren();
@@ -296,6 +309,96 @@
     }
   }
 
+  // ---- Client context: modal, pending chip -------------------------------
+  // A JSON object attached to the NEXT turn only (sent only when changed).
+  // Controls are rendered only for unlocked sessions with a bundle.
+  const ctxBtn = document.getElementById('chat-context-btn');
+  const ctxModal = document.getElementById('chat-context-modal');
+  const ctxInput = document.getElementById('chat-context-input');
+  const ctxError = document.getElementById('chat-context-error');
+  const ctxAttachBtn = document.getElementById('chat-context-attach-btn');
+  const ctxRemoveBtn = document.getElementById('chat-context-remove-btn');
+  const ctxCancelBtn = document.getElementById('chat-context-cancel-btn');
+  const ctxPendingBox = document.getElementById('chat-context-pending');
+  const ctxChipOpen = document.getElementById('chat-context-chip-open');
+  const ctxChipRemove = document.getElementById('chat-context-chip-remove');
+  // { obj, text } while attached; null otherwise.
+  let pendingContext = null;
+  // The context the current turn was sent with (cleared on commit).
+  let inFlightContext = null;
+  // Prefill: the most recently sent context in this session.
+  let lastSentContext = (() => {
+    const all = log.querySelectorAll('.chat-bubble.user details.client-context[data-client-context]');
+    return all.length ? all[all.length - 1].dataset.clientContext : '';
+  })();
+
+  function setPendingContext(ctx) {
+    pendingContext = ctx;
+    if (ctxPendingBox) ctxPendingBox.hidden = !ctx;
+  }
+
+  function openContextModal() {
+    if (!ctxModal || turnActive) return;
+    ctxInput.value = pendingContext ? pendingContext.text : lastSentContext;
+    ctxError.hidden = true;
+    ctxError.textContent = '';
+    ctxRemoveBtn.hidden = !pendingContext;
+    ctxModal.hidden = false;
+    ctxInput.focus();
+  }
+
+  function closeContextModal() {
+    if (ctxModal) ctxModal.hidden = true;
+  }
+
+  function attachContext() {
+    const text = ctxInput.value.trim();
+    let obj;
+    try {
+      obj = JSON.parse(text);
+    } catch (err) {
+      ctxError.textContent = `Invalid JSON: ${err.message || err}`;
+      ctxError.hidden = false;
+      return;
+    }
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+      ctxError.textContent = 'Client context must be a JSON object ({…}), not an array, null or a primitive.';
+      ctxError.hidden = false;
+      return;
+    }
+    setPendingContext({ obj, text: JSON.stringify(obj, null, 2) });
+    closeContextModal();
+    input.focus();
+  }
+
+  if (ctxModal) {
+    ctxBtn.addEventListener('click', openContextModal);
+    ctxChipOpen.addEventListener('click', openContextModal);
+    ctxChipRemove.addEventListener('click', () => setPendingContext(null));
+    ctxAttachBtn.addEventListener('click', attachContext);
+    ctxCancelBtn.addEventListener('click', closeContextModal);
+    ctxRemoveBtn.addEventListener('click', () => {
+      setPendingContext(null);
+      closeContextModal();
+    });
+    ctxModal.addEventListener('click', (e) => { if (e.target === ctxModal) closeContextModal(); });
+    ctxModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeContextModal(); });
+  }
+
+  // Mirrors bubble.html's client_context block (collapsed <details>).
+  function buildClientContextSection(text) {
+    const d = document.createElement('details');
+    d.className = 'client-context';
+    d.dataset.clientContext = text;
+    const s = document.createElement('summary');
+    s.textContent = '▸ client context';
+    const pre = document.createElement('pre');
+    pre.textContent = text;
+    d.appendChild(s);
+    d.appendChild(pre);
+    return d;
+  }
+
   sendBtn.addEventListener('click', send);
   // Enter sends; Shift+Enter inserts a newline (standard chat textarea behavior).
   input.addEventListener('keydown', (e) => {
@@ -327,15 +430,21 @@
     input.disabled = true;
 
     try {
-      currentUserBubble = appendUserBubble(text);
+      // Sent with this turn only; cleared once the turn commits (RUN_STARTED).
+      inFlightContext = pendingContext;
+      currentUserBubble = appendUserBubble(text, inFlightContext && inFlightContext.text);
       pendingAttachments = attached;
       startAssistantBubble();
+      const payload = { input: text ? [{ type: 'text', text }] : [] };
+      if (inFlightContext) payload.client_context = inFlightContext.obj;
       const resp = await fetch(`/agent_versions/${versionID}/chat/${sessionID}/turn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: text ? [{ type: 'text', text }] : [] }),
+        body: JSON.stringify(payload),
       });
       if (!resp.ok) {
+        // The pending context stays attached so a 400 (invalid / too large
+        // client_context) can be fixed and resent.
         const body = await resp.text().catch(() => '');
         showError(`HTTP ${resp.status}${body ? ': ' + body.trim() : ''}`);
         return;
@@ -370,6 +479,13 @@
       // than letting them grow for the page lifetime.
       subagentCards.clear();
       toolCallElements.clear();
+      // Turn never committed: its client context was not stored, so drop
+      // the optimistic section (the context stays pending).
+      if (!runStarted && currentUserBubble) {
+        const cc = currentUserBubble.querySelector('.client-context');
+        if (cc) cc.remove();
+      }
+      inFlightContext = null;
       // Artifact-only send that never started: drop the empty user bubble.
       if (!runStarted && currentUserBubble && !currentUserBubble.querySelector('.md')) {
         currentUserBubble.remove();
@@ -515,12 +631,13 @@
     }
   }
 
-  function appendUserBubble(text) {
+  function appendUserBubble(text, contextText) {
     const b = document.createElement('div');
     b.className = 'chat-bubble user';
     b.appendChild(buildHeader('user'));
     const content = document.createElement('div');
     content.className = 'content';
+    if (contextText) content.appendChild(buildClientContextSection(contextText));
     if (text) {
       const md = document.createElement('div');
       md.className = 'md';
