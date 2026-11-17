@@ -10,8 +10,12 @@ async def test_paraphrase_returns_content_and_sends_intent(monkeypatch):
         return '{"content": "could you list the products?"}', 5, 6
 
     monkeypatch.setattr(sim_mod, "_adk_run_once", fake_run)
-    t = await sim_mod.next_user_turn(agent=object(), reference_transcript=[{"role": "user"}],
-                                     simulated_so_far=[], intent="list prodycts")
+    t = await sim_mod.next_user_turn(
+        agent=object(),
+        reference_transcript=[{"role": "user"}],
+        simulated_so_far=[],
+        intent="list prodycts",
+    )
     assert t.content == "could you list the products?"
     assert (t.tokens_in, t.tokens_out) == (5, 6)
     assert "<intent>\nlist prodycts\n</intent>" in seen["xml"]

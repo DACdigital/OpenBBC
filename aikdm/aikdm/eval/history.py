@@ -35,17 +35,21 @@ def to_target_messages(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
             cid = f"call_{turn}_{n}"
             n += 1
             ids.append(cid)
-            tool_calls.append({
-                "id": cid, "type": "function",
-                "function": {"name": c["name"], "arguments": json.dumps(c.get("args") or {})},
-            })
+            tool_calls.append(
+                {
+                    "id": cid,
+                    "type": "function",
+                    "function": {"name": c["name"], "arguments": json.dumps(c.get("args") or {})},
+                }
+            )
         msg: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
         if e.get("content"):
             msg["content"] = e["content"]
         out.append(msg)
         for cid, c in zip(ids, calls, strict=True):
-            out.append({"role": "tool", "tool_call_id": cid,
-                        "content": json.dumps(c.get("result"))})
+            out.append(
+                {"role": "tool", "tool_call_id": cid, "content": json.dumps(c.get("result"))}
+            )
     return out
 
 
@@ -55,14 +59,17 @@ def text_blocks(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        texts = [b.get("text", "") for b in content
-                 if isinstance(b, dict) and b.get("type") == "text"]
+        texts = [
+            b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+        ]
         return "\n\n".join(t for t in texts if t)
     return ""
 
 
 def reference_entries(
-    span: list[InputMessage], *, declared_tools: set[str],
+    span: list[InputMessage],
+    *,
+    declared_tools: set[str],
 ) -> list[dict[str, Any]]:
     """Reference assistant messages → aikdm entries. role:tool messages are
     skipped (their results arrive via tool_calls[].result). Calls to tools the
@@ -78,8 +85,9 @@ def reference_entries(
             if c.name in declared_tools:
                 structured.append({"name": c.name, "args": c.args, "result": c.result})
             else:
-                as_text.append(f"[called tool {c.name} with {json.dumps(c.args)} → "
-                               f"{json.dumps(c.result)}]")
+                as_text.append(
+                    f"[called tool {c.name} with {json.dumps(c.args)} → {json.dumps(c.result)}]"
+                )
         content = "\n\n".join(p for p in [text, *as_text] if p)
         entry: dict[str, Any] = {"role": "assistant", "content": content}
         if structured:

@@ -60,8 +60,7 @@ def compile_script(session: InputSession) -> Script:
     position = {m.message_id: i for i, m in enumerate(transcript)}
 
     if not user_idx:
-        unrouted = [CriterionItem(c.message_id, item)
-                    for c in session.criteria for item in c.items]
+        unrouted = [CriterionItem(c.message_id, item) for c in session.criteria for item in c.items]
         return Script(steps=[], turn_count=0, unrouted=unrouted)
 
     # turn of every assistant message (1-based); pre-first-user → turn 1
@@ -69,11 +68,11 @@ def compile_script(session: InputSession) -> Script:
     spans: dict[int, list[InputMessage]] = {}
     for k, start in enumerate(user_idx, start=1):
         end = user_idx[k] if k < len(user_idx) else len(transcript)
-        spans[k] = transcript[start + 1:end]
+        spans[k] = transcript[start + 1 : end]
         for m in spans[k]:
             if m.role == "assistant":
                 turn_of[m.message_id] = k
-    for m in transcript[:user_idx[0]]:
+    for m in transcript[: user_idx[0]]:
         if m.role == "assistant":
             turn_of[m.message_id] = 1
 
@@ -84,11 +83,18 @@ def compile_script(session: InputSession) -> Script:
         k = turn_of.get(c.message_id)
         for n, item in enumerate(c.items):
             if k is None:
-                unmapped.append((position.get(c.message_id, float("inf")), c.message_id, n,
-                                 CriterionItem(c.message_id, item, unmapped=True)))
+                unmapped.append(
+                    (
+                        position.get(c.message_id, float("inf")),
+                        c.message_id,
+                        n,
+                        CriterionItem(c.message_id, item, unmapped=True),
+                    )
+                )
             else:
                 mapped.setdefault(k, []).append(
-                    (position[c.message_id], n, CriterionItem(c.message_id, item)))
+                    (position[c.message_id], n, CriterionItem(c.message_id, item))
+                )
 
     per_turn: dict[int, list[CriterionItem]] = {
         k: [ci for _, _, ci in sorted(items, key=lambda t: (t[0], t[1]))]
@@ -101,8 +107,7 @@ def compile_script(session: InputSession) -> Script:
     steps: list[Step] = []
     for k, start in enumerate(user_idx, start=1):
         steps.append(UserStep(turn=k, ref_message=transcript[start]))
-        steps.append(AgentStep(turn=k, ref_user=transcript[start],
-                               ref_span=list(spans[k])))
+        steps.append(AgentStep(turn=k, ref_user=transcript[start], ref_span=list(spans[k])))
         if per_turn.get(k):
             steps.append(JudgeStep(turn=k, criteria=per_turn[k]))
     return Script(steps=steps, turn_count=last)

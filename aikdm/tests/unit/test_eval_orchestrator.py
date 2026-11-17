@@ -8,16 +8,29 @@ from aikdm.eval.schemas import EvalInput
 
 
 def _input():
-    return EvalInput.model_validate({
-        "schema_version": "eval-input-v1", "eval_id": "e",
-        "agent_version": {"id": "av", "bundle": {"main_prompt": "p", "tools": [], "skills": []}},
-        "dataset_version": {"id": "dv", "sessions": [{
-            "session_id": "s1",
-            "transcript": [{"message_id": "u", "role": "user", "content": "hi"},
-                           {"message_id": "a", "role": "assistant", "content": "yo"}],
-            "criteria": [{"message_id": "a", "rating": "up", "items": ["c1", "c2"]}],
-        }]},
-    })
+    return EvalInput.model_validate(
+        {
+            "schema_version": "eval-input-v1",
+            "eval_id": "e",
+            "agent_version": {
+                "id": "av",
+                "bundle": {"main_prompt": "p", "tools": [], "skills": []},
+            },
+            "dataset_version": {
+                "id": "dv",
+                "sessions": [
+                    {
+                        "session_id": "s1",
+                        "transcript": [
+                            {"message_id": "u", "role": "user", "content": "hi"},
+                            {"message_id": "a", "role": "assistant", "content": "yo"},
+                        ],
+                        "criteria": [{"message_id": "a", "rating": "up", "items": ["c1", "c2"]}],
+                    }
+                ],
+            },
+        }
+    )
 
 
 def _stub(monkeypatch):
@@ -53,5 +66,6 @@ async def test_session_error_emits_inconclusive_per_criterion(monkeypatch):
     sess = res.sessions[0]
     assert sess.total_criteria == 2 and sess.passed_criteria == 0
     assert [j.criterion for j in sess.judgments] == ["c1", "c2"]
-    assert all(j.inconclusive and j.reason == "session error: compile blew up"
-               for j in sess.judgments)
+    assert all(
+        j.inconclusive and j.reason == "session error: compile blew up" for j in sess.judgments
+    )

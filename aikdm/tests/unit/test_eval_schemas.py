@@ -20,7 +20,8 @@ def test_inconclusive_failed_ok():
 
 
 def test_meta_modes_default():
-    m = AikdmMeta(user_simulator_model="a", judge_model="b", target_agent_model="c",
-                  duration_seconds=1.0)
+    m = AikdmMeta(
+        user_simulator_model="a", judge_model="b", target_agent_model="c", duration_seconds=1.0
+    )
     assert m.user_turn_mode == "verbatim"
     assert m.history_mode == "simulated"

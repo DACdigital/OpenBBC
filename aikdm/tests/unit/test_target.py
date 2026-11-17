@@ -30,13 +30,23 @@ async def test_returns_span_without_mutating_history(monkeypatch):
     monkeypatch.setattr(target_mod.litellm, "acompletion", fake)
     history = [{"role": "user", "content": "hi"}]
     snapshot = json.loads(json.dumps(history))
-    t = await target_mod.target_turn(model="m", system_prompt="sys", tools_spec=[],
-                                     history=history, tool_caller=_Caller())
+    t = await target_mod.target_turn(
+        model="m", system_prompt="sys", tools_spec=[], history=history, tool_caller=_Caller()
+    )
     assert history == snapshot
     assert t.span == [
-        {"role": "assistant", "content": "",
-         "tool_calls": [{"name": "lookup", "args": {"id": 1},
-                         "result": {"name": "lookup"}, "source": "mocked"}]},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "name": "lookup",
+                    "args": {"id": 1},
+                    "result": {"name": "lookup"},
+                    "source": "mocked",
+                }
+            ],
+        },
         {"role": "assistant", "content": "final"},
     ]
     assert t.budget_exceeded is False
@@ -44,8 +54,11 @@ async def test_returns_span_without_mutating_history(monkeypatch):
     # second completion saw the provider ids paired correctly
     second = calls[1]
     assert second[-2]["tool_calls"][0]["id"] == "p1"
-    assert second[-1] == {"role": "tool", "tool_call_id": "p1",
-                          "content": json.dumps({"name": "lookup"})}
+    assert second[-1] == {
+        "role": "tool",
+        "tool_call_id": "p1",
+        "content": json.dumps({"name": "lookup"}),
+    }
 
 
 async def test_history_with_tool_round_is_rendered_well_formed(monkeypatch):
@@ -58,13 +71,17 @@ async def test_history_with_tool_round_is_rendered_well_formed(monkeypatch):
     monkeypatch.setattr(target_mod.litellm, "acompletion", fake)
     history = [
         {"role": "user", "content": "q1"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"name": "lookup", "args": {}, "result": 1, "source": "mocked"}]},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"name": "lookup", "args": {}, "result": 1, "source": "mocked"}],
+        },
         {"role": "assistant", "content": "a1"},
         {"role": "user", "content": "q2"},
     ]
-    await target_mod.target_turn(model="m", system_prompt="sys", tools_spec=[],
-                                 history=history, tool_caller=_Caller())
+    await target_mod.target_turn(
+        model="m", system_prompt="sys", tools_spec=[], history=history, tool_caller=_Caller()
+    )
     msgs = seen["messages"]
     assert msgs[0] == {"role": "system", "content": "sys"}
     assert msgs[2]["tool_calls"][0]["function"]["name"] == "lookup"
@@ -77,9 +94,13 @@ async def test_budget_exceeded_flag(monkeypatch):
         return _resp(tool_calls=[_tc("p", "loop", {})])
 
     monkeypatch.setattr(target_mod.litellm, "acompletion", fake)
-    t = await target_mod.target_turn(model="m", system_prompt="s", tools_spec=[],
-                                     history=[{"role": "user", "content": "x"}],
-                                     tool_caller=_Caller())
+    t = await target_mod.target_turn(
+        model="m",
+        system_prompt="s",
+        tools_spec=[],
+        history=[{"role": "user", "content": "x"}],
+        tool_caller=_Caller(),
+    )
     assert t.budget_exceeded is True
     assert t.span[-1] == {"role": "assistant", "content": target_mod.BUDGET_SENTINEL}
     assert len(t.span) == 9  # 8 tool rounds + sentinel
@@ -99,9 +120,13 @@ async def test_invalid_tool_args_become_tool_error(monkeypatch):
             raise AssertionError("tool_caller must not be called on invalid JSON")
 
     monkeypatch.setattr(target_mod.litellm, "acompletion", fake)
-    t = await target_mod.target_turn(model="m", system_prompt="s", tools_spec=[],
-                                     history=[{"role": "user", "content": "x"}],
-                                     tool_caller=_NeverCalled())
+    t = await target_mod.target_turn(
+        model="m",
+        system_prompt="s",
+        tools_spec=[],
+        history=[{"role": "user", "content": "x"}],
+        tool_caller=_NeverCalled(),
+    )
     call = t.span[0]["tool_calls"][0]
     assert call["name"] == "lookup"
     assert call["args"] == {"_raw": "{not json"}
