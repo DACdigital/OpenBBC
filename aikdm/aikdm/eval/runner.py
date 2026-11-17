@@ -88,21 +88,19 @@ async def run_session(
         if isinstance(step, script_mod.UserStep):
             if stopped:
                 continue
-            text = script_mod.render_user_turn(step.ref_message)
             said = script_mod.user_text(step.ref_message)
             if user_turn_mode == "paraphrase":
-                intent = said
                 try:
                     t = await sim_mod.next_user_turn(
                         agent=simulator_agent, reference_transcript=ref_transcript,
-                        simulated_so_far=sim_transcript, intent=intent)
+                        simulated_so_far=sim_transcript, intent=said)
                     tokens_in += t.tokens_in
                     tokens_out += t.tokens_out
-                    said = t.content.strip() or intent
+                    said = t.content.strip() or said
                 except Exception:  # noqa: BLE001 — simulator can never fail a session
-                    said = intent
-                # The runner, never the simulator, attaches the rendered contexts.
-                text = script_mod.compose_user_turn(step.ref_message, said)
+                    pass  # keep the reference text
+            # The runner, never the simulator, attaches the rendered contexts.
+            text = script_mod.compose_user_turn(step.ref_message, said)
             turn.user = {"role": "user", "content": text}
             turn.sim_user = {"role": "user", "content": said}
 
