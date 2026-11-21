@@ -1,0 +1,100 @@
+# Full-stack e2e topology. Always run as project `openbbc-e2e`.
+name: openbbc-e2e
+
+x-pyhealth: &pyhealth
+  interval: 2s
+  timeout: 3s
+  retries: 30
+  start_period: 2s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: e2e
+      POSTGRES_PASSWORD: e2e
+      POSTGRES_DB: e2e
+    ports:
+      - "${E2E_PG_PORT:-18432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U e2e -d e2e"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  open-bbcd:
+    build:
+      context: ../open-bbcd
+    environment:
+      DATABASE_URL: postgres://e2e:e2e@postgres:5432/e2e?sslmode=disable
+      OPENBBC_LLM_ADAPTER: bifrost
+      OPENBBC_DEFAULT_MODEL: openai/fake-agent
+      # No /v1: Bifrost appends it. Must be loopback (config/llm.go validateBaseURL),
+      # which is why fake-llm shares this container's network namespace.
+      OPENAI_BASE_URL: http://127.0.0.1:8001
+      OPENAI_API_KEY: e2e
+    ports:
+      - "${E2E_OPENBBCD_PORT:-18080}:8080"
+      # fake-llm joins this netns, so its host port is published here.
+      - "${E2E_LLM_PORT:-18001}:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/open-bbcd", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+
+  fake-mcp:
+    build:
+      context: ./fakes
+    environment:
+      FAKE_APP: mcp_app
+      PORT: "8000"
+    ports:
+      - "${E2E_MCP_PORT:-18002}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/_calls', timeout=2)"]
+      <<: *pyhealth
+
+  fake-llm:
+    build:
+      context: ./fakes
+    network_mode: "service:open-bbcd"
+    environment:
+      FAKE_APP: llm_app
+      PORT: "8001"
+    depends_on:
+      open-bbcd:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8001/_requests', timeout=2)"]
+      <<: *pyhealth
+
+  runner:
+    profiles: [jobs]
+    build:
+      context: ..
+      dockerfile: Dockerfile.aikdm-runner
+    environment:
+      OPENBBCD_URL: http://open-bbcd:8080
+      OPENAI_BASE_URL: http://open-bbcd:8001/v1
+      OPENAI_API_KEY: e2e
+      AIKDM_EVAL_USER_TURN_MODE: verbatim
+      AIKDM_MODEL_TARGET: openai/fake-target
+      AIKDM_MODEL_JUDGE: openai/fake-judge
+      AIKDM_MODEL_USER_SIMULATOR: openai/fake-sim
+      AIKDM_MODEL_TEACHER: openai/fake-teacher
+      # Not exercised by eval/training, but load_settings() validates every
+      # role's provider key, so keep them off the anthropic default.
+      AIKDM_MODEL_GENERATOR: openai/fake-generator
+      AIKDM_MODEL_CRITIC: openai/fake-critic
+    depends_on:
+      open-bbcd:
+        condition: service_healthy
+      fake-llm:
+        condition: service_healthy
+      fake-mcp:
+        condition: service_healthy
