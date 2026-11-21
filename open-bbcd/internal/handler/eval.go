@@ -657,10 +657,22 @@ func (h *EvalHandler) UINewModal(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	attached, err := h.repo.ListAttachedBackends(r.Context(), versionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	var mcpBackends []string
+	for _, b := range attached {
+		if b.Kind == "mcp_client" {
+			mcpBackends = append(mcpBackends, b.Name)
+		}
+	}
 	renderTemplate(w, h.modalTmpl, "eval_new_modal", map[string]any{
-		"VersionID": versionID,
-		"Rows":      rows,
-		"Inflight":  inflight,
+		"VersionID":   versionID,
+		"Rows":        rows,
+		"Inflight":    inflight,
+		"MCPBackends": mcpBackends,
 	})
 }
 

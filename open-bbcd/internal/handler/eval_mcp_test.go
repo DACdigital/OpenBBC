@@ -292,3 +292,64 @@ func TestEval_Export_NoMCPClientBackend_NoKey(t *testing.T) {
 		t.Fatalf("status = %d body:\n%s", we.Code, we.Body.String())
 	}
 }
+
+func renderEvalModal(t *testing.T, h *EvalHandler, versionID string) string {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/evals/new", nil)
+	r.SetPathValue("version_id", versionID)
+	w := httptest.NewRecorder()
+	h.UINewModal(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UINewModal = %d", w.Code)
+	}
+	return w.Body.String()
+}
+
+func TestEvalHandler_UINewModal_MCPHeaderEditorPerBackend(t *testing.T) {
+	h, versionID, _ := setupEvalAPI(t)
+	db := getEvalTestDB(t, h)
+	attachBackend(t, db, versionID, "kb", "mcp_client", `{"url":"http://x/mcp"}`)
+	attachBackend(t, db, versionID, "crm", "mcp_client", `{"url":"http://y/mcp"}`)
+	attachBackend(t, db, versionID, "http", "http_endpoint", `{"base_url":"http://z"}`)
+
+	body := renderEvalModal(t, h, versionID)
+	for _, want := range []string{`name="mcp_header_overrides_json"`, `data-mcp-backend="kb"`, `data-mcp-backend="crm"`, "dedicated"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("modal missing %q", want)
+		}
+	}
+	if strings.Contains(body, `data-mcp-backend="http"`) {
+		t.Error("modal offers MCP headers for an http_endpoint backend")
+	}
+	// Shown in both modes: the MCP editor is not inside the hidden real-mode block.
+	i := strings.Index(body, `id="eval-mcp-headers"`)
+	if i < 0 || strings.Contains(body[strings.LastIndex(body[:i], "<"):i+40], "hidden") {
+		t.Errorf("MCP header editor missing or hidden by default")
+	}
+}
+
+func TestEvalHandler_UINewModal_NoMCPBackends_NoEditor(t *testing.T) {
+	h, versionID, _ := setupEvalAPI(t)
+	if body := renderEvalModal(t, h, versionID); strings.Contains(body, "data-mcp-backend") {
+		t.Error("editor rendered without attached MCP backends")
+	}
+}
+
+func TestEvalHandler_UIDetail_MCPHeaderNamesOnly(t *testing.T) {
+	h, versionID, dvID := setupEvalAPI(t)
+	db := getEvalTestDB(t, h)
+	attachBackend(t, db, versionID, "kb", "mcp_client", `{"url":"http://x/mcp"}`)
+	w := createEvalJSON(t, h, versionID, map[string]any{
+		"dataset_version_id":   dvID,
+		"mcp_header_overrides": map[string]any{"kb": map[string]any{"X-Identity": "s3cret-value"}},
+	})
+	var e types.Eval
+	_ = json.Unmarshal(w.Body.Bytes(), &e)
+	body := renderEvalDetail(t, h, e.ID)
+	if !strings.Contains(body, "kb") || !strings.Contains(body, "X-Identity") {
+		t.Errorf("detail missing backend/header name")
+	}
+	if strings.Contains(body, "s3cret-value") {
+		t.Error("detail page leaks an MCP header value")
+	}
+}
