@@ -118,3 +118,16 @@ def test_down_mode_503(base_url):
         headers={**BEARER, "Accept": "application/json, text/event-stream"},
     )
     assert resp.status_code != 503
+
+
+def test_accepts_compose_network_host_header(base_url):
+    # open-bbcd and the runner reach the fake as http://fake-mcp:8000/mcp, so the
+    # SDK's localhost-only DNS-rebinding guard (421 Misdirected Request) must be off.
+    r = httpx.post(
+        f"{base_url}/mcp",
+        headers={**BEARER, "Host": "fake-mcp:8000", "Accept": "application/json, text/event-stream"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                         "clientInfo": {"name": "t", "version": "0"}}},
+    )
+    assert r.status_code == 200, r.text

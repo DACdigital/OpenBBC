@@ -9,6 +9,7 @@ import json
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -122,7 +123,10 @@ async def _mode(request: Request) -> Response:
     return Response(status_code=204)
 
 
-app = mcp.streamable_http_app()
+# Reached by service name on the compose network (Host: fake-mcp:8000), so the
+# SDK's localhost-only DNS-rebinding guard would answer 421.
+app = mcp.streamable_http_app(
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 app.add_route("/_calls", _get_calls, methods=["GET"])
 app.add_route("/_reset", _reset, methods=["POST"])
 app.add_route("/_mode", _mode, methods=["POST"])
