@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -351,5 +352,16 @@ func TestEvalHandler_UIDetail_MCPHeaderNamesOnly(t *testing.T) {
 	}
 	if strings.Contains(body, "s3cret-value") {
 		t.Error("detail page leaks an MCP header value")
+	}
+}
+
+// The export's write deadline covers worst-case MCP discovery plus the
+// normal WriteTimeout for building and writing the YAML, so two slow
+// backends (2 × 15 s) no longer outlive the server's 30 s WriteTimeout.
+func TestExportWriteDeadline(t *testing.T) {
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	got := exportWriteDeadline(now, 30*time.Second)
+	if want := now.Add(30*time.Second + WriteTimeout); !got.Equal(want) {
+		t.Errorf("deadline = %v, want %v", got, want)
 	}
 }

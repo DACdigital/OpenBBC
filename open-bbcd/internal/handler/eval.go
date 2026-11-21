@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -292,7 +293,18 @@ func (h *EvalHandler) Export(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	payload, err := eval.BuildWith(r.Context(), h.adapter, id, eval.Options{Timeout: h.mcpDiscoveryTimeout})
+	payload, err := eval.BuildWith(r.Context(), h.adapter, id, eval.Options{
+		Timeout: h.mcpDiscoveryTimeout,
+		// Sequential discovery can outlive the server-wide WriteTimeout
+		// (2 slow backends × 15 s ≥ 30 s), which would silently drop the
+		// response and leave the eval PENDING; extend this response's
+		// deadline to cover it.
+		OnDiscovery: func(budget time.Duration) {
+			if err := http.NewResponseController(w).SetWriteDeadline(exportWriteDeadline(time.Now(), budget)); err != nil {
+				slog.Warn("eval export: extend write deadline failed", slog.Any("err", err))
+			}
+		},
+	})
 	var discErr *eval.MCPDiscoveryError
 	if errors.As(err, &discErr) {
 		if ferr := h.repo.FailIfPending(r.Context(), id, discErr.Error()); ferr != nil {
@@ -314,6 +326,12 @@ func (h *EvalHandler) Export(w http.ResponseWriter, r *http.Request) {
 	if err := eval.WriteYAML(w, payload); err != nil {
 		Error(w, err)
 	}
+}
+
+// exportWriteDeadline is the export's write deadline: worst-case MCP
+// discovery plus the usual WriteTimeout for building and writing the YAML.
+func exportWriteDeadline(now time.Time, discoveryBudget time.Duration) time.Time {
+	return now.Add(discoveryBudget + WriteTimeout)
 }
 
 // Result handles POST /evals/{eval_id}/result — accepts eval-result.json.

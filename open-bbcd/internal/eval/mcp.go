@@ -61,6 +61,11 @@ func (e *MCPDiscoveryError) Error() string {
 type Options struct {
 	Discover MCPDiscoverFunc
 	Timeout  time.Duration
+	// OnDiscovery, when set, is called once before any backend is contacted
+	// with the worst-case discovery time (Timeout × attached backends), so
+	// the caller can extend its HTTP write deadline. Not called when no
+	// mcp_client backend is attached.
+	OnDiscovery func(budget time.Duration)
 }
 
 // DiscoverMCPTools builds the runtime's MCP client (tools.MCPClientBackend)
@@ -109,6 +114,9 @@ func buildMCPBackends(ctx context.Context, refs []MCPBackendRef, mock bool, over
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = DefaultMCPDiscoveryTimeout
+	}
+	if opts.OnDiscovery != nil {
+		opts.OnDiscovery(timeout * time.Duration(len(refs)))
 	}
 	out := make(map[string]InputMCPBackend, len(refs))
 	for _, ref := range refs {

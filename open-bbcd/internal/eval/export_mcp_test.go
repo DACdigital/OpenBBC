@@ -223,3 +223,30 @@ func TestExportBuild_MCPBackends_HeaderMergeCaseInsensitive(t *testing.T) {
 		}
 	}
 }
+
+// OnDiscovery is told the worst-case discovery time (timeout × backends)
+// before any backend is contacted, so the handler can extend its write
+// deadline past the server-wide WriteTimeout.
+func TestExportBuild_MCPBackends_OnDiscoveryBudget(t *testing.T) {
+	s := mcpStore(false)
+	s.mcpBackends = append(s.mcpBackends, MCPBackendRef{ID: "b-2", Name: "kb2"})
+	var got time.Duration
+	var discovered bool
+	opts := Options{
+		Timeout: 7 * time.Second,
+		Discover: func(context.Context, MCPBackendRef, map[string]string) ([]InputMCPTool, error) {
+			if got == 0 {
+				t.Error("discovery ran before OnDiscovery")
+			}
+			discovered = true
+			return nil, nil
+		},
+		OnDiscovery: func(budget time.Duration) { got = budget },
+	}
+	if _, err := BuildWith(context.Background(), s, "e-mcp", opts); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got != 14*time.Second || !discovered {
+		t.Errorf("budget = %v (discovered=%v), want 14s", got, discovered)
+	}
+}
