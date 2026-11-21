@@ -1,9 +1,10 @@
-"""Target agent invocation. Sends the eval history
-to the tested agent (bundle's main_prompt + concatenated skill prompts as
-system, bundle's tools as function definitions). Uses LiteLLM directly for
-the tool loop, since we need to intercept every tool_use call and dispatch
-it through the caller — either ToolMock (replay + synthesise) or
-RealHTTPToolCaller (real HTTP against wired backends). The caller is
+"""Target agent invocation. Sends the eval history to the tested agent
+(bundle's main_prompt as system, the built-in Skill tool plus the bundle's
+tools as function definitions — the same shape the open-bbcd runtime offers).
+Uses LiteLLM directly for the tool loop, since we need to intercept every
+tool_use call and dispatch it through the caller — SkillToolCaller answers
+Skill locally and hands everything else to ToolMock (replay + synthesise) or
+RealHTTPToolCaller (real HTTP against wired backends). Callers are
 duck-typed: only `.call(name, args) -> {"source","result",...}` is used."""
 
 from __future__ import annotations
@@ -16,20 +17,82 @@ import litellm  # type: ignore[import-untyped]
 
 from aikdm.eval.history import to_target_messages
 
+# Mirrors open-bbcd's runtime Skill tool (internal/llm/tools/composite.go);
+# tests/fixtures/skill_tool_parity.json pins the two together.
+SKILL_TOOL_NAME = "Skill"
+SKILL_TOOL_DESCRIPTION = (
+    "Load the prompt for a named skill into your working context. "
+    "Use when the user's intent matches a skill in skills_index."
+)
+# Unicode White_Space, the set Go's strings.TrimSpace strips.
+_WHITESPACE = (
+    "\t\n\v\f\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
+    "\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+)
+
 
 def build_system_prompt(bundle: dict[str, Any]) -> str:
-    main = str(bundle.get("main_prompt", ""))
-    skills = bundle.get("skills", []) or []
-    parts = [main]
-    for s in skills:
-        parts.append(f"\n\n<skill name=\"{s.get('name','')}\">\n{s.get('prompt','')}\n</skill>")
-    return "".join(parts)
+    """The system text the runtime sends: main_prompt only. Skills are
+    loaded on demand through the Skill tool, never inlined."""
+    return str(bundle.get("main_prompt", ""))
+
+
+def loadable_skills(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+    """Skills the Skill tool can serve, in bundle order: those whose prompt
+    is non-empty after trimming whitespace."""
+    return [s for s in bundle.get("skills") or []
+            if str(s.get("prompt") or "").strip(_WHITESPACE)]
+
+
+def build_skill_tool_spec(bundle: dict[str, Any]) -> dict[str, Any] | None:
+    """LiteLLM-shaped Skill tool, or None when no skill is loadable."""
+    names = [str(s.get("name", "")) for s in loadable_skills(bundle)]
+    if not names:
+        return None
+    return {
+        "type": "function",
+        "function": {
+            "name": SKILL_TOOL_NAME,
+            "description": SKILL_TOOL_DESCRIPTION,
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "enum": names}},
+                "required": ["name"],
+            },
+        },
+    }
+
+
+class SkillToolCaller:
+    """Answers Skill calls from bundle.skills, like the runtime does, and
+    delegates every other tool to `inner`. Skill never reaches ToolMock or a
+    real backend, and is answered even when it was not offered."""
+
+    def __init__(self, bundle: dict[str, Any], inner):
+        self._prompts: dict[str, str] = {}
+        for s in loadable_skills(bundle):
+            self._prompts.setdefault(str(s.get("name", "")), str(s["prompt"]))
+        self._inner = inner
+
+    def call(self, name: str, args: Any) -> dict[str, Any]:
+        if name != SKILL_TOOL_NAME:
+            return self._inner.call(name, args)
+        skill = args.get("name", "") if isinstance(args, dict) else ""
+        skill = skill if isinstance(skill, str) else json.dumps(skill)
+        if skill in self._prompts:
+            return {"source": "skill", "result": {"prompt": self._prompts[skill]}}
+        return {"source": "error", "result": {"error": f"unknown skill: {skill}"}}
 
 
 def build_tool_specs(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Returns (LiteLLM-shaped tools list, name→schema for the mock)."""
+    """Returns (LiteLLM-shaped tools list, name→schema for the mock). The
+    Skill tool comes first when offered; it is answered by SkillToolCaller,
+    so it has no mock schema."""
     tools: list[dict[str, Any]] = []
     schema_by_name: dict[str, Any] = {}
+    skill = build_skill_tool_spec(bundle)
+    if skill is not None:
+        tools.append(skill)
     for t in bundle.get("tools", []) or []:
         name = t.get("name") or t.get("id") or ""
         if not name:

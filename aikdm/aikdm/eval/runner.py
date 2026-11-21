@@ -75,6 +75,8 @@ async def run_session(
 
     system_prompt = target_mod.build_system_prompt(bundle)
     tools_spec, _ = target_mod.build_tool_specs(bundle)
+    # Skill is answered from the bundle whatever mock_mcp_tools picked.
+    tool_caller = target_mod.SkillToolCaller(bundle, tool_caller)
     declared = {t["function"]["name"] for t in tools_spec}
     # The simulator never sees client_context blocks (spec client-context Scope 7).
     ref_transcript = [script_mod.strip_client_context(m.model_dump())
