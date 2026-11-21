@@ -20,6 +20,14 @@ type Config struct {
 	LLM       LLMConfig
 	Chat      ChatConfig
 	Artifacts ArtifactsConfig
+	Eval      EvalConfig
+}
+
+// EvalConfig tunes the eval export. MCPDiscoveryTimeout bounds tools/list per
+// attached MCP backend in GET /evals/{id}/export.yaml
+// (OPENBBC_EVAL_MCP_DISCOVERY_TIMEOUT, Go duration > 0, default 15s).
+type EvalConfig struct {
+	MCPDiscoveryTimeout time.Duration
 }
 
 type ServerConfig struct {
@@ -75,6 +83,19 @@ func positiveIntEnv(name string, def int) (int, error) {
 		return 0, fmt.Errorf("%s: expected integer >= 1, got %q", name, v)
 	}
 	return n, nil
+}
+
+// positiveDurationEnv reads name as a Go duration > 0, returning def when unset.
+func positiveDurationEnv(name string, def time.Duration) (time.Duration, error) {
+	v, ok := os.LookupEnv(name)
+	if !ok || v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s: expected duration > 0 (e.g. 15s), got %q", name, v)
+	}
+	return d, nil
 }
 
 // ArtifactsConfig captures deployer-declared artifact-store registry state
@@ -290,6 +311,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.Chat.ClientContextMaxBytes, err = positiveIntEnv("OPENBBC_CLIENT_CONTEXT_MAX_BYTES", DefaultClientContextMaxBytes); err != nil {
+		return nil, err
+	}
+
+	if cfg.Eval.MCPDiscoveryTimeout, err = positiveDurationEnv("OPENBBC_EVAL_MCP_DISCOVERY_TIMEOUT", 15*time.Second); err != nil {
 		return nil, err
 	}
 

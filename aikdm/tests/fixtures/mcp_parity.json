@@ -1,0 +1,193 @@
+{
+  "backend": "kb",
+  "cases": [
+    {
+      "expected": {
+        "content": [
+          {
+            "text": "3 hits",
+            "type": "text"
+          }
+        ],
+        "text": "3 hits"
+      },
+      "is_error": false,
+      "name": "single_text",
+      "raw": {
+        "content": [
+          {
+            "text": "3 hits",
+            "type": "text"
+          }
+        ]
+      },
+      "tool": "kb__search"
+    },
+    {
+      "expected": {
+        "content": [
+          {
+            "text": "first",
+            "type": "text"
+          },
+          {
+            "text": "second",
+            "type": "text"
+          }
+        ],
+        "text": "first\nsecond"
+      },
+      "is_error": false,
+      "name": "multiple_text",
+      "raw": {
+        "content": [
+          {
+            "text": "first",
+            "type": "text"
+          },
+          {
+            "text": "second",
+            "type": "text"
+          }
+        ]
+      },
+      "tool": "kb__search"
+    },
+    {
+      "expected": {
+        "content": [
+          {
+            "text": "chart:",
+            "type": "text"
+          },
+          {
+            "data": "iVBORw0KGgo=",
+            "mimeType": "image/png",
+            "type": "image"
+          }
+        ],
+        "text": "chart:"
+      },
+      "is_error": false,
+      "name": "text_and_image",
+      "raw": {
+        "content": [
+          {
+            "text": "chart:",
+            "type": "text"
+          },
+          {
+            "data": "iVBORw0KGgo=",
+            "mimeType": "image/png",
+            "type": "image"
+          }
+        ]
+      },
+      "tool": "kb__render"
+    },
+    {
+      "expected": {
+        "content": [
+          {
+            "text": "index unavailable",
+            "type": "text"
+          }
+        ],
+        "text": "index unavailable"
+      },
+      "is_error": true,
+      "name": "is_error",
+      "raw": {
+        "content": [
+          {
+            "text": "index unavailable",
+            "type": "text"
+          }
+        ],
+        "isError": true
+      },
+      "tool": "kb__search"
+    },
+    {
+      "expected": {
+        "error": "mcp kb: call boom: calling \"tools/call\": rejected by transport: sending \"tools/call\": Internal Server Error"
+      },
+      "is_error": true,
+      "name": "transport_error",
+      "tool": "kb__boom",
+      "transport_error": "calling \"tools/call\": rejected by transport: sending \"tools/call\": Internal Server Error"
+    }
+  ],
+  "export_tools": [
+    {
+      "description": "Search the knowledge base",
+      "input_schema": {
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "type": "object"
+      },
+      "name": "kb__search",
+      "output_schema": {
+        "properties": {
+          "hits": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "description": "Render a chart",
+      "input_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "name": "kb__render"
+    },
+    {
+      "description": "Always fails at the transport",
+      "input_schema": {
+        "type": "object"
+      },
+      "name": "kb__boom"
+    }
+  ],
+  "runtime_tools": [
+    {
+      "description": "Search the knowledge base",
+      "input_schema": {
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "type": "object"
+      },
+      "name": "kb__search"
+    },
+    {
+      "description": "Render a chart",
+      "input_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "name": "kb__render"
+    },
+    {
+      "description": "Always fails at the transport",
+      "input_schema": {
+        "type": "object"
+      },
+      "name": "kb__boom"
+    }
+  ]
+}

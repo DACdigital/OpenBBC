@@ -55,14 +55,6 @@ if [ "$status" != "PENDING" ]; then
 fi
 source_eval_id=$(cd "$root/aikdm" && uv run python -c "import json,sys;print(json.loads(sys.argv[1])['source_eval_id'])" "$session_json")
 
-echo "→ fetching eval-input.yaml for source eval $source_eval_id"
-curl -fsSL "$OPENBBCD_URL/evals/$source_eval_id/export.yaml" -o "$input"
-
-echo "→ marking session IN_PROGRESS (epochs=$epochs, patience=$patience)"
-curl -fsSL -X POST -H 'Content-Type: application/json' \
-    --data "{\"epochs\":$epochs,\"patience\":$patience}" \
-    "$OPENBBCD_URL/training-sessions/$session_id/start" >/dev/null
-
 fail_session() {
     local reason="$1"
     echo "→ marking session FAILED: $reason" >&2
@@ -70,6 +62,40 @@ fail_session() {
         --data "{\"error_message\":$(printf '%s' "$reason" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')}" \
         "$OPENBBCD_URL/training-sessions/$session_id/fail" >/dev/null || true
 }
+
+# A failed export (e.g. 502 mcp_discovery_failed) fails the session rather
+# than leaving it PENDING: --fail-with-body keeps the error body in $input so
+# it reaches fail_session. {"error":"mcp_discovery_failed","backend":B,
+# "details":D} becomes "mcp_discovery_failed: B: D", matching the eval's
+# error_message; any other body is passed through as-is.
+echo "→ fetching eval-input.yaml for source eval $source_eval_id"
+if ! curl -sSL --fail-with-body "$OPENBBCD_URL/evals/$source_eval_id/export.yaml" -o "$input"; then
+    reason=$(python3 - "$input" <<'PY'
+import json, sys
+try:
+    body = open(sys.argv[1], encoding="utf-8", errors="replace").read().strip()
+except OSError:
+    body = ""
+try:
+    err = json.loads(body)
+except ValueError:
+    err = None
+if isinstance(err, dict) and err.get("error") == "mcp_discovery_failed":
+    print(f"mcp_discovery_failed: {err.get('backend', '')}: {err.get('details', '')}")
+elif body:
+    print(f"eval export failed: {body}")
+else:
+    print("eval export failed (no response body)")
+PY
+)
+    fail_session "$reason"
+    exit 1
+fi
+
+echo "→ marking session IN_PROGRESS (epochs=$epochs, patience=$patience)"
+curl -fsSL -X POST -H 'Content-Type: application/json' \
+    --data "{\"epochs\":$epochs,\"patience\":$patience}" \
+    "$OPENBBCD_URL/training-sessions/$session_id/start" >/dev/null
 
 echo "→ running aikdm train-agent"
 if ! (cd "$root/aikdm" && uv run aikdm train-agent \

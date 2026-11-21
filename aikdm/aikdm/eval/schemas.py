@@ -60,6 +60,25 @@ class InputToolBackend(BaseModel):
     default_headers: dict[str, str] = Field(default_factory=dict)
 
 
+class InputMCPTool(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str               # <backend>__<tool>, exactly as the runtime offers it
+    description: str = ""
+    input_schema: dict[str, Any] = Field(
+        default_factory=lambda: {"type": "object", "additionalProperties": True})
+    output_schema: dict[str, Any] | None = None
+
+
+class InputMCPBackend(BaseModel):
+    """One eval-input-v1 `mcp_backends` entry, keyed by backend name. url and
+    headers are exported only in real mode (mock_mcp_tools=false)."""
+    model_config = ConfigDict(extra="ignore")
+    url: str = ""
+    transport: str = "streamable_http"
+    headers: dict[str, str] = Field(default_factory=dict)
+    tools: list[InputMCPTool] = Field(default_factory=list)
+
+
 class EvalInput(BaseModel):
     model_config = ConfigDict(extra="ignore")
     schema_version: Literal["eval-input-v1"]
@@ -67,6 +86,7 @@ class EvalInput(BaseModel):
     mock_mcp_tools: bool = True
     header_overrides: dict[str, str] = Field(default_factory=dict)
     tool_backends: dict[str, InputToolBackend] = Field(default_factory=dict)
+    mcp_backends: dict[str, InputMCPBackend] = Field(default_factory=dict)
     agent_version: InputAgentVersion
     dataset_version: InputDatasetVersion
 

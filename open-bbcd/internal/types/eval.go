@@ -24,14 +24,18 @@ type Eval struct {
 	Status           EvalStatus        `json:"status"`
 	MockMCPTools     bool              `json:"mock_mcp_tools"`
 	HeaderOverrides  map[string]string `json:"header_overrides,omitempty"`
-	Score            *float64          `json:"score,omitempty"`
-	TotalCriteria    *int              `json:"total_criteria,omitempty"`
-	PassedCriteria   *int              `json:"passed_criteria,omitempty"`
-	ErrorMessage     string            `json:"error_message,omitempty"`
-	AikdmMeta        json.RawMessage   `json:"aikdm_meta,omitempty"`
-	CreatedAt        time.Time         `json:"created_at"`
-	StartedAt        *time.Time        `json:"started_at,omitempty"`
-	CompletedAt      *time.Time        `json:"completed_at,omitempty"`
+	// MCPHeaderOverrides is per MCP backend name → {header → value}
+	// (migration 030). Applied on export-time tools/list and on aikdm's
+	// tools/call; distinct from the flat HeaderOverrides (HTTP endpoints).
+	MCPHeaderOverrides map[string]map[string]string `json:"mcp_header_overrides,omitempty"`
+	Score              *float64                     `json:"score,omitempty"`
+	TotalCriteria      *int                         `json:"total_criteria,omitempty"`
+	PassedCriteria     *int                         `json:"passed_criteria,omitempty"`
+	ErrorMessage       string                       `json:"error_message,omitempty"`
+	AikdmMeta          json.RawMessage              `json:"aikdm_meta,omitempty"`
+	CreatedAt          time.Time                    `json:"created_at"`
+	StartedAt          *time.Time                   `json:"started_at,omitempty"`
+	CompletedAt        *time.Time                   `json:"completed_at,omitempty"`
 }
 
 // EvalSession is one row per simulated session inside an eval.

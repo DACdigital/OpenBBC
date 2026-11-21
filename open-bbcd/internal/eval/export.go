@@ -25,6 +25,7 @@ type InputPayload struct {
 	MockMCPTools    bool                        `yaml:"mock_mcp_tools"`
 	HeaderOverrides map[string]string           `yaml:"header_overrides,omitempty"`
 	ToolBackends    map[string]InputToolBackend `yaml:"tool_backends,omitempty"`
+	MCPBackends     map[string]InputMCPBackend  `yaml:"mcp_backends,omitempty"`
 	AgentVersion    InputAgentVersion           `yaml:"agent_version"`
 	DatasetVersion  InputDatasetVersion         `yaml:"dataset_version"`
 }
@@ -87,10 +88,20 @@ type Store interface {
 	// the agent version's agent that has a wired HTTP-endpoint backend.
 	// Called only when the eval has MockMCPTools=false; may return nil.
 	GetToolBackends(ctx context.Context, agentVersionID string) (map[string]InputToolBackend, error)
+	// GetMCPBackends returns the mcp_client backends attached to the agent
+	// version via agent_version_mcp_backend. Called in both modes.
+	GetMCPBackends(ctx context.Context, agentVersionID string) ([]MCPBackendRef, error)
 }
 
-// Build assembles the full payload for the given eval id.
+// Build assembles the full payload for the given eval id with default
+// Options.
 func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
+	return BuildWith(ctx, s, evalID, Options{})
+}
+
+// BuildWith assembles the full payload for the given eval id. MCP discovery
+// failure returns *MCPDiscoveryError.
+func BuildWith(ctx context.Context, s Store, evalID string, opts Options) (*InputPayload, error) {
 	e, err := s.GetEval(ctx, evalID)
 	if err != nil {
 		return nil, err
@@ -232,12 +243,21 @@ func Build(ctx context.Context, s Store, evalID string) (*InputPayload, error) {
 			return nil, fmt.Errorf("read tool backends: %w", err)
 		}
 	}
+	mcpRefs, err := s.GetMCPBackends(ctx, e.AgentVersionID)
+	if err != nil {
+		return nil, fmt.Errorf("read mcp backends: %w", err)
+	}
+	mcpBackends, err := buildMCPBackends(ctx, mcpRefs, e.MockMCPTools, e.MCPHeaderOverrides, opts)
+	if err != nil {
+		return nil, err
+	}
 	return &InputPayload{
 		SchemaVersion:   "eval-input-v1",
 		EvalID:          e.ID,
 		MockMCPTools:    e.MockMCPTools,
 		HeaderOverrides: e.HeaderOverrides,
 		ToolBackends:    toolBackends,
+		MCPBackends:     mcpBackends,
 		AgentVersion: InputAgentVersion{
 			ID:     e.AgentVersionID,
 			Bundle: bundle,
