@@ -159,3 +159,25 @@ async def test_backend_dying_mid_session_returns_error_not_cancellation():
         await caller.aclose()
     assert out["source"] == "error"
     assert out["result"]["error"].startswith("mcp kb: call search: ")
+
+
+async def test_empty_arguments_are_sent_as_empty_object_like_open_bbcd(kb_server, monkeypatch):
+    """open-bbcd sends `arguments: {}` for a no-arg call (mcp_client_backend.go
+    Call); aikdm must not turn {} into null."""
+    from mcp.client.session import ClientSession
+
+    sent: list[object] = []
+    real_call_tool = ClientSession.call_tool
+
+    async def spy(self, name, arguments=None, *a, **kw):
+        sent.append(arguments)
+        return await real_call_tool(self, name, arguments, *a, **kw)
+
+    monkeypatch.setattr(ClientSession, "call_tool", spy)
+    url, _ = kb_server
+    caller = MCPToolCaller(_backends(url))
+    try:
+        await caller.call("kb__search", {})
+    finally:
+        await caller.aclose()
+    assert sent == [{}]
