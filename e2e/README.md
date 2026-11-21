@@ -215,7 +215,7 @@ Scenarios 4 and 7 share a module-scoped eval fixture. Every other scenario sets 
 From the repo root (needs Docker, `uv`):
 
 - `make -C e2e e2e` builds and starts the stack, runs the suite, and always tears it down
-  (`down -v`), also on Ctrl-C. Logs are printed on failure.
+  (`down -v`), also on Ctrl-C. On failure the full logs go to `e2e/e2e-logs.txt` (last 200 lines also printed).
 - For debugging, keep the stack up:
   - `make -C e2e up` builds the images (including the `jobs`-profile runner) and starts the stack.
   - `make -C e2e test` runs the suite against it.
@@ -225,7 +225,7 @@ From the repo root (needs Docker, `uv`):
 - Postgres is published on the host for read-only inspection: `postgres://e2e:e2e@localhost:18432/e2e`.
   Other host ports: open-bbcd 18080, fake-llm 18001, fake-mcp 18002 (override with `E2E_*_PORT`).
 - **CI:** job `e2e` in `.github/workflows/ci.yml` runs `make -C e2e e2e` after the Go and Python
-  jobs, and uploads the compose logs as the `e2e-logs` artifact on failure.
+  jobs, and on failure uploads `e2e/e2e-logs.txt` (all compose logs, written before teardown) as the `e2e-logs` artifact.
 
 ### Writing tests
 

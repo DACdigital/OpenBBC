@@ -72,15 +72,12 @@ jobs:
           cache-dependency-glob: e2e/uv.lock
       - name: Run e2e suite
         run: make -C e2e e2e
-      - name: Collect compose logs
-        if: failure()
-        run: make -C e2e logs > e2e-logs.txt 2>&1 || true
       - name: Upload compose logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-logs
-          path: e2e-logs.txt
+          path: e2e/e2e-logs.txt
           if-no-files-found: ignore
 
   check:

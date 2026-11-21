@@ -12,7 +12,7 @@ down:
 	$(COMPOSE) --profile jobs down -v --remove-orphans
 
 test:
-	cd $(CURDIR) && uv run pytest tests -q
+	cd $(CURDIR) && uv run pytest tests -q $(PYTEST_ARGS)
 
 # up -> test -> always down (also on Ctrl-C/TERM); exit status is the test run's.
 e2e:
@@ -24,4 +24,7 @@ logs:
 
 .PHONY: logs-on-fail
 logs-on-fail:
-	@if [ "$(rc)" != "0" ]; then $(COMPOSE) logs --no-color | tail -n 200; fi
+	@if [ "$(rc)" != "0" ]; then \
+		$(COMPOSE) --profile jobs logs --no-color > $(CURDIR)/e2e-logs.txt 2>&1; \
+		tail -n 200 $(CURDIR)/e2e-logs.txt; \
+	fi

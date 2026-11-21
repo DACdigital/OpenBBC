@@ -138,3 +138,4 @@ docker-compose.override.yml
 credentials.json
 secrets.json
 service-account.json
+e2e/e2e-logs.txt
