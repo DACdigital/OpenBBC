@@ -182,3 +182,35 @@ async def test_async_tool_caller_is_awaited(monkeypatch):
                                      tool_caller=AsyncCaller())
     assert t.span[0]["tool_calls"][0]["result"] == {"text": "kb__search:x"}
     assert t.span[0]["tool_calls"][0]["source"] == "real"
+
+
+def test_build_tool_specs_offers_skill_first_then_bundle_then_mcp_tools():
+    bundle = {
+        "skills": [{"name": "draft", "prompt": "DRAFT"}, {"name": "empty", "prompt": ""}],
+        "tools": [{"name": "lookup", "description": "d"}],
+    }
+    mcp = {"kb": {"tools": [{"name": "kb__search", "description": "s",
+                             "input_schema": {"type": "object"}}]}}
+    tools, schema = target_mod.build_tool_specs(bundle, mcp)
+    assert [t["function"]["name"] for t in tools] == ["Skill", "lookup", "kb__search"]
+    assert tools[0]["function"]["parameters"]["properties"]["name"]["enum"] == ["draft"]
+    assert "Skill" not in schema and "kb__search" in schema
+
+
+async def test_skill_caller_answers_skill_and_passes_mcp_calls_to_async_router():
+    class _Router:
+        def __init__(self):
+            self.seen = []
+
+        async def call(self, name, args):
+            self.seen.append(name)
+            return {"source": "real", "result": {"text": "hit"}}
+
+    router = _Router()
+    bundle = {"skills": [{"name": "draft", "prompt": "DRAFT"}]}
+    caller = target_mod.SkillToolCaller(bundle, router)
+    assert caller.call("Skill", {"name": "draft"}) == {
+        "source": "skill", "result": {"prompt": "DRAFT"}}
+    assert await caller.call("kb__search", {"query": "q"}) == {
+        "source": "real", "result": {"text": "hit"}}
+    assert router.seen == ["kb__search"]
