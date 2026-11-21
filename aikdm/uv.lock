@@ -37,7 +37,7 @@ requires-dist = [
     { name = "google-adk", specifier = ">=0.4" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "litellm", specifier = ">=1.50" },
-    { name = "mcp", specifier = ">=2.3.0" },
+    { name = "mcp", specifier = ">=2.3.0,<3" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
