@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/eval"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -128,6 +129,28 @@ func (a *evalStoreAdapter) GetToolBackends(ctx context.Context, agentVersionID s
 		}
 	}
 	return out, rows.Err()
+}
+
+// GetMCPBackends returns the mcp_client backends attached to the version via
+// agent_version_mcp_backend. A malformed config is a discovery failure for
+// that backend (502 + fail-forward), not a 500 a drainer would retry.
+func (a *evalStoreAdapter) GetMCPBackends(ctx context.Context, agentVersionID string) ([]eval.MCPBackendRef, error) {
+	attached, err := a.evalRepo.ListAttachedBackends(ctx, agentVersionID)
+	if err != nil {
+		return nil, err
+	}
+	var out []eval.MCPBackendRef
+	for _, b := range attached {
+		if b.Kind != "mcp_client" {
+			continue
+		}
+		var cfg tools.MCPBackendCfg
+		if err := json.Unmarshal(b.Config, &cfg); err != nil {
+			return nil, &eval.MCPDiscoveryError{Backend: b.Name, Details: "parse config: " + err.Error()}
+		}
+		out = append(out, eval.MCPBackendRef{ID: b.ID, Name: b.Name, Config: cfg})
+	}
+	return out, nil
 }
 
 func (a *evalStoreAdapter) GetActiveTrainingSessionForEval(ctx context.Context, evalID string) (*types.TrainingSession, error) {

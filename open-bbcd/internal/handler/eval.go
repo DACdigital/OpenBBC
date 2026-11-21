@@ -3,11 +3,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/eval"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/modelmeta"
@@ -37,6 +39,9 @@ type EvalHandler struct {
 	// runtimeModel is the model this open-bbcd runs agents on
 	// (config.Config.RuntimeModel). "" disables the detail page's mismatch notice.
 	runtimeModel string
+	// mcpDiscoveryTimeout bounds tools/list per MCP backend on export
+	// (config.Eval.MCPDiscoveryTimeout). 0 → eval.DefaultMCPDiscoveryTimeout.
+	mcpDiscoveryTimeout time.Duration
 }
 
 func NewEvalHandler(
@@ -112,6 +117,13 @@ func NewEvalHandler(
 // default "" shows no notice.
 func (h *EvalHandler) WithRuntimeModel(model string) *EvalHandler {
 	h.runtimeModel = model
+	return h
+}
+
+// WithMCPDiscoveryTimeout sets the per-backend tools/list bound used by
+// Export (OPENBBC_EVAL_MCP_DISCOVERY_TIMEOUT).
+func (h *EvalHandler) WithMCPDiscoveryTimeout(d time.Duration) *EvalHandler {
+	h.mcpDiscoveryTimeout = d
 	return h
 }
 
@@ -268,13 +280,32 @@ func (h *EvalHandler) Start(w http.ResponseWriter, r *http.Request) {
 // Temporary multi-agent gate: when the eval's version has agent_tool_enabled,
 // FailIfMultiAgent fails the eval (if PENDING) and its PENDING training
 // sessions forward and the route answers 409 before building anything.
+//
+// MCP discovery: every attached mcp_client backend is listed. If any fails,
+// the route answers 502 {"error":"mcp_discovery_failed","backend","details"}
+// and a PENDING eval moves to FAILED with "mcp_discovery_failed: <backend>:
+// <details>". Other statuses (e.g. a DONE training source) are untouched;
+// train_from_session.sh fails its own session on a failed export.
 func (h *EvalHandler) Export(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("eval_id")
 	if err := h.repo.FailIfMultiAgent(r.Context(), id); err != nil {
 		Error(w, err)
 		return
 	}
-	payload, err := eval.Build(r.Context(), h.adapter, id)
+	payload, err := eval.BuildWith(r.Context(), h.adapter, id, eval.Options{Timeout: h.mcpDiscoveryTimeout})
+	var discErr *eval.MCPDiscoveryError
+	if errors.As(err, &discErr) {
+		if ferr := h.repo.FailIfPending(r.Context(), id, discErr.Error()); ferr != nil {
+			Error(w, ferr)
+			return
+		}
+		JSON(w, http.StatusBadGateway, map[string]string{
+			"error":   "mcp_discovery_failed",
+			"backend": discErr.Backend,
+			"details": discErr.Details,
+		})
+		return
+	}
 	if err != nil {
 		Error(w, err)
 		return
