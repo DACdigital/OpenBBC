@@ -278,13 +278,13 @@ type fakeTools struct {
 	results []tools.Result
 }
 
-func (f *fakeTools) Tools(bundle json.RawMessage) ([]llm.ToolDef, error) {
+func (f *fakeTools) Tools(json.RawMessage, []types.BundleSkill) ([]llm.ToolDef, error) {
 	return []llm.ToolDef{
 		{Name: "Skill", Description: "x", InputSchema: []byte(`{"type":"object"}`)},
 	}, nil
 }
 
-func (f *fakeTools) Call(ctx context.Context, bundle json.RawMessage, c tools.Call) (tools.Result, error) {
+func (f *fakeTools) Call(ctx context.Context, _ json.RawMessage, _ []types.BundleSkill, c tools.Call) (tools.Result, error) {
 	f.callLog = append(f.callLog, c)
 	if len(f.results) == 0 {
 		return tools.Result{ToolUseID: c.ID, Output: []byte(`{}`)}, nil
@@ -364,6 +364,18 @@ func (r *multiAgentRepo) setArchitecture(versionID string, arch string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.agents[versionID].Architecture = []byte(arch)
+}
+
+// setSkills puts skills on versionID the production way: skills_meta on the
+// agent architecture, prompts on the version's prompts.skill_prompts.
+func (r *multiAgentRepo) setSkills(versionID, skillsMeta, skillPrompts string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.agents[versionID].Architecture = []byte(`{"tools":[],"skills_meta":` + skillsMeta + `}`)
+	var p map[string]any
+	_ = json.Unmarshal(r.versions[versionID].Prompts, &p)
+	p["skill_prompts"] = json.RawMessage(skillPrompts)
+	r.versions[versionID].Prompts, _ = json.Marshal(p)
 }
 
 func (r *multiAgentRepo) setToolEnabled(versionID string, on bool) {
@@ -455,14 +467,14 @@ type multiHandler struct {
 	closes    int
 }
 
-func (h *multiHandler) Tools(json.RawMessage) ([]llm.ToolDef, error) {
+func (h *multiHandler) Tools(json.RawMessage, []types.BundleSkill) ([]llm.ToolDef, error) {
 	return []llm.ToolDef{
 		{Name: "Skill", Description: "skills", InputSchema: []byte(`{"type":"object"}`)},
 		{Name: "search", Description: "search", InputSchema: []byte(`{"type":"object"}`)},
 	}, nil
 }
 
-func (h *multiHandler) Call(ctx context.Context, _ json.RawMessage, c tools.Call) (tools.Result, error) {
+func (h *multiHandler) Call(ctx context.Context, _ json.RawMessage, _ []types.BundleSkill, c tools.Call) (tools.Result, error) {
 	h.mu.Lock()
 	h.calls = append(h.calls, c)
 	h.mu.Unlock()

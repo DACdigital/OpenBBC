@@ -77,14 +77,14 @@ func TestBuilder_Build_ProducesRealJSONSchemaFromEnrichedBundle(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	defs, err := handler.Tools(bundle)
+	defs, err := handler.Tools(bundle, nil)
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
 
-	// Should be 2 tools: Skill meta-tool + orders_create from the HTTP backend.
-	if len(defs) != 2 {
-		t.Fatalf("want 2 tools (Skill + orders_create), got %d", len(defs))
+	// Only orders_create from the HTTP backend: no loadable skills, so no Skill tool.
+	if len(defs) != 1 {
+		t.Fatalf("want 1 tool (orders_create), got %d", len(defs))
 	}
 
 	var orders llm.ToolDef

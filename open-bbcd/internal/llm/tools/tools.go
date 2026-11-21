@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
 // Call is a single tool invocation from the model.
@@ -28,14 +29,18 @@ type Result struct {
 	IsError   bool
 }
 
-// Handler builds the LLM-visible tool list from an agent's bundle and
-// routes tool invocations to their backend (real or mocked).
+// Handler builds the LLM-visible tool list for one agent version and routes
+// tool invocations to their backend (real or mocked).
+//
+// arch is the agent's architecture (endpoint tools, skills_meta); skills is
+// the version's joined skill list (types.JoinSkills of skills_meta and
+// prompts.skill_prompts), which drives the built-in Skill meta-tool.
 type Handler interface {
-	// Tools returns the tool defs the LLM will see, derived from the agent's bundle.
-	Tools(bundle json.RawMessage) ([]llm.ToolDef, error)
+	// Tools returns the tool defs the LLM will see. The Skill tool is first
+	// when at least one skill is loadable, and omitted otherwise.
+	Tools(arch json.RawMessage, skills []types.BundleSkill) ([]llm.ToolDef, error)
 
-	// Call routes a tool invocation. The bundle is passed in so handlers
-	// that depend on bundle content (e.g., the Skill meta-tool looking up
-	// bundle.skills[X].prompt) have access without separate state.
-	Call(ctx context.Context, bundle json.RawMessage, call Call) (Result, error)
+	// Call routes a tool invocation. A Skill call is always answered from
+	// skills, whether or not the Skill tool was offered.
+	Call(ctx context.Context, arch json.RawMessage, skills []types.BundleSkill, call Call) (Result, error)
 }

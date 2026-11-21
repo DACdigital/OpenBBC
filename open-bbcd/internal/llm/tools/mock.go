@@ -6,12 +6,13 @@ import (
 	"fmt"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
 // MockHandler is the v1 tool handler.
 //
-//   - The "Skill" meta-tool is REAL: Call looks up bundle.skills[<name>].prompt
-//     and returns it. The LLM then folds the skill prompt into its working
+//   - The "Skill" meta-tool is REAL: Call looks up the version's joined
+//     skills (skills_meta + prompts.skill_prompts) and returns the prompt. The LLM then folds the skill prompt into its working
 //     context for subsequent turns. This mirrors Claude Code's Skill loading.
 //   - Each capability tool is MOCKED: Call echoes the input with a _mocked
 //     marker. The orchestrator's tool-call loop still runs end-to-end; only
@@ -21,15 +22,9 @@ type MockHandler struct{}
 
 func NewMockHandler() *MockHandler { return &MockHandler{} }
 
-// bundleShape is the minimum bundle slice MockHandler needs to do its
-// job. Defined here (not types/) because it's an implementation detail
-// of how the handler reads the bundle JSON.
+// bundleShape is the minimum architecture slice MockHandler needs: the
+// endpoint tool list. Skills come from the joined list, not from here.
 type bundleShape struct {
-	Skills []struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Prompt      string `json:"prompt"`
-	} `json:"skills"`
 	Tools []struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -50,7 +45,7 @@ func parseBundle(bundle json.RawMessage) (bundleShape, error) {
 	return b, nil
 }
 
-func (h *MockHandler) Tools(bundle json.RawMessage) ([]llm.ToolDef, error) {
+func (h *MockHandler) Tools(bundle json.RawMessage, skills []types.BundleSkill) ([]llm.ToolDef, error) {
 	b, err := parseBundle(bundle)
 	if err != nil {
 		return nil, err
@@ -60,11 +55,11 @@ func (h *MockHandler) Tools(bundle json.RawMessage) ([]llm.ToolDef, error) {
 
 	// The Skill meta-tool's input schema enumerates the skill names so the
 	// LLM gets autocomplete-style guidance and can't hallucinate skill names.
-	skillDef, err := buildSkillToolDef(bundle)
-	if err != nil {
+	if skillDef, ok, err := buildSkillToolDef(skills); err != nil {
 		return nil, err
+	} else if ok {
+		out = append(out, skillDef)
 	}
-	out = append(out, skillDef)
 
 	// Permissive schema for capability tools — real schemas arrive with real
 	// MCP wiring. additionalProperties=true accepts any object.
@@ -116,14 +111,14 @@ func SanitizeToolName(name string) string {
 	return string(out)
 }
 
-func (h *MockHandler) Call(ctx context.Context, bundle json.RawMessage, call Call) (Result, error) {
+func (h *MockHandler) Call(ctx context.Context, bundle json.RawMessage, skills []types.BundleSkill, call Call) (Result, error) {
 	if _, err := parseBundle(bundle); err != nil {
 		return Result{}, err
 	}
 
 	// Skill meta-tool — real lookup via shared helper.
 	if call.Name == SkillToolName {
-		return callSkillMetaTool(bundle, call)
+		return callSkillMetaTool(skills, call)
 	}
 
 	// Capability-backed tool — mocked echo. Input echoed back as raw JSON

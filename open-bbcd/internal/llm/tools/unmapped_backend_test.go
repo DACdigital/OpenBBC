@@ -76,11 +76,14 @@ func TestBuilder_AddsUnmappedBackendForUnconfiguredEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	defs, err := handler.Tools(bundle)
+	defs, err := handler.Tools(bundle, nil)
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
-	// Should see: Skill + orders_create (mapped) + products_list (unmapped) = 3
+	// Should see: orders_create (mapped) + products_list (unmapped); no Skill without loadable skills.
+	if len(defs) != 2 {
+		t.Fatalf("want 2 tools, got %d", len(defs))
+	}
 	names := map[string]string{}
 	for _, d := range defs {
 		names[d.Name] = d.Description
@@ -93,7 +96,7 @@ func TestBuilder_AddsUnmappedBackendForUnconfiguredEndpoints(t *testing.T) {
 	}
 
 	// Calling the unmapped tool should return IsError with guidance.
-	res, err := handler.Call(context.Background(), bundle, Call{ID: "x", Name: "products_list", Input: json.RawMessage(`{}`)})
+	res, err := handler.Call(context.Background(), bundle, nil, Call{ID: "x", Name: "products_list", Input: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}

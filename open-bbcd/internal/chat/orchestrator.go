@@ -238,14 +238,18 @@ func (o *Orchestrator) Turn(
 		return "", failTurn("history_load", "load_messages", err)
 	}
 
-	// 4. Build LLM request. Main prompt lives on the version's prompts blob;
-	// architecture (endpoints + metadata) lives on the agent.
-	var promptsHead struct {
-		MainPrompt string `json:"main_prompt"`
-	}
+	// 4. Build LLM request. Main prompt and skill prompts live on the
+	// version's prompts blob; architecture (endpoints + skills_meta) lives
+	// on the agent. The Skill tool resolves from their join, once per turn.
+	var promptsHead types.Prompts
 	if err := json.Unmarshal(version.Prompts, &promptsHead); err != nil {
 		return "", failTurn("prompts_parse", "parse_prompts", err)
 	}
+	var archHead types.Architecture
+	if err := json.Unmarshal(agent.Architecture, &archHead); err != nil {
+		return "", failTurn("tools_init", "parse_architecture", err)
+	}
+	skills := types.JoinSkills(archHead, promptsHead)
 
 	toolHandler, err := o.builder.Build(ctx, agent.ID, version.ID, agent.Architecture)
 	if err != nil {
@@ -261,7 +265,7 @@ func (o *Orchestrator) Turn(
 		}()
 	}
 
-	toolDefs, err := toolHandler.Tools(agent.Architecture)
+	toolDefs, err := toolHandler.Tools(agent.Architecture, skills)
 	if err != nil {
 		return "", failTurn("tools_init", "build_tool_defs", err)
 	}
@@ -548,7 +552,7 @@ func (o *Orchestrator) Turn(
 				agentIdx = append(agentIdx, i)
 				continue
 			}
-			res, err := toolHandler.Call(ctx, agent.Architecture, tools.Call{
+			res, err := toolHandler.Call(ctx, agent.Architecture, skills, tools.Call{
 				ID:    tu.ID,
 				Name:  tu.Name,
 				Input: tu.Input,
