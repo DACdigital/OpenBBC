@@ -385,3 +385,48 @@ func TestMCPClient_EnvelopeNotMatched_NoLiveHeaders(t *testing.T) {
 		t.Fatalf("Authorization leaked despite no envelope match: %v", got)
 	}
 }
+
+func TestMCPClient_DiscoverTools_RetainsOutputSchema(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req jsonrpcRequest
+		_ = json.Unmarshal(body, &req)
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			respond(w, req.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "test", "version": "0.1"},
+			})
+		case "tools/list":
+			respond(w, req.ID, map[string]any{"tools": []map[string]any{
+				{"name": "with_out", "inputSchema": map[string]any{"type": "object"},
+					"outputSchema": map[string]any{"type": "object", "properties": map[string]any{"n": map[string]any{"type": "integer"}}}},
+				{"name": "no_out", "inputSchema": map[string]any{"type": "object"}},
+			}})
+		}
+	}))
+	defer srv.Close()
+
+	be := NewMCPClientBackend("kb", "b1", MCPBackendCfg{URL: srv.URL, Transport: "streamable_http"})
+	defer be.Close()
+	got, err := be.DiscoverTools(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+	if len(got) != 2 || got[0].Def.Name != "kb__with_out" || got[1].Def.Name != "kb__no_out" {
+		t.Fatalf("tools = %+v", got)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(got[0].OutputSchema, &out); err != nil || out["type"] != "object" {
+		t.Fatalf("output schema = %s (%v)", got[0].OutputSchema, err)
+	}
+	if got[1].OutputSchema != nil {
+		t.Fatalf("no_out output schema = %s, want nil", got[1].OutputSchema)
+	}
+	defs, _ := be.Tools(context.Background())
+	if len(defs) != 2 || defs[0].Name != got[0].Def.Name {
+		t.Fatalf("Tools() diverges from DiscoverTools: %+v", defs)
+	}
+}

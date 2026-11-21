@@ -30,8 +30,18 @@ type MCPClientBackend struct {
 
 	mu       sync.Mutex
 	session  *mcp.ClientSession
+	tools    []MCPTool
 	toolDefs []llm.ToolDef
 	connErr  error // sticky: if init fails, the backend is dead for the session
+}
+
+// MCPTool is one tool as discovered by tools/list: the definition offered to
+// the model plus the server-declared output schema (nil when the server
+// declared none). The output schema is never sent to the model; the eval
+// export carries it so aikdm can synthesize mocked results.
+type MCPTool struct {
+	Def          llm.ToolDef
+	OutputSchema json.RawMessage
 }
 
 func NewMCPClientBackend(name, id string, cfg MCPBackendCfg) *MCPClientBackend {
@@ -146,22 +156,41 @@ func (b *MCPClientBackend) ensure(ctx context.Context) error {
 		return b.connErr
 	}
 
+	tools := make([]MCPTool, 0, len(result.Tools))
 	defs := make([]llm.ToolDef, 0, len(result.Tools))
 	for _, t := range result.Tools {
 		schemaBytes, err := json.Marshal(t.InputSchema)
 		if err != nil || len(schemaBytes) == 0 {
 			schemaBytes = []byte(`{"type":"object","additionalProperties":true}`)
 		}
-		defs = append(defs, llm.ToolDef{
+		def := llm.ToolDef{
 			Name:        b.name + "__" + t.Name,
 			Description: t.Description,
 			InputSchema: schemaBytes,
-		})
+		}
+		var outSchema json.RawMessage
+		if t.OutputSchema != nil {
+			if raw, err := json.Marshal(t.OutputSchema); err == nil && string(raw) != "null" {
+				outSchema = raw
+			}
+		}
+		tools = append(tools, MCPTool{Def: def, OutputSchema: outSchema})
+		defs = append(defs, def)
 	}
 
 	b.session = session
+	b.tools = tools
 	b.toolDefs = defs
 	return nil
+}
+
+// DiscoverTools is Tools plus each tool's output schema. Same connection,
+// same tools/list, same naming and input-schema fallback as Tools.
+func (b *MCPClientBackend) DiscoverTools(ctx context.Context) ([]MCPTool, error) {
+	if err := b.ensure(ctx); err != nil {
+		return nil, err
+	}
+	return b.tools, nil
 }
 
 func (b *MCPClientBackend) Tools(ctx context.Context) ([]llm.ToolDef, error) {
