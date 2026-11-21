@@ -61,6 +61,7 @@ async def run_session(
     judge_agent,
     target_model: str,
     tool_caller,
+    mcp_backends: dict[str, Any] | None = None,
     user_turn_mode: UserTurnMode = "verbatim",
     history_mode: HistoryMode = "simulated",
 ) -> SessionOutcome:
@@ -74,8 +75,9 @@ async def run_session(
         return _outcome(session, [], js, 0, 0)
 
     system_prompt = target_mod.build_system_prompt(bundle)
-    tools_spec, _ = target_mod.build_tool_specs(bundle)
-    # Skill is answered from the bundle whatever mock_mcp_tools picked.
+    tools_spec, _ = target_mod.build_tool_specs(bundle, mcp_backends)
+    # Skill is answered from the bundle whatever mock_mcp_tools picked; every
+    # other name (endpoint or exported MCP tool) goes to the inner caller.
     tool_caller = target_mod.SkillToolCaller(bundle, tool_caller)
     declared = {t["function"]["name"] for t in tools_spec}
     # The simulator never sees client_context blocks (spec client-context Scope 7).
