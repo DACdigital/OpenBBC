@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from support.api import Api
+from support.evals import EvalRun, run_eval
 from support.factory import ResourceFactory, Seeded
 from support.fakes import Llm, Mcp
 from support.sql import Db
@@ -64,7 +65,7 @@ def factory(api, db, llm, run_id) -> ResourceFactory:
     return ResourceFactory(api, db, llm, run_id, seed_dsn=DSN)
 
 
-_STACK_FIXTURES = {"stack", "db", "llm", "mcp", "api", "factory", "seeded"}
+_STACK_FIXTURES = {"stack", "db", "llm", "mcp", "api", "factory", "seeded", "real_eval"}
 
 
 @pytest.fixture(autouse=True)
@@ -80,3 +81,14 @@ def reset_fakes(request) -> None:
 @pytest.fixture
 def seeded(factory) -> Seeded:
     return factory.agent()
+
+
+@pytest.fixture(scope="session")
+def real_eval(factory, api, db, llm, mcp) -> EvalRun:
+    """Scenario 4's real-mode eval (kb header override eval-user), shared with later
+    scenarios. Session-scoped and created by its first consumer; since reset_fakes runs
+    after it, the fakes' traffic and the export are snapshotted into the EvalRun.
+    `real_eval.seeded` / `real_eval.eval_id` are what training scenarios build on."""
+    seeded = factory.agent()
+    dataset_version_id = factory.dataset(seeded)
+    return run_eval(factory, api, db, llm, mcp, seeded, dataset_version_id, mock=False)

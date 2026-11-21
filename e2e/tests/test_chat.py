@@ -2,9 +2,8 @@
 
 import json
 
-from support.factory import AGENT_ROLE, MCP_DEFAULT_HEADERS, Seeded, agent_turn_script
-
-SKILL_PROMPT = "ORIGINAL drafting guide"
+from support.factory import (AGENT_ROLE, MCP_DEFAULT_HEADERS, SKILL_PROMPT, Seeded,
+                             agent_turn_script)
 
 
 def _tool_results(messages: list[dict]) -> dict[str, list[dict]]:

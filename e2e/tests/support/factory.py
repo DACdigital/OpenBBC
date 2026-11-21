@@ -17,7 +17,9 @@ SEED_SCRIPT = REPO_ROOT / "scripts" / "seed_bundle.py"
 MCP_URL = "http://fake-mcp:8000/mcp"  # as open-bbcd sees it on the compose network
 MCP_DEFAULT_HEADERS = {"Authorization": "Bearer e2e-static-key"}
 AGENT_ROLE = "fake-agent"
+TARGET_ROLE = "fake-target"  # aikdm eval target (AIKDM_MODEL_TARGET in compose.yml)
 DATASET_IDENTITY = "dataset-user"
+SKILL_PROMPT = "ORIGINAL drafting guide"  # bundle.yaml draft-section
 DATASET_TURNS = [
     ("Search the knowledge base for alpha.", ["Answers the question"]),
     ("Draft a section about alpha.", ["Follows the drafting guide [[require:PATCHED-GUIDE]]"]),
