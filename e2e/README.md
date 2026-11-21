@@ -103,8 +103,9 @@ Control API (plain HTTP on the same app, for tests only):
   - Each role has a FIFO queue of canned replies, loaded by the test through
     `POST /_script {role: [reply, …]}`.
   - A reply is either a text message or a list of tool calls (name + args).
-  - A tool-call reply's arguments may say `{"$from_offered": "Skill"}`. The fake checks that tool
-    was offered and fails loudly if it wasn't.
+  - Every scripted tool-call reply is validated against the tools offered in the request. A call
+    to a tool that wasn't offered (or with arguments that don't fit its schema) gets HTTP 500, which
+    fails the scenario loudly.
 - **Cyclic scripts.** `POST /_script {role, replies, cycle: true}` repeats the list. This lets one
   per-turn script (tool → `Skill` → text) serve any number of turns and evals.
 - **Echo.** A text reply may contain `{{last_tool_result}}`, which is replaced with the content of
@@ -211,16 +212,30 @@ Scenarios 4 and 7 share a module-scoped eval fixture. Every other scenario sets 
 
 ### Running
 
-- `make e2e`:
-  1. `docker compose -p openbbc-e2e -f e2e/compose.yml up -d --build --wait`
-  2. Apply migrations.
-  3. `uv run pytest e2e/tests`
-  4. `down -v`, always.
-- `make e2e-up` / `e2e-down` keep the stack running for debugging.
-- **CI:** a new job `e2e` in `.github/workflows/ci.yml`. It needs the Go and aikdm jobs, runs
-  `make e2e`, and uploads the compose logs on failure. Target time: under 10 minutes.
-- `e2e/` gets its own `pyproject.toml` (pytest, httpx, pyyaml), managed with uv. The fakes image
-  has its own (`mcp`, fastapi, uvicorn).
+From the repo root (needs Docker, `uv`):
+
+- `make -C e2e e2e` builds and starts the stack, runs the suite, and always tears it down
+  (`down -v`), also on Ctrl-C. Logs are printed on failure.
+- For debugging, keep the stack up:
+  - `make -C e2e up` builds the images (including the `jobs`-profile runner) and starts the stack.
+  - `make -C e2e test` runs the suite against it.
+  - One test: `cd e2e && uv run pytest tests/<file>.py::<test> -q`.
+  - `make -C e2e logs` shows all service logs.
+  - `make -C e2e down` removes the stack and its volumes.
+- Postgres is published on the host for read-only inspection: `postgres://e2e:e2e@localhost:18432/e2e`.
+  Other host ports: open-bbcd 18080, fake-llm 18001, fake-mcp 18002 (override with `E2E_*_PORT`).
+- **CI:** job `e2e` in `.github/workflows/ci.yml` runs `make -C e2e e2e` after the Go and Python
+  jobs, and uploads the compose logs as the `e2e-logs` artifact on failure.
+
+### Writing tests
+
+- Create every resource through `support.factory.ResourceFactory`: names are unique per run
+  (`e2e-<run_id>-<kind>-<n>`), so tests don't collide.
+- Both fakes are reset before each test; load the test's own scripts.
+
+### Troubleshooting
+
+- A test fails or hangs: `make -C e2e logs` (add `| grep <service>` to narrow it).
 
 ## Constraints
 
