@@ -1,0 +1,95 @@
+{
+  "no_loadable_skills": {
+    "bundle": {
+      "main_prompt": "No skills here.",
+      "tools": [],
+      "skills": [
+        {
+          "name": "blank"
+        }
+      ]
+    },
+    "tool": null,
+    "results": {
+      "miss_not_offered": {
+        "input": {
+          "name": "pricing"
+        },
+        "is_error": true,
+        "output": {
+          "error": "unknown skill: pricing"
+        }
+      }
+    }
+  },
+  "with_skills": {
+    "bundle": {
+      "main_prompt": "You are a shop assistant.",
+      "tools": [],
+      "skills": [
+        {
+          "name": "pricing",
+          "description": "Price rules",
+          "prompt": "\u003crules\u003e\n  Quote list price; \"VAT\" included.\n\u003c/rules\u003e"
+        },
+        {
+          "name": "blank",
+          "description": "No prompt yet",
+          "prompt": "  \n"
+        },
+        {
+          "name": "returns",
+          "prompt": "Returns within 30 days."
+        }
+      ]
+    },
+    "tool": {
+      "name": "Skill",
+      "description": "Load the prompt for a named skill into your working context. Use when the user's intent matches a skill in skills_index.",
+      "input_schema": {
+        "properties": {
+          "name": {
+            "enum": [
+              "pricing",
+              "returns"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "results": {
+      "hit": {
+        "input": {
+          "name": "pricing"
+        },
+        "is_error": false,
+        "output": {
+          "prompt": "\u003crules\u003e\n  Quote list price; \"VAT\" included.\n\u003c/rules\u003e"
+        }
+      },
+      "miss_empty": {
+        "input": {
+          "name": "blank"
+        },
+        "is_error": true,
+        "output": {
+          "error": "unknown skill: blank"
+        }
+      },
+      "miss_unknown": {
+        "input": {
+          "name": "orphan"
+        },
+        "is_error": true,
+        "output": {
+          "error": "unknown skill: orphan"
+        }
+      }
+    }
+  }
+}
