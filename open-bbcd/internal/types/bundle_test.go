@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -76,5 +77,38 @@ func TestSplitBundle_HandlesEmptyBundle(t *testing.T) {
 func TestSplitBundle_RejectsMalformed(t *testing.T) {
 	if _, _, err := SplitBundle([]byte("not json")); err == nil {
 		t.Fatalf("expected error for malformed input")
+	}
+}
+
+func TestJoinSkills_SkillsMetaOrderWithPrompts(t *testing.T) {
+	arch := Architecture{SkillsMeta: []SkillMetaEntry{
+		{Name: "b", Description: "db"},
+		{Name: "a", Description: "da"},
+		{Name: "empty"},
+	}}
+	p := Prompts{SkillPrompts: map[string]string{"a": "PA", "b": "PB", "orphan": "PO"}}
+	got := JoinSkills(arch, p)
+	want := []BundleSkill{
+		{Name: "b", Description: "db", Prompt: "PB"},
+		{Name: "a", Description: "da", Prompt: "PA"},
+		{Name: "empty"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("JoinSkills = %+v, want %+v", got, want)
+	}
+}
+
+func TestJoinSkills_NoSkillsMetaIsNil(t *testing.T) {
+	if got := JoinSkills(Architecture{}, Prompts{SkillPrompts: map[string]string{"x": "y"}}); got != nil {
+		t.Fatalf("JoinSkills = %#v, want nil", got)
+	}
+}
+
+func TestLoadableSkills_DropsEmptyAndWhitespacePrompts(t *testing.T) {
+	in := []BundleSkill{{Name: "a", Prompt: "PA"}, {Name: "blank", Prompt: " \n\t"}, {Name: "none"}, {Name: "c", Prompt: " PC "}}
+	got := LoadableSkills(in)
+	want := []BundleSkill{{Name: "a", Prompt: "PA"}, {Name: "c", Prompt: " PC "}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("LoadableSkills = %+v, want %+v", got, want)
 	}
 }

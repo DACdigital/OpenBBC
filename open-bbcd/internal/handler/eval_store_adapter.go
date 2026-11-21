@@ -71,13 +71,9 @@ func (a *evalStoreAdapter) GetBundle(ctx context.Context, agentVersionID string)
 		Tools:           arch.Tools,
 		Flows:           arch.Flows,
 		ExternalActions: arch.ExternalActions,
-	}
-	for _, sm := range arch.SkillsMeta {
-		bundle.Skills = append(bundle.Skills, types.BundleSkill{
-			Name:        sm.Name,
-			Description: sm.Description,
-			Prompt:      prompts.SkillPrompts[sm.Name],
-		})
+		// Every skills_meta entry, empty prompts included, so training can
+		// write a first prompt for a skill that has none.
+		Skills: types.JoinSkills(arch, prompts),
 	}
 	out, err := json.Marshal(bundle)
 	if err != nil {
