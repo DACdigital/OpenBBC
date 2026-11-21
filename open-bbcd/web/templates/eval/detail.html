@@ -51,6 +51,13 @@
         </ul>
       </dd></div>
     {{end}}
+    {{if .Eval.MCPHeaderOverrides}}
+      <div class="agent-meta-item"><dt>MCP backend headers</dt><dd>
+        <ul class="eval-header-list">
+          {{range $backend, $hdrs := .Eval.MCPHeaderOverrides}}<li><code>{{$backend}}</code>{{range $name, $_ := $hdrs}}<code>{{$name}}</code>{{end}}</li>{{end}}
+        </ul>
+      </dd></div>
+    {{end}}
     {{template "model_target_row" .ModelMeta}}
     {{template "model_meta_rows" .ModelMeta}}
   </dl>

@@ -92,6 +92,37 @@ Rules of thumb:
   only on a strictly higher score, so an improvement smaller than that can go unpromoted.
   Use `reference` when you need the most stable signal.
 
+## Evaluating MCP-backed agents
+
+When the evaluated agent version has MCP backends attached (`mcp_client` kind), open-bbcd's
+`GET /evals/{id}/export.yaml` lists their tools and writes them under `mcp_backends`. The
+model is offered the same `<backend>__<tool>` names, descriptions and input schemas as a
+deployed turn. `train-agent` uses the same export, so the baseline and every candidate get
+the tools too.
+
+- **Mock mode** (`mock_mcp_tools: true`): no MCP server is contacted during the run. A call
+  that matches a recorded call in the reference transcript (same name and arguments) returns
+  the recorded result. Any other call returns a result synthesized from the tool's
+  `output_schema`, or a generic success stub when the server declared none. The export
+  carries no URL or headers in this mode.
+- **Real mode** (`mock_mcp_tools: false`): `<backend>__*` calls go to the live server over
+  streamable HTTP, with the exported headers. There is one connection per backend per
+  simulated session, opened on the first call and closed when the session ends. A failed
+  connect is sticky for that session. The model sees the same JSON as at runtime:
+  `{"content": [...], "text": "..."}`, or `{"error": "..."}` for transport errors. HTTP
+  endpoint tools are unchanged.
+- **Identity headers.** Set them per backend in the BO "Evaluate" modal (or
+  `mcp_header_overrides` on `POST /agent_versions/{id}/evals`). They override the backend's
+  `default_headers` per header and are sent both when the export lists tools (both modes)
+  and on every real-mode call. Use a dedicated, long-lived test identity, not a real user's
+  credentials: values are stored on the eval and written into the export in plain text.
+- **Discovery must succeed.** If any attached backend can't be reached when the export is
+  built, the export answers 502 (`mcp_discovery_failed`), a pending eval is marked FAILED,
+  and a training session fails instead of staying PENDING. Tune the per-backend timeout with
+  `OPENBBC_EVAL_MCP_DISCOVERY_TIMEOUT` on open-bbcd (default `15s`).
+- **Point real-mode evals at a seeded or test backend.** Side-effecting tools really
+  execute, and results depend on the server's data.
+
 ## Exit codes
 
 | Code | Meaning |

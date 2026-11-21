@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoad_DefaultValues(t *testing.T) {
@@ -164,4 +165,40 @@ func TestLoad_ClientContextMaxBytes(t *testing.T) {
 			t.Fatalf("got %d, want 1024", cfg.Chat.ClientContextMaxBytes)
 		}
 	})
+}
+
+func TestLoad_EvalMCPDiscoveryTimeout(t *testing.T) {
+	const name = "OPENBBC_EVAL_MCP_DISCOVERY_TIMEOUT"
+	t.Run("default", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("DATABASE_URL", "postgres://localhost/test")
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Eval.MCPDiscoveryTimeout != 15*time.Second {
+			t.Fatalf("default = %v, want 15s", cfg.Eval.MCPDiscoveryTimeout)
+		}
+	})
+	t.Run("set", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("DATABASE_URL", "postgres://localhost/test")
+		t.Setenv(name, "3s")
+		cfg, err := Load()
+		if err != nil || cfg.Eval.MCPDiscoveryTimeout != 3*time.Second {
+			t.Fatalf("got %v, %v; want 3s", cfg.Eval.MCPDiscoveryTimeout, err)
+		}
+	})
+	for _, bad := range []string{"0s", "-1s", "abc"} {
+		t.Run(bad, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			t.Setenv("DATABASE_URL", "postgres://localhost/test")
+			t.Setenv(name, bad)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("Load err = %v, want error mentioning %s", err, name)
+			}
+		})
+	}
 }

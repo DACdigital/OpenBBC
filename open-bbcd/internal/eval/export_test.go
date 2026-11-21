@@ -17,6 +17,7 @@ type fakeStore struct {
 	msgs         map[string][]*types.ChatMessage
 	feedback     map[string]map[string]*types.ChatMessageFeedback
 	toolBackends map[string]InputToolBackend
+	mcpBackends  []MCPBackendRef
 }
 
 func (f *fakeStore) GetEval(_ context.Context, _ string) (*types.Eval, error) { return f.eval, nil }
@@ -32,6 +33,10 @@ func (f *fakeStore) GetFeedbackForSession(_ context.Context, sid string) (map[st
 }
 func (f *fakeStore) GetToolBackends(_ context.Context, _ string) (map[string]InputToolBackend, error) {
 	return f.toolBackends, nil
+}
+
+func (f *fakeStore) GetMCPBackends(_ context.Context, _ string) ([]MCPBackendRef, error) {
+	return f.mcpBackends, nil
 }
 
 func TestExportBuild_ShapesPayload(t *testing.T) {

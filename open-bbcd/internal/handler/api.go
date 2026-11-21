@@ -225,6 +225,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	}
 	runtimeModel := cfg.RuntimeModel()
 	evalHandler.WithRuntimeModel(runtimeModel)
+	evalHandler.WithMCPDiscoveryTimeout(cfg.Eval.MCPDiscoveryTimeout)
 	agentDetailHandler.WithTrainedFrom(trainingSessionRepo)
 
 	trainingHandler, err := NewTrainingSessionHandler(&trainingSessionStore{

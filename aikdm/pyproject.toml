@@ -13,6 +13,7 @@ dependencies = [
   "google-adk>=0.4",
   "litellm>=1.50",
   "python-dotenv>=1.0",
+  "mcp>=2.3.0,<3",  # tool_mcp.py imports mcp.shared._httpx_utils (private)
 ]
 
 [project.optional-dependencies]

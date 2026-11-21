@@ -3,11 +3,14 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/eval"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/modelmeta"
@@ -37,6 +40,9 @@ type EvalHandler struct {
 	// runtimeModel is the model this open-bbcd runs agents on
 	// (config.Config.RuntimeModel). "" disables the detail page's mismatch notice.
 	runtimeModel string
+	// mcpDiscoveryTimeout bounds tools/list per MCP backend on export
+	// (config.Eval.MCPDiscoveryTimeout). 0 → eval.DefaultMCPDiscoveryTimeout.
+	mcpDiscoveryTimeout time.Duration
 }
 
 func NewEvalHandler(
@@ -115,6 +121,13 @@ func (h *EvalHandler) WithRuntimeModel(model string) *EvalHandler {
 	return h
 }
 
+// WithMCPDiscoveryTimeout sets the per-backend tools/list bound used by
+// Export (OPENBBC_EVAL_MCP_DISCOVERY_TIMEOUT).
+func (h *EvalHandler) WithMCPDiscoveryTimeout(d time.Duration) *EvalHandler {
+	h.mcpDiscoveryTimeout = d
+	return h
+}
+
 // Create handles POST /agent_versions/{version_id}/evals.
 // Accepts JSON `{"dataset_version_id":"..."}` or a form field of the same
 // name. JSON callers get the eval row back; form callers 303 to detail.
@@ -125,12 +138,14 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 		datasetVersionID string
 		mockMCP          = true // default checked
 		headerOverrides  = map[string]string{}
+		mcpOverridesRaw  []byte
 	)
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		var body struct {
-			DatasetVersionID string            `json:"dataset_version_id"`
-			MockMCPTools     *bool             `json:"mock_mcp_tools,omitempty"`
-			HeaderOverrides  map[string]string `json:"header_overrides,omitempty"`
+			DatasetVersionID   string            `json:"dataset_version_id"`
+			MockMCPTools       *bool             `json:"mock_mcp_tools,omitempty"`
+			HeaderOverrides    map[string]string `json:"header_overrides,omitempty"`
+			MCPHeaderOverrides json.RawMessage   `json:"mcp_header_overrides,omitempty"`
 		}
 		if err := DecodeJSON(r, &body); err != nil {
 			http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -143,6 +158,7 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 		if body.HeaderOverrides != nil {
 			headerOverrides = body.HeaderOverrides
 		}
+		mcpOverridesRaw = body.MCPHeaderOverrides
 	} else {
 		if err := r.ParseForm(); err != nil {
 			Error(w, err)
@@ -156,10 +172,29 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if raw := r.FormValue("mcp_header_overrides_json"); raw != "" {
+			mcpOverridesRaw = []byte(raw)
+		}
+	}
+	mcpOverrides, err := parseMCPHeaderOverrides(mcpOverridesRaw)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	if datasetVersionID == "" {
 		http.Error(w, "dataset_version_id required", http.StatusBadRequest)
 		return
+	}
+	if len(mcpOverrides) > 0 {
+		attached, err := h.repo.ListAttachedBackends(r.Context(), versionID)
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		if msg := validateMCPHeaderOverrides(mcpOverrides, attached); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 	}
 	dv, err := h.dataset.GetVersion(r.Context(), datasetVersionID)
 	if err != nil {
@@ -179,7 +214,7 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Error(w, types.ErrDatasetMissingCriteria)
 		return
 	}
-	e, err := h.repo.Create(r.Context(), versionID, datasetVersionID, mockMCP, headerOverrides)
+	e, err := h.repo.Create(r.Context(), versionID, datasetVersionID, mockMCP, headerOverrides, mcpOverrides)
 	if err != nil {
 		Error(w, err)
 		return
@@ -189,6 +224,47 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/evals/"+e.ID, http.StatusSeeOther)
+}
+
+// parseMCPHeaderOverrides decodes mcp_header_overrides: an object of
+// string-valued objects keyed by backend name. Absent / empty → nil.
+func parseMCPHeaderOverrides(raw []byte) (map[string]map[string]string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var blocks map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return nil, fmt.Errorf("mcp_header_overrides must be an object of {backend: {header: value}}")
+	}
+	out := make(map[string]map[string]string, len(blocks))
+	for name, b := range blocks {
+		var hdrs map[string]string
+		if err := json.Unmarshal(b, &hdrs); err != nil || hdrs == nil {
+			return nil, fmt.Errorf("mcp_header_overrides[%q] must be an object of string values", name)
+		}
+		out[name] = hdrs
+	}
+	return out, nil
+}
+
+// validateMCPHeaderOverrides returns a 400 message when an override names a
+// backend not attached to the version, or an attached backend whose kind is
+// not mcp_client. "" when valid.
+func validateMCPHeaderOverrides(ovr map[string]map[string]string, attached []repository.AttachedBackend) string {
+	kinds := make(map[string]string, len(attached))
+	for _, b := range attached {
+		kinds[b.Name] = b.Kind
+	}
+	for name := range ovr {
+		kind, ok := kinds[name]
+		if !ok {
+			return fmt.Sprintf("mcp_header_overrides: backend %q is not attached to this agent version", name)
+		}
+		if kind != "mcp_client" {
+			return fmt.Sprintf("mcp_header_overrides: backend %q is %s, not mcp_client", name, kind)
+		}
+	}
+	return ""
 }
 
 // Start handles POST /evals/{eval_id}/start.
@@ -205,13 +281,43 @@ func (h *EvalHandler) Start(w http.ResponseWriter, r *http.Request) {
 // Temporary multi-agent gate: when the eval's version has agent_tool_enabled,
 // FailIfMultiAgent fails the eval (if PENDING) and its PENDING training
 // sessions forward and the route answers 409 before building anything.
+//
+// MCP discovery: every attached mcp_client backend is listed. If any fails,
+// the route answers 502 {"error":"mcp_discovery_failed","backend","details"}
+// and a PENDING eval moves to FAILED with "mcp_discovery_failed: <backend>:
+// <details>". Other statuses (e.g. a DONE training source) are untouched;
+// train_from_session.sh fails its own session on a failed export.
 func (h *EvalHandler) Export(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("eval_id")
 	if err := h.repo.FailIfMultiAgent(r.Context(), id); err != nil {
 		Error(w, err)
 		return
 	}
-	payload, err := eval.Build(r.Context(), h.adapter, id)
+	payload, err := eval.BuildWith(r.Context(), h.adapter, id, eval.Options{
+		Timeout: h.mcpDiscoveryTimeout,
+		// Sequential discovery can outlive the server-wide WriteTimeout
+		// (2 slow backends × 15 s ≥ 30 s), which would silently drop the
+		// response and leave the eval PENDING; extend this response's
+		// deadline to cover it.
+		OnDiscovery: func(budget time.Duration) {
+			if err := http.NewResponseController(w).SetWriteDeadline(exportWriteDeadline(time.Now(), budget)); err != nil {
+				slog.Warn("eval export: extend write deadline failed", slog.Any("err", err))
+			}
+		},
+	})
+	var discErr *eval.MCPDiscoveryError
+	if errors.As(err, &discErr) {
+		if ferr := h.repo.FailIfPending(r.Context(), id, discErr.Error()); ferr != nil {
+			Error(w, ferr)
+			return
+		}
+		JSON(w, http.StatusBadGateway, map[string]string{
+			"error":   "mcp_discovery_failed",
+			"backend": discErr.Backend,
+			"details": discErr.Details,
+		})
+		return
+	}
 	if err != nil {
 		Error(w, err)
 		return
@@ -220,6 +326,12 @@ func (h *EvalHandler) Export(w http.ResponseWriter, r *http.Request) {
 	if err := eval.WriteYAML(w, payload); err != nil {
 		Error(w, err)
 	}
+}
+
+// exportWriteDeadline is the export's write deadline: worst-case MCP
+// discovery plus the usual WriteTimeout for building and writing the YAML.
+func exportWriteDeadline(now time.Time, discoveryBudget time.Duration) time.Time {
+	return now.Add(discoveryBudget + WriteTimeout)
 }
 
 // Result handles POST /evals/{eval_id}/result — accepts eval-result.json.
@@ -563,10 +675,22 @@ func (h *EvalHandler) UINewModal(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	attached, err := h.repo.ListAttachedBackends(r.Context(), versionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	var mcpBackends []string
+	for _, b := range attached {
+		if b.Kind == "mcp_client" {
+			mcpBackends = append(mcpBackends, b.Name)
+		}
+	}
 	renderTemplate(w, h.modalTmpl, "eval_new_modal", map[string]any{
-		"VersionID": versionID,
-		"Rows":      rows,
-		"Inflight":  inflight,
+		"VersionID":   versionID,
+		"Rows":        rows,
+		"Inflight":    inflight,
+		"MCPBackends": mcpBackends,
 	})
 }
 

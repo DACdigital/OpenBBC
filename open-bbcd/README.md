@@ -83,7 +83,7 @@ The mux mixes server-rendered htmx UI with a JSON REST API. Fixed paths take pre
 |--------|------|-------------|
 | POST | `/agent_versions/{version_id}/evals` | Create eval for a version. |
 | GET | `/evals`, `/evals/{id}` | List / get eval. |
-| GET | `/evals/{id}/export.yaml` | Export eval as YAML input. |
+| GET | `/evals/{id}/export.yaml` | Export eval as YAML input (includes attached MCP backends' tools under `mcp_backends`; 502 `mcp_discovery_failed` if one cannot be listed). |
 | POST | `/evals/{id}/start`, `/evals/{id}/result`, `/evals/{id}/fail`, `/evals/{id}/upload-result` | Lifecycle transitions. |
 
 ### Training sessions
@@ -184,3 +184,4 @@ Config is env-driven (`internal/config/config.go`, `caarlos0/env` + `joho/godote
 | `AGENT_TOOL_MAX_DEPTH` | `3` | No | Max sub-agent nesting depth (root = 0); integer >= 1. |
 | `AGENT_TOOL_MAX_PARALLEL` | `4` | No | Max concurrent `agent` tool calls per assistant step per session node; integer >= 1. |
 | `OPENBBC_CLIENT_CONTEXT_MAX_BYTES` | `65536` | No | Max size of one turn's `client_context`, measured on its canonical JSON text; integer >= 1. |
+| `OPENBBC_EVAL_MCP_DISCOVERY_TIMEOUT` | `15s` | No | Per-backend bound on MCP `tools/list` when `GET /evals/{id}/export.yaml` lists an attached MCP backend's tools; Go duration > 0. |

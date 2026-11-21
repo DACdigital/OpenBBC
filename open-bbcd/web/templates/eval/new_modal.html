@@ -2,7 +2,7 @@
 <div class="modal" onclick="if(event.target===this)this.remove()">
   <div class="modal-content">
     <h2>Evaluate</h2>
-    <form method="post" action="/agent_versions/{{.VersionID}}/evals" onsubmit="serialiseEvalHeaders(this)">
+    <form method="post" action="/agent_versions/{{.VersionID}}/evals" onsubmit="serialiseEvalHeaders(this); serialiseMcpHeaders(this)">
       <label>
         Dataset
         <select name="dataset_id" class="field-input" onchange="pickLatest(this)">
@@ -34,6 +34,25 @@
           <button type="button" class="btn-secondary btn-add-header">+ Add header</button>
         </div>
         <input type="hidden" name="header_overrides_json" value="{}">
+        {{if .MCPBackends}}
+        <div class="eval-mcp-headers" id="eval-mcp-headers">
+          <label class="feedback-criteria-label">MCP backend headers (per backend)</label>
+          <p class="eval-mcp-hint">
+            Sent to each attached MCP server, over its default headers, when the
+            export lists its tools and, in real mode, on every tool call. Used in
+            both modes. Use a dedicated, long-lived test identity — never a real
+            user's credentials. Values are stored on the eval and are not shown again.
+          </p>
+          {{range .MCPBackends}}
+          <div class="eval-mcp-headers-editor" data-mcp-backend="{{.}}">
+            <div class="eval-mcp-backend-name"><code>{{.}}</code></div>
+            <div class="eval-headers-rows"></div>
+            <button type="button" class="btn-secondary btn-add-header">+ Add header</button>
+          </div>
+          {{end}}
+          <input type="hidden" name="mcp_header_overrides_json" value="{}">
+        </div>
+        {{end}}
       </div>
       <div class="modal-actions">
         <button type="submit" class="btn-primary">Create eval</button>
@@ -78,6 +97,21 @@ function toggleMcpConfig(cb) {
     ? 'Tool calls will be mocked using bundle schemas — no real HTTP calls. Uncheck to run against real MCPs.'
     : 'Tool calls will hit real MCP backends configured on this agent. Provide any header overrides below.';
 }
+function serialiseMcpHeaders(form) {
+  const target = form.querySelector('input[name="mcp_header_overrides_json"]');
+  if (!target) return;
+  const out = {};
+  form.querySelectorAll('.eval-mcp-headers-editor').forEach(ed => {
+    const hdrs = {};
+    ed.querySelectorAll('.eval-header-row').forEach(r => {
+      const k = r.querySelector('.eval-header-key').value.trim();
+      const v = r.querySelector('.eval-header-value').value.trim();
+      if (k) hdrs[k] = v;
+    });
+    if (Object.keys(hdrs).length) out[ed.dataset.mcpBackend] = hdrs;
+  });
+  target.value = JSON.stringify(out);
+}
 function serialiseEvalHeaders(form) {
   const editor = form.querySelector('.eval-headers-editor');
   const target = form.querySelector('input[name="header_overrides_json"]');
@@ -94,7 +128,7 @@ function serialiseEvalHeaders(form) {
 document.addEventListener('click', (e) => {
   const add = e.target.closest('.btn-add-header');
   if (add) {
-    const editor = add.closest('.eval-headers-editor');
+    const editor = add.closest('.eval-headers-editor, .eval-mcp-headers-editor');
     const rows = editor.querySelector('.eval-headers-rows');
     const row = document.createElement('div');
     row.className = 'eval-header-row';

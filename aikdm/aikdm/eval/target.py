@@ -1,14 +1,18 @@
 """Target agent invocation. Sends the eval history to the tested agent
 (bundle's main_prompt as system, the built-in Skill tool plus the bundle's
-tools as function definitions — the same shape the open-bbcd runtime offers).
-Uses LiteLLM directly for the tool loop, since we need to intercept every
-tool_use call and dispatch it through the caller — SkillToolCaller answers
-Skill locally and hands everything else to ToolMock (replay + synthesise) or
-RealHTTPToolCaller (real HTTP against wired backends). Callers are
-duck-typed: only `.call(name, args) -> {"source","result",...}` is used."""
+tools and exported MCP tools as function definitions — the same shape the
+open-bbcd runtime offers). Uses LiteLLM directly for the tool loop, since we
+need to intercept every tool_use call and dispatch it through the caller —
+SkillToolCaller answers Skill locally and hands everything else to ToolMock
+(replay + synthesise) or RealHTTPToolCaller (real HTTP against wired
+backends), behind a ToolRouter that sends exported MCP tools to
+MCPToolCaller. Callers are duck-typed: only
+`.call(name, args) -> {"source","result",...}` is used, and its return value
+may be awaitable."""
 
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -84,10 +88,17 @@ class SkillToolCaller:
         return {"source": "error", "result": {"error": f"unknown skill: {skill}"}}
 
 
-def build_tool_specs(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Returns (LiteLLM-shaped tools list, name→schema for the mock). The
-    Skill tool comes first when offered; it is answered by SkillToolCaller,
-    so it has no mock schema."""
+def build_tool_specs(
+    bundle: dict[str, Any], mcp_backends: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Returns (LiteLLM-shaped tools list, name→schema for the mock).
+
+    The Skill tool comes first when offered; it is answered by
+    SkillToolCaller, so it has no mock schema.
+
+    Exported MCP tools (eval-input-v1 `mcp_backends[*].tools`) follow the
+    bundle's tools with name, description and input_schema exactly as
+    exported; their output_schema is the mock's response_shape."""
     tools: list[dict[str, Any]] = []
     schema_by_name: dict[str, Any] = {}
     skill = build_skill_tool_spec(bundle)
@@ -110,6 +121,21 @@ def build_tool_specs(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], dict
             "body_shape": t.get("body_shape"),
             "response_shape": t.get("response_shape"),
         }
+    for backend in (mcp_backends or {}).values():
+        b = backend.model_dump() if hasattr(backend, "model_dump") else backend
+        for t in b.get("tools") or []:
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": t.get("input_schema"),
+                },
+            })
+            schema_by_name[t["name"]] = {
+                "body_shape": None,
+                "response_shape": t.get("output_schema"),
+            }
     return tools, schema_by_name
 
 
@@ -169,6 +195,8 @@ async def target_turn(
                 out = {"source": "error", "result": {"error": f"invalid JSON arguments: {e}"}}
             else:
                 out = tool_caller.call(tc.function.name, args)
+                if inspect.isawaitable(out):
+                    out = await out
             entry["tool_calls"].append({"name": tc.function.name, "args": args,
                                         "result": out["result"], "source": out["source"]})
             wire_calls.append({"id": tc.id, "type": "function",
