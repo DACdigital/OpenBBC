@@ -67,10 +67,10 @@ We want one suite that proves, on every PR, that:
 | Service | Image | Purpose |
 |---|---|---|
 | `postgres` | postgres:16-alpine | a fresh DB per run; migrations applied by the runner via goose |
-| `open-bbcd` | built from repo `open-bbcd/Dockerfile` | the real daemon. Env: `OPENBBC_LLM_ADAPTER=bifrost`, `OPENBBC_DEFAULT_MODEL=openai/fake-agent`, `OPENAI_BASE_URL=http://fake-llm:8000/v1`, `OPENAI_API_KEY=e2e` |
+| `open-bbcd` | built from repo `open-bbcd/Dockerfile` | the real daemon, which applies migrations itself on boot. Env: `OPENBBC_LLM_ADAPTER=bifrost`, `OPENBBC_DEFAULT_MODEL=openai/fake-agent`, `OPENAI_BASE_URL=http://127.0.0.1:8001` (no `/v1`: Bifrost appends it), `OPENAI_API_KEY=e2e` |
 | `fake-mcp` | `e2e/fakes` image | the authenticated MCP server |
-| `fake-llm` | `e2e/fakes` image | the scripted OpenAI-compatible LLM |
-| `runner` | built from `Dockerfile.aikdm-runner` | runs `run_eval.sh` and `train_from_session.sh` exactly as the drainer does. Env: `OPENBBCD_URL=http://open-bbcd:8080`, `AIKDM_MODEL_TARGET=openai/fake-target`, `AIKDM_MODEL_JUDGE=openai/fake-judge`, `AIKDM_MODEL_USER_SIMULATOR=openai/fake-sim`, `AIKDM_MODEL_TEACHER=openai/fake-teacher`, plus LiteLLM's OpenAI base URL set to fake-llm |
+| `fake-llm` | `e2e/fakes` image, `network_mode: service:open-bbcd` | the scripted OpenAI-compatible LLM. It shares open-bbcd's network namespace because open-bbcd only accepts an http base URL on loopback (`config/llm.go` `validateBaseURL`). The runner reaches it at `http://open-bbcd:8001/v1`, and its host port is published on the `open-bbcd` service |
+| `runner` | built from `Dockerfile.aikdm-runner` | runs `run_eval.sh` and `train_from_session.sh` exactly as the drainer does. Env: `OPENBBCD_URL=http://open-bbcd:8080`, `AIKDM_MODEL_TARGET=openai/fake-target`, `AIKDM_MODEL_JUDGE=openai/fake-judge`, `AIKDM_MODEL_USER_SIMULATOR=openai/fake-sim`, `AIKDM_MODEL_TEACHER=openai/fake-teacher`, `AIKDM_EVAL_USER_TURN_MODE=verbatim` (so reference user turns are replayed and the simulator LLM is not needed), `OPENAI_BASE_URL=http://open-bbcd:8001/v1`, `OPENAI_API_KEY=e2e` |
 
 - The pytest driver runs on the host (or in the CI job) against the published ports. It starts
   runner jobs with `docker compose run --rm runner scripts/run_eval.sh <id>`.
@@ -105,10 +105,16 @@ Control API (plain HTTP on the same app, for tests only):
   - A reply is either a text message or a list of tool calls (name + args).
   - A tool-call reply's arguments may say `{"$from_offered": "Skill"}`. The fake checks that tool
     was offered and fails loudly if it wasn't.
-- **Empty queue:**
-  - `fake-sim` and `fake-judge` fall back to a deterministic default: the simulator replays the
-    reference user turn verbatim, and the judge passes every criterion with the reason "e2e".
-  - The other roles return HTTP 500 with "script exhausted", which fails the scenario loudly.
+- **Cyclic scripts.** `POST /_script {role, replies, cycle: true}` repeats the list. This lets one
+  per-turn script (tool → `Skill` → text) serve any number of turns and evals.
+- **Echo.** A text reply may contain `{{last_tool_result}}`, which is replaced with the content of
+  the last `tool` message in the request. A scripted agent can therefore show what a tool or
+  `Skill` really returned.
+- **`fake-judge` is rule-based, not scripted.** It passes every criterion, except that a
+  criterion containing `[[require:X]]` passes only if `X` appears in the transcript it is judging.
+  It answers in the JSON shape `aikdm/eval/judge.py` parses.
+- **Empty queue for any other role** → HTTP 500 "script exhausted", which fails the scenario
+  loudly. `fake-sim` is unused, because user turns are verbatim.
 - **Request log:** `GET /_requests?role=` returns every request: messages, offered tools, and
   model.
 - **Reset:** `POST /_reset`.
@@ -128,8 +134,16 @@ Control API (plain HTTP on the same app, for tests only):
   `url = http://fake-mcp:8000/mcp` and `default_headers = {Authorization: Bearer e2e-static-key}`.
   Attach it to the version through `agent_version_mcp_backend`, using the existing REST
   endpoints.
-- Create a dataset with one CLOSED version holding one reference session. It has 2 user turns and
-  a recorded `kb__search` call, for the mock-mode replay.
+- Build the dataset through the real product path, not SQL:
+  1. Run a BO chat with 2 user turns. The agent script calls `kb__search(query="alpha")`, then
+     `Skill(draft-section)`, then replies with `{{last_tool_result}}`.
+  2. `POST …/messages/{mid}/feedback` on each final assistant message, with `judge_criteria_json`.
+     The criteria are turn 1: `["Answers the question"]`, and turn 2:
+     `["Follows the drafting guide [[require:PATCHED-GUIDE]]"]`.
+  3. `POST …/assign-dataset`, then `POST /datasets/{id}/close-draft`.
+
+  That gives a CLOSED version whose reference session holds a recorded `kb__search` call (for the
+  mock-mode replay) and 2 criteria. With the original skill prompt, the score is 0.5.
 - Deploy the version through the existing REST endpoint for scenario 2.
 
 ### Scenarios (`e2e/tests/`)
@@ -161,9 +175,9 @@ Each test resets both fakes first and loads its own scripts.
    - Assert:
      - the export has `mcp_backends.kb` with both tools;
      - `fake-mcp` saw `tools/call` with `eval-user`;
-     - the eval ends `DONE` with score < 1.0. The judge script fails exactly one criterion, because
-       `POST /training-sessions` refuses a perfect-score source eval, and scenario 7 trains from
-       this eval;
+     - the eval ends `DONE` with score 0.5. The `PATCHED-GUIDE` criterion fails on the original
+       skill prompt. This matters because `POST /training-sessions` refuses a perfect-score source
+       eval, and scenario 7 trains from this eval;
      - the stored transcript has the real "as eval-user" result and a `Skill` call with
        `source: skill`;
      - the target's system prompt has no `<skill` block.
@@ -183,9 +197,10 @@ Each test resets both fakes first and loads its own scripts.
 7. **Training.**
    - Create a training session from scenario 4's eval with `epochs=1`, `patience=1`, then run
      `train_from_session.sh`.
-   - The teacher script returns one patch to `skill.draft-section.prompt`. The judge scripts make
-     the baseline fail one criterion and the candidate pass all of them, so the candidate is
-     promoted.
+   - The teacher script returns one patch setting `skill.draft-section.prompt` to a text
+     containing `PATCHED-GUIDE`. The baseline scores 0.5. The candidate's `Skill` call returns the
+     patched prompt, its echoed final text contains `PATCHED-GUIDE`, the judge passes it, and the
+     score of 1.0 is promoted.
    - Assert:
      - `fake-mcp` saw `tools/call` with `eval-user` during both the baseline and the candidate;
      - the session ends `DONE`;
