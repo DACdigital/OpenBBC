@@ -96,7 +96,7 @@ func TestEvalGate_CreateRefusedWhenToolEnabled(t *testing.T) {
 	dv := seedDatasetVersion(t, db)
 
 	setToolFlag(t, db, v, true)
-	if _, err := repo.Create(ctx, v, dv, false, nil); !errors.Is(err, types.ErrMultiAgentEvalUnsupported) {
+	if _, err := repo.Create(ctx, v, dv, false, nil, nil); !errors.Is(err, types.ErrMultiAgentEvalUnsupported) {
 		t.Fatalf("Create (tool on) = %v, want ErrMultiAgentEvalUnsupported", err)
 	}
 	if n := countEvals(t, db, v); n != 0 {
@@ -104,7 +104,7 @@ func TestEvalGate_CreateRefusedWhenToolEnabled(t *testing.T) {
 	}
 
 	setToolFlag(t, db, v, false)
-	e, err := repo.Create(ctx, v, dv, false, nil)
+	e, err := repo.Create(ctx, v, dv, false, nil, nil)
 	if err != nil {
 		t.Fatalf("Create (tool off): %v", err)
 	}
@@ -112,7 +112,7 @@ func TestEvalGate_CreateRefusedWhenToolEnabled(t *testing.T) {
 		t.Fatalf("status = %q, want PENDING", e.Status)
 	}
 
-	if _, err := repo.Create(ctx, "00000000-0000-0000-0000-000000000000", dv, false, nil); !errors.Is(err, types.ErrNotFound) {
+	if _, err := repo.Create(ctx, "00000000-0000-0000-0000-000000000000", dv, false, nil, nil); !errors.Is(err, types.ErrNotFound) {
 		t.Fatalf("Create (unknown version) = %v, want ErrNotFound", err)
 	}
 }
@@ -138,7 +138,7 @@ func TestEvalGate_CreateRacesEnable(t *testing.T) {
 		go func() {
 			defer done.Done()
 			start.Wait()
-			_, createErr = evals.Create(ctx, v, dv, false, nil)
+			_, createErr = evals.Create(ctx, v, dv, false, nil, nil)
 		}()
 		go func() {
 			defer done.Done()

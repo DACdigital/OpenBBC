@@ -125,12 +125,14 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 		datasetVersionID string
 		mockMCP          = true // default checked
 		headerOverrides  = map[string]string{}
+		mcpOverridesRaw  []byte
 	)
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		var body struct {
-			DatasetVersionID string            `json:"dataset_version_id"`
-			MockMCPTools     *bool             `json:"mock_mcp_tools,omitempty"`
-			HeaderOverrides  map[string]string `json:"header_overrides,omitempty"`
+			DatasetVersionID   string            `json:"dataset_version_id"`
+			MockMCPTools       *bool             `json:"mock_mcp_tools,omitempty"`
+			HeaderOverrides    map[string]string `json:"header_overrides,omitempty"`
+			MCPHeaderOverrides json.RawMessage   `json:"mcp_header_overrides,omitempty"`
 		}
 		if err := DecodeJSON(r, &body); err != nil {
 			http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -143,6 +145,7 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 		if body.HeaderOverrides != nil {
 			headerOverrides = body.HeaderOverrides
 		}
+		mcpOverridesRaw = body.MCPHeaderOverrides
 	} else {
 		if err := r.ParseForm(); err != nil {
 			Error(w, err)
@@ -156,10 +159,29 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if raw := r.FormValue("mcp_header_overrides_json"); raw != "" {
+			mcpOverridesRaw = []byte(raw)
+		}
+	}
+	mcpOverrides, err := parseMCPHeaderOverrides(mcpOverridesRaw)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	if datasetVersionID == "" {
 		http.Error(w, "dataset_version_id required", http.StatusBadRequest)
 		return
+	}
+	if len(mcpOverrides) > 0 {
+		attached, err := h.repo.ListAttachedBackends(r.Context(), versionID)
+		if err != nil {
+			Error(w, err)
+			return
+		}
+		if msg := validateMCPHeaderOverrides(mcpOverrides, attached); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 	}
 	dv, err := h.dataset.GetVersion(r.Context(), datasetVersionID)
 	if err != nil {
@@ -179,7 +201,7 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Error(w, types.ErrDatasetMissingCriteria)
 		return
 	}
-	e, err := h.repo.Create(r.Context(), versionID, datasetVersionID, mockMCP, headerOverrides)
+	e, err := h.repo.Create(r.Context(), versionID, datasetVersionID, mockMCP, headerOverrides, mcpOverrides)
 	if err != nil {
 		Error(w, err)
 		return
@@ -189,6 +211,47 @@ func (h *EvalHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/evals/"+e.ID, http.StatusSeeOther)
+}
+
+// parseMCPHeaderOverrides decodes mcp_header_overrides: an object of
+// string-valued objects keyed by backend name. Absent / empty → nil.
+func parseMCPHeaderOverrides(raw []byte) (map[string]map[string]string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var blocks map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return nil, fmt.Errorf("mcp_header_overrides must be an object of {backend: {header: value}}")
+	}
+	out := make(map[string]map[string]string, len(blocks))
+	for name, b := range blocks {
+		var hdrs map[string]string
+		if err := json.Unmarshal(b, &hdrs); err != nil || hdrs == nil {
+			return nil, fmt.Errorf("mcp_header_overrides[%q] must be an object of string values", name)
+		}
+		out[name] = hdrs
+	}
+	return out, nil
+}
+
+// validateMCPHeaderOverrides returns a 400 message when an override names a
+// backend not attached to the version, or an attached backend whose kind is
+// not mcp_client. "" when valid.
+func validateMCPHeaderOverrides(ovr map[string]map[string]string, attached []repository.AttachedBackend) string {
+	kinds := make(map[string]string, len(attached))
+	for _, b := range attached {
+		kinds[b.Name] = b.Kind
+	}
+	for name := range ovr {
+		kind, ok := kinds[name]
+		if !ok {
+			return fmt.Sprintf("mcp_header_overrides: backend %q is not attached to this agent version", name)
+		}
+		if kind != "mcp_client" {
+			return fmt.Sprintf("mcp_header_overrides: backend %q is %s, not mcp_client", name, kind)
+		}
+	}
+	return ""
 }
 
 // Start handles POST /evals/{eval_id}/start.

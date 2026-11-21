@@ -16,7 +16,7 @@ type EvalRepository struct{ db *sql.DB }
 func NewEvalRepository(db *sql.DB) *EvalRepository { return &EvalRepository{db: db} }
 
 const evalColumns = `id::text, agent_version_id::text, dataset_version_id::text, status,
-	mock_mcp_tools, header_overrides,
+	mock_mcp_tools, header_overrides, mcp_header_overrides,
 	score, total_criteria, passed_criteria, error_message, aikdm_meta,
 	created_at, started_at, completed_at`
 
@@ -24,14 +24,14 @@ func scanEval(s scanner) (*types.Eval, error) {
 	e := &types.Eval{}
 	var status string
 	var mockMCP bool
-	var headerRaw []byte
+	var headerRaw, mcpHeaderRaw []byte
 	var score sql.NullFloat64
 	var total, passed sql.NullInt64
 	var startedAt, completedAt sql.NullTime
 	var meta []byte
 	if err := s.Scan(
 		&e.ID, &e.AgentVersionID, &e.DatasetVersionID, &status,
-		&mockMCP, &headerRaw,
+		&mockMCP, &headerRaw, &mcpHeaderRaw,
 		&score, &total, &passed, &e.ErrorMessage, &meta,
 		&e.CreatedAt, &startedAt, &completedAt,
 	); err != nil {
@@ -44,6 +44,12 @@ func scanEval(s scanner) (*types.Eval, error) {
 	}
 	if e.HeaderOverrides == nil {
 		e.HeaderOverrides = map[string]string{}
+	}
+	if len(mcpHeaderRaw) > 0 {
+		_ = json.Unmarshal(mcpHeaderRaw, &e.MCPHeaderOverrides)
+	}
+	if e.MCPHeaderOverrides == nil {
+		e.MCPHeaderOverrides = map[string]map[string]string{}
 	}
 	if score.Valid {
 		v := score.Float64
@@ -76,11 +82,21 @@ func scanEval(s scanner) (*types.Eval, error) {
 // transaction as the insert; when agent_tool_enabled is set nothing is
 // inserted and ErrMultiAgentEvalUnsupported is returned. ErrNotFound when the
 // version does not exist.
-func (r *EvalRepository) Create(ctx context.Context, agentVersionID, datasetVersionID string, mockMCP bool, headerOverrides map[string]string) (*types.Eval, error) {
+//
+// mcpHeaderOverrides is stored as given (nil → {}); the handler validates
+// it against the version's attached MCP backends.
+func (r *EvalRepository) Create(ctx context.Context, agentVersionID, datasetVersionID string, mockMCP bool, headerOverrides map[string]string, mcpHeaderOverrides map[string]map[string]string) (*types.Eval, error) {
 	if headerOverrides == nil {
 		headerOverrides = map[string]string{}
 	}
 	headers, err := json.Marshal(headerOverrides)
+	if err != nil {
+		return nil, err
+	}
+	if mcpHeaderOverrides == nil {
+		mcpHeaderOverrides = map[string]map[string]string{}
+	}
+	mcpHeaders, err := json.Marshal(mcpHeaderOverrides)
 	if err != nil {
 		return nil, err
 	}
@@ -97,10 +113,10 @@ func (r *EvalRepository) Create(ctx context.Context, agentVersionID, datasetVers
 		return nil, types.ErrMultiAgentEvalUnsupported
 	}
 	row := tx.QueryRowContext(ctx, `
-		INSERT INTO evals (agent_version_id, dataset_version_id, status, mock_mcp_tools, header_overrides)
-		VALUES ($1::uuid, $2::uuid, 'PENDING', $3, $4::jsonb)
+		INSERT INTO evals (agent_version_id, dataset_version_id, status, mock_mcp_tools, header_overrides, mcp_header_overrides)
+		VALUES ($1::uuid, $2::uuid, 'PENDING', $3, $4::jsonb, $5::jsonb)
 		RETURNING `+evalColumns,
-		agentVersionID, datasetVersionID, mockMCP, headers,
+		agentVersionID, datasetVersionID, mockMCP, headers, mcpHeaders,
 	)
 	e, err := scanEval(row)
 	if err != nil {
@@ -294,6 +310,52 @@ func (r *EvalRepository) FailIfMultiAgent(ctx context.Context, evalID string) er
 		return err
 	}
 	return types.ErrMultiAgentEvalUnsupported
+}
+
+// AttachedBackend is one tool backend attached to an agent version via
+// agent_version_mcp_backend, whatever its kind.
+type AttachedBackend struct {
+	ID     string
+	Name   string
+	Kind   string
+	Config json.RawMessage
+}
+
+// ListAttachedBackends returns every backend attached to versionID through
+// agent_version_mcp_backend, ordered by name. Callers filter on Kind.
+func (r *EvalRepository) ListAttachedBackends(ctx context.Context, versionID string) ([]AttachedBackend, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT tb.id::text, tb.name, tb.kind, tb.config
+		FROM agent_version_mcp_backend avm
+		JOIN tool_backends tb ON tb.id = avm.backend_id
+		WHERE avm.agent_version_id = $1::uuid
+		ORDER BY tb.name
+	`, versionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AttachedBackend
+	for rows.Next() {
+		var b AttachedBackend
+		var cfg []byte
+		if err := rows.Scan(&b.ID, &b.Name, &b.Kind, &cfg); err != nil {
+			return nil, err
+		}
+		b.Config = cfg
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// FailIfPending moves a PENDING eval to FAILED with errorMessage, setting the
+// same columns Fail sets. Any other status is left untouched (no error).
+func (r *EvalRepository) FailIfPending(ctx context.Context, evalID, errorMessage string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE evals SET status='FAILED', error_message=$2, completed_at=now()
+		WHERE id = $1::uuid AND status = 'PENDING'
+	`, evalID, errorMessage)
+	return err
 }
 
 // Submit persists the terminal result. On DONE, inserts every session row

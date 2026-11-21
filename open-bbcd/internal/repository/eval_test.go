@@ -19,7 +19,7 @@ func TestEval_CreateGetList(t *testing.T) {
 	_ = db.QueryRow(`INSERT INTO dataset_versions (dataset_id, status, version_num, closed_at) VALUES ($1::uuid, 'CLOSED', 1, now()) RETURNING id::text`, datasetID).Scan(&dvID)
 
 	repo := NewEvalRepository(db)
-	e, err := repo.Create(context.Background(), versionID, dvID, true, nil)
+	e, err := repo.Create(context.Background(), versionID, dvID, true, nil, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestEval_StartStateMachine(t *testing.T) {
 	_ = db.QueryRow(`INSERT INTO dataset_versions (dataset_id, status, version_num, closed_at) VALUES ($1::uuid, 'CLOSED', 1, now()) RETURNING id::text`, datasetID).Scan(&dvID)
 
 	repo := NewEvalRepository(db)
-	e, _ := repo.Create(context.Background(), versionID, dvID, true, nil)
+	e, _ := repo.Create(context.Background(), versionID, dvID, true, nil, nil)
 	if err := repo.Start(context.Background(), e.ID); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestEval_SubmitDone(t *testing.T) {
 	_, _ = db.Exec(`INSERT INTO dataset_version_sessions (dataset_version_id, session_id) VALUES ($1::uuid, $2::uuid)`, dvID, sessionID)
 
 	repo := NewEvalRepository(db)
-	e, _ := repo.Create(context.Background(), versionID, dvID, true, nil)
+	e, _ := repo.Create(context.Background(), versionID, dvID, true, nil, nil)
 	_ = repo.Start(context.Background(), e.ID)
 
 	result := &types.EvalResult{
@@ -161,7 +161,7 @@ func TestEval_SubmitFailed(t *testing.T) {
 	_ = db.QueryRow(`INSERT INTO dataset_versions (dataset_id, status, version_num, closed_at) VALUES ($1::uuid, 'CLOSED', 1, now()) RETURNING id::text`, datasetID).Scan(&dvID)
 
 	repo := NewEvalRepository(db)
-	e, _ := repo.Create(context.Background(), versionID, dvID, true, nil)
+	e, _ := repo.Create(context.Background(), versionID, dvID, true, nil, nil)
 	_ = repo.Start(context.Background(), e.ID)
 	if err := repo.Fail(context.Background(), e.ID, "aikdm crashed"); err != nil {
 		t.Fatalf("Fail: %v", err)
@@ -187,11 +187,11 @@ func TestEvalRepository_List_FiltersByStatus(t *testing.T) {
 	// Seed: 2 PENDING + 1 IN_PROGRESS + 1 DONE (via manual UPDATE for status transitions
 	// that would otherwise require chat sessions).
 	for i := 0; i < 2; i++ {
-		if _, err := repo.Create(ctx, versionID, dvID, true, nil); err != nil {
+		if _, err := repo.Create(ctx, versionID, dvID, true, nil, nil); err != nil {
 			t.Fatalf("create pending %d: %v", i, err)
 		}
 	}
-	e3, err := repo.Create(ctx, versionID, dvID, true, nil)
+	e3, err := repo.Create(ctx, versionID, dvID, true, nil, nil)
 	if err != nil {
 		t.Fatalf("create e3: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestEvalRepository_List_FiltersByStatus(t *testing.T) {
 	}
 	// Manually mark one as DONE to exercise a fourth status without needing full
 	// Submit() plumbing (chat sessions, message feedback, etc.).
-	e4, err := repo.Create(ctx, versionID, dvID, true, nil)
+	e4, err := repo.Create(ctx, versionID, dvID, true, nil, nil)
 	if err != nil {
 		t.Fatalf("create e4: %v", err)
 	}
