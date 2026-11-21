@@ -403,7 +403,7 @@ func TestMCPClient_DiscoverTools_RetainsOutputSchema(t *testing.T) {
 			respond(w, req.ID, map[string]any{"tools": []map[string]any{
 				{"name": "with_out", "inputSchema": map[string]any{"type": "object"},
 					"outputSchema": map[string]any{"type": "object", "properties": map[string]any{"n": map[string]any{"type": "integer"}}}},
-				{"name": "no_out", "inputSchema": map[string]any{"type": "object"}},
+				{"name": "no_out"},
 			}})
 		}
 	}))
@@ -421,6 +421,9 @@ func TestMCPClient_DiscoverTools_RetainsOutputSchema(t *testing.T) {
 	var out map[string]any
 	if err := json.Unmarshal(got[0].OutputSchema, &out); err != nil || out["type"] != "object" {
 		t.Fatalf("output schema = %s (%v)", got[0].OutputSchema, err)
+	}
+	if string(got[1].Def.InputSchema) != `{"type":"object","additionalProperties":true}` {
+		t.Fatalf("missing inputSchema fallback = %s", got[1].Def.InputSchema)
 	}
 	if got[1].OutputSchema != nil {
 		t.Fatalf("no_out output schema = %s, want nil", got[1].OutputSchema)

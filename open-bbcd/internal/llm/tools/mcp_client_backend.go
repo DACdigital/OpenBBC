@@ -160,7 +160,9 @@ func (b *MCPClientBackend) ensure(ctx context.Context) error {
 	defs := make([]llm.ToolDef, 0, len(result.Tools))
 	for _, t := range result.Tools {
 		schemaBytes, err := json.Marshal(t.InputSchema)
-		if err != nil || len(schemaBytes) == 0 {
+		// A server that omits inputSchema decodes to nil, which marshals to
+		// "null" — treat that as missing too.
+		if err != nil || len(schemaBytes) == 0 || string(schemaBytes) == "null" {
 			schemaBytes = []byte(`{"type":"object","additionalProperties":true}`)
 		}
 		def := llm.ToolDef{
