@@ -1,38 +1,15 @@
 # tests/unit/test_tool_mcp.py
 """MCPToolCaller against a real in-process streamable-HTTP MCP server."""
 
-import socket
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
-import uvicorn
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from aikdm.eval.tool_mcp import MCPToolCaller, ToolRouter
-
-
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def _serve(srv):
-    port = _free_port()
-    server = uvicorn.Server(uvicorn.Config(
-        srv.streamable_http_app(), host="127.0.0.1", port=port, log_level="warning"))
-    t = threading.Thread(target=server.run, daemon=True)
-    t.start()
-    deadline = time.time() + 10
-    while not server.started:
-        assert time.time() < deadline, "MCP test server did not start"
-        time.sleep(0.02)
-    return f"http://127.0.0.1:{port}/mcp", server, t
+from tests.mcp_server import serve as _serve
 
 
 @pytest.fixture(scope="module")
