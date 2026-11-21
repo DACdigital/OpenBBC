@@ -14,7 +14,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
-var update = flag.Bool("update", false, "rewrite the aikdm client_context golden fixtures")
+var update = flag.Bool("update", false, "rewrite the aikdm golden fixtures (client_context, mcp_parity)")
 
 // goldenDir is aikdm's fixture directory, relative to this package.
 const goldenDir = "../../../aikdm/tests/fixtures"
@@ -80,10 +80,10 @@ func checkGolden(t *testing.T, name string, got []byte) {
 	}
 	want, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s: %v (run: go test ./internal/eval -run TestClientContextGoldenExport -update)", path, err)
+		t.Fatalf("read %s: %v (run: go test ./internal/eval -run Golden -update)", path, err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatalf("%s is stale; regenerate with: go test ./internal/eval -run TestClientContextGoldenExport -update\n--- got ---\n%s", path, got)
+		t.Fatalf("%s is stale; regenerate with: go test ./internal/eval -run Golden -update\n--- got ---\n%s", path, got)
 	}
 }
 
