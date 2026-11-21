@@ -1,14 +1,9 @@
 """Smoke tests for the compose stack (run after `make -C e2e up`)."""
-import os
 import subprocess
-from pathlib import Path
 
 import httpx
-
-OPENBBCD = f"http://localhost:{os.environ.get('E2E_OPENBBCD_PORT', '18080')}"
-LLM = f"http://localhost:{os.environ.get('E2E_LLM_PORT', '18001')}"
-MCP = f"http://localhost:{os.environ.get('E2E_MCP_PORT', '18002')}"
-COMPOSE_FILE = Path(__file__).resolve().parent.parent / "compose.yml"
+from conftest import LLM, MCP, OPENBBCD
+from support.runner import COMPOSE
 
 
 def test_services_healthy():
@@ -19,8 +14,7 @@ def test_services_healthy():
 
 def test_runner_reaches_llm():
     r = subprocess.run(
-        ["docker", "compose", "-p", "openbbc-e2e", "-f", str(COMPOSE_FILE),
-         "run", "--rm", "-T", "runner",
+        [*COMPOSE, "run", "--rm", "-T", "runner",
          "curl", "-fsS", "http://open-bbcd:8001/_requests"],
         capture_output=True, text=True, timeout=180,
     )

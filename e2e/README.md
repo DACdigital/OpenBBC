@@ -66,7 +66,7 @@ We want one suite that proves, on every PR, that:
 
 | Service | Image | Purpose |
 |---|---|---|
-| `postgres` | postgres:16-alpine | a fresh DB per run; migrations applied by the runner via goose |
+| `postgres` | postgres:16-alpine | a fresh DB per run; migrations are applied by `open-bbcd` on boot |
 | `open-bbcd` | built from repo `open-bbcd/Dockerfile` | the real daemon, which applies migrations itself on boot. Env: `OPENBBC_LLM_ADAPTER=bifrost`, `OPENBBC_DEFAULT_MODEL=openai/fake-agent`, `OPENAI_BASE_URL=http://127.0.0.1:8001` (no `/v1`: Bifrost appends it), `OPENAI_API_KEY=e2e` |
 | `fake-mcp` | `e2e/fakes` image | the authenticated MCP server |
 | `fake-llm` | `e2e/fakes` image, `network_mode: service:open-bbcd` | the scripted OpenAI-compatible LLM. It shares open-bbcd's network namespace because open-bbcd only accepts an http base URL on loopback (`config/llm.go` `validateBaseURL`). The runner reaches it at `http://open-bbcd:8001/v1`, and its host port is published on the `open-bbcd` service |
@@ -92,7 +92,7 @@ Tools:
 
 Control API (plain HTTP on the same app, for tests only):
 - `GET /_calls` → every request seen: method, tool name, args, and all headers.
-- `POST /_reset` → clears that list.
+- `POST /_reset` → clears that list and resets down mode.
 - `POST /_mode {"down": true}` → every request gets 503, for the discovery-failure scenario.
 
 ### `fake-llm` (Python, FastAPI, `POST /v1/chat/completions`)
@@ -104,8 +104,7 @@ Control API (plain HTTP on the same app, for tests only):
     `POST /_script {role: [reply, …]}`.
   - A reply is either a text message or a list of tool calls (name + args).
   - Every scripted tool-call reply is validated against the tools offered in the request. A call
-    to a tool that wasn't offered (or with arguments that don't fit its schema) gets HTTP 500, which
-    fails the scenario loudly.
+    to a tool that wasn't offered gets HTTP 500, which fails the scenario loudly.
 - **Cyclic scripts.** `POST /_script {role, replies, cycle: true}` repeats the list. This lets one
   per-turn script (tool → `Skill` → text) serve any number of turns and evals.
 - **Echo.** A text reply may contain `{{last_tool_result}}`, which is replaced with the content of
@@ -208,7 +207,7 @@ Each test resets both fakes first and loads its own scripts.
      - a new version exists whose `skill_prompts.draft-section` holds the patched text;
      - a BO chat on the new version calling `Skill(draft-section)` returns the patched text.
 
-Scenarios 4 and 7 share a module-scoped eval fixture. Every other scenario sets up its own state.
+Scenarios 4, 6 (training half) and 7 share a session-scoped `real_eval`. Every other scenario sets up its own state.
 
 ### Running
 
@@ -218,11 +217,11 @@ From the repo root (needs Docker, `uv`):
   (`down -v`), also on Ctrl-C. On failure the full logs go to `e2e/e2e-logs.txt` (last 200 lines also printed).
 - For debugging, keep the stack up:
   - `make -C e2e up` builds the images (including the `jobs`-profile runner) and starts the stack.
-  - `make -C e2e test` runs the suite against it.
+  - `make -C e2e test` runs the fakes' unit tests (no stack needed), then the suite against the stack.
   - One test: `cd e2e && uv run pytest tests/<file>.py::<test> -q`.
   - `make -C e2e logs` shows all service logs.
   - `make -C e2e down` removes the stack and its volumes.
-- Postgres is published on the host for read-only inspection: `postgres://e2e:e2e@localhost:18432/e2e`.
+- Postgres is published on the host for inspection (tests read it read-only; only `ResourceFactory` seeding writes): `postgres://e2e:e2e@localhost:18432/e2e`.
   Other host ports: open-bbcd 18080, fake-llm 18001, fake-mcp 18002 (override with `E2E_*_PORT`).
 - **CI:** job `e2e` in `.github/workflows/ci.yml` runs `make -C e2e e2e` after the Go and Python
   jobs, and on failure uploads `e2e/e2e-logs.txt` (all compose logs, written before teardown) as the `e2e-logs` artifact.
