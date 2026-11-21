@@ -81,7 +81,7 @@ class _Connection:
                     tool, args, fut = item
                     try:
                         res = await session.call_tool(
-                            tool, args or None, read_timeout_seconds=self._call_timeout_s)
+                            tool, args, read_timeout_seconds=self._call_timeout_s)
                     except Exception as e:  # noqa: BLE001 — handed to the caller
                         if not fut.done():
                             fut.set_exception(e)
