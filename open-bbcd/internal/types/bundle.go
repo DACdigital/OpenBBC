@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Bundle is the shape emitted by aikdm. The Go side never edits a bundle —
@@ -11,12 +12,12 @@ import (
 // split is shape-preserving: anything aikdm puts under a known key passes
 // through verbatim into Architecture or Prompts.
 type Bundle struct {
-	Metadata        json.RawMessage   `json:"metadata,omitempty"`
-	MainPrompt      string            `json:"main_prompt"`
-	Tools           json.RawMessage   `json:"tools,omitempty"`
-	Skills          []BundleSkill     `json:"skills,omitempty"`
-	Flows           json.RawMessage   `json:"flows,omitempty"`
-	ExternalActions json.RawMessage   `json:"external_actions,omitempty"`
+	Metadata        json.RawMessage `json:"metadata,omitempty"`
+	MainPrompt      string          `json:"main_prompt"`
+	Tools           json.RawMessage `json:"tools,omitempty"`
+	Skills          []BundleSkill   `json:"skills,omitempty"`
+	Flows           json.RawMessage `json:"flows,omitempty"`
+	ExternalActions json.RawMessage `json:"external_actions,omitempty"`
 }
 
 // BundleSkill mirrors the per-skill block in the aikdm bundle. Description
@@ -91,4 +92,35 @@ func SplitBundle(bundleJSON json.RawMessage) (json.RawMessage, json.RawMessage, 
 		return nil, nil, fmt.Errorf("marshal prompts: %w", err)
 	}
 	return archJSON, promptsJSON, nil
+}
+
+// JoinSkills is the inverse of SplitBundle for skills: one entry per
+// skills_meta item, in skills_meta order, with the prompt taken from
+// p.SkillPrompts (empty when absent). Names present only in skill_prompts
+// are ignored. Returns nil when the architecture lists no skills.
+func JoinSkills(arch Architecture, p Prompts) []BundleSkill {
+	if len(arch.SkillsMeta) == 0 {
+		return nil
+	}
+	out := make([]BundleSkill, 0, len(arch.SkillsMeta))
+	for _, sm := range arch.SkillsMeta {
+		out = append(out, BundleSkill{
+			Name:        sm.Name,
+			Description: sm.Description,
+			Prompt:      p.SkillPrompts[sm.Name],
+		})
+	}
+	return out
+}
+
+// LoadableSkills keeps the skills the Skill tool can serve: those whose
+// prompt is non-empty after trimming whitespace. Order is preserved.
+func LoadableSkills(skills []BundleSkill) []BundleSkill {
+	var out []BundleSkill
+	for _, s := range skills {
+		if strings.TrimSpace(s.Prompt) != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

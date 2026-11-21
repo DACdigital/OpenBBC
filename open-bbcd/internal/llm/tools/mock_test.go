@@ -8,17 +8,18 @@ import (
 
 func TestMockHandler_Tools_FromBundle(t *testing.T) {
 	bundle := []byte(`{
-        "skills":[
-            {"name":"place_order","description":"d","prompt":"P"},
-            {"name":"check_rewards","description":"d2","prompt":"P2"}
+        "skills_meta":[
+            {"name":"place_order","description":"d"},
+            {"name":"check_rewards","description":"d2"}
         ],
         "tools":[
             {"name":"query_inventory","description":"List stock.","method":"GET","path":"/api/inventory","capability":"inventory"},
             {"name":"submit_order","description":"Place an order.","method":"POST","path":"/api/orders","capability":"orders"}
         ]
     }`)
+	skills := prodSkills(t, string(bundle), `{"main_prompt":"M","skill_prompts":{"place_order":"P","check_rewards":"P2"}}`)
 	h := NewMockHandler()
-	defs, err := h.Tools(bundle)
+	defs, err := h.Tools(bundle, skills)
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
@@ -49,21 +50,34 @@ func TestMockHandler_Tools_FromBundle(t *testing.T) {
 }
 
 func TestMockHandler_Tools_SkipsToolWithEmptyName(t *testing.T) {
-	bundle := []byte(`{"skills":[],"tools":[{"name":"","description":"d","method":"GET","path":"/x"}]}`)
-	defs, err := NewMockHandler().Tools(bundle)
+	bundle := []byte(`{"skills_meta":[{"name":"s"}],"tools":[{"name":"","description":"d","method":"GET","path":"/x"},{"name":"kept","method":"GET","path":"/y"}]}`)
+	skills := prodSkills(t, string(bundle), `{"main_prompt":"M","skill_prompts":{"s":"P"}}`)
+	defs, err := NewMockHandler().Tools(bundle, skills)
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
-	// Only the Skill meta-tool — the tool with empty name is skipped.
-	if len(defs) != 1 {
-		t.Fatalf("expected 1 tool (Skill only), got %d", len(defs))
+	// Skill + kept — the tool with empty name is skipped.
+	if len(defs) != 2 || defs[0].Name != "Skill" || defs[1].Name != "kept" {
+		t.Fatalf("expected [Skill kept], got %+v", defs)
+	}
+}
+
+func TestMockHandler_Tools_NoLoadableSkills_OmitsSkill(t *testing.T) {
+	bundle := []byte(`{"skills_meta":[{"name":"s"}],"tools":[{"name":"kept","method":"GET","path":"/y"}]}`)
+	defs, err := NewMockHandler().Tools(bundle, prodSkills(t, string(bundle), `{"main_prompt":"M"}`))
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	if len(defs) != 1 || defs[0].Name != "kept" {
+		t.Fatalf("expected [kept], got %+v", defs)
 	}
 }
 
 func TestMockHandler_Call_Skill_LookupSucceeds(t *testing.T) {
-	bundle := []byte(`{"skills":[{"name":"place_order","description":"d","prompt":"SKILL_PROMPT"}]}`)
+	bundle := []byte(`{"skills_meta":[{"name":"place_order","description":"d"}]}`)
+	skills := prodSkills(t, string(bundle), `{"main_prompt":"M","skill_prompts":{"place_order":"SKILL_PROMPT"}}`)
 	h := NewMockHandler()
-	res, err := h.Call(context.Background(), bundle, Call{
+	res, err := h.Call(context.Background(), bundle, skills, Call{
 		ID:    "tu_1",
 		Name:  "Skill",
 		Input: []byte(`{"name":"place_order"}`),
@@ -89,8 +103,9 @@ func TestMockHandler_Call_Skill_LookupSucceeds(t *testing.T) {
 }
 
 func TestMockHandler_Call_Skill_UnknownReturnsIsError(t *testing.T) {
-	bundle := []byte(`{"skills":[{"name":"place_order","description":"d","prompt":"P"}]}`)
-	res, err := NewMockHandler().Call(context.Background(), bundle, Call{
+	bundle := []byte(`{"skills_meta":[{"name":"place_order","description":"d"}]}`)
+	skills := prodSkills(t, string(bundle), `{"main_prompt":"M","skill_prompts":{"place_order":"P"}}`)
+	res, err := NewMockHandler().Call(context.Background(), bundle, skills, Call{
 		ID:    "tu_2",
 		Name:  "Skill",
 		Input: []byte(`{"name":"nonexistent"}`),
@@ -105,7 +120,7 @@ func TestMockHandler_Call_Skill_UnknownReturnsIsError(t *testing.T) {
 
 func TestMockHandler_Call_ToolEcho(t *testing.T) {
 	bundle := []byte(`{"tools":[{"name":"submit_order","description":"d","method":"POST","path":"/api/orders","capability":"orders"}]}`)
-	res, _ := NewMockHandler().Call(context.Background(), bundle, Call{
+	res, _ := NewMockHandler().Call(context.Background(), bundle, nil, Call{
 		ID:    "tu_1",
 		Name:  "submit_order",
 		Input: []byte(`{"item":"latte"}`),

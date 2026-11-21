@@ -9,10 +9,12 @@ import (
 	"strings"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
 // Composite is the wired-in tools.Handler. It owns:
-//  1. The built-in Skill meta-tool (bundle-driven, identical to MockHandler).
+//  1. The built-in Skill meta-tool (resolved from the version's joined
+//     skills, identical to MockHandler).
 //  2. N runtime Backends constructed per chat session.
 //
 // Composite is NOT safe for concurrent use across sessions: each chat session
@@ -23,15 +25,17 @@ type Composite struct {
 
 func NewComposite(backends []Backend) *Composite { return &Composite{backends: backends} }
 
-func (c *Composite) Tools(bundle json.RawMessage) ([]llm.ToolDef, error) {
+// Tools ignores arch: each backend already holds its own endpoint list.
+func (c *Composite) Tools(_ json.RawMessage, skills []types.BundleSkill) ([]llm.ToolDef, error) {
 	out := []llm.ToolDef{}
 
-	// Skill meta-tool first (consistent placement for the LLM).
-	skill, err := buildSkillToolDef(bundle)
-	if err != nil {
+	// Skill meta-tool first (consistent placement for the LLM), when any
+	// skill is loadable.
+	if skill, ok, err := buildSkillToolDef(skills); err != nil {
 		return nil, err
+	} else if ok {
+		out = append(out, skill)
 	}
-	out = append(out, skill)
 
 	for _, be := range c.backends {
 		defs, err := be.Tools(context.Background())
@@ -43,9 +47,10 @@ func (c *Composite) Tools(bundle json.RawMessage) ([]llm.ToolDef, error) {
 	return out, nil
 }
 
-func (c *Composite) Call(ctx context.Context, bundle json.RawMessage, call Call) (Result, error) {
+func (c *Composite) Call(ctx context.Context, _ json.RawMessage, skills []types.BundleSkill, call Call) (Result, error) {
+	// Intercepted before backend routing even when Skill was not offered.
 	if call.Name == SkillToolName {
-		return callSkillMetaTool(bundle, call)
+		return callSkillMetaTool(skills, call)
 	}
 	for _, be := range c.backends {
 		prefix := be.Name() + "__"
@@ -91,26 +96,20 @@ var (
 
 // --- Skill meta-tool shared helpers ---
 
-// bundleSkillShape is the minimum bundle shape needed to resolve skills.
-// It is intentionally separate from bundleShape (MockHandler's full shape)
-// so the two handlers remain independently evolvable.
-type bundleSkillShape struct {
-	Skills []struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Prompt      string `json:"prompt"`
-	} `json:"skills"`
-}
+// skillToolDescription is the LLM-visible Skill description. aikdm's eval
+// target mirrors it (aikdm/tests/fixtures/skill_tool_parity.json pins both).
+const skillToolDescription = "Load the prompt for a named skill into your working context. Use when the user's intent matches a skill in skills_index."
 
-func buildSkillToolDef(bundle json.RawMessage) (llm.ToolDef, error) {
-	var b bundleSkillShape
-	if len(bundle) > 0 {
-		if err := json.Unmarshal(bundle, &b); err != nil {
-			return llm.ToolDef{}, fmt.Errorf("tools: parse bundle for Skill: %w", err)
-		}
+// buildSkillToolDef returns the Skill tool def whose enum lists the loadable
+// skills in order. ok is false when no skill is loadable: the tool is then
+// not offered.
+func buildSkillToolDef(skills []types.BundleSkill) (llm.ToolDef, bool, error) {
+	loadable := types.LoadableSkills(skills)
+	if len(loadable) == 0 {
+		return llm.ToolDef{}, false, nil
 	}
-	names := make([]string, len(b.Skills))
-	for i, s := range b.Skills {
+	names := make([]string, len(loadable))
+	for i, s := range loadable {
 		names[i] = s.Name
 	}
 	schema, err := json.Marshal(map[string]any{
@@ -121,29 +120,26 @@ func buildSkillToolDef(bundle json.RawMessage) (llm.ToolDef, error) {
 		"required": []string{"name"},
 	})
 	if err != nil {
-		return llm.ToolDef{}, err
+		return llm.ToolDef{}, false, err
 	}
 	return llm.ToolDef{
 		Name:        SkillToolName,
-		Description: "Load the prompt for a named skill into your working context. Use when the user's intent matches a skill in skills_index.",
+		Description: skillToolDescription,
 		InputSchema: schema,
-	}, nil
+	}, true, nil
 }
 
-func callSkillMetaTool(bundle json.RawMessage, call Call) (Result, error) {
-	var b bundleSkillShape
-	if len(bundle) > 0 {
-		if err := json.Unmarshal(bundle, &b); err != nil {
-			return Result{ToolUseID: call.ID}, fmt.Errorf("tools: parse bundle for Skill call: %w", err)
-		}
-	}
+// callSkillMetaTool answers a Skill call: {"prompt": ...} for a loadable
+// name, {"error": "unknown skill: <name>"} (IsError) for anything else,
+// including a skills_meta name with an empty prompt.
+func callSkillMetaTool(skills []types.BundleSkill, call Call) (Result, error) {
 	var args struct {
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(call.Input, &args); err != nil {
 		return Result{ToolUseID: call.ID}, fmt.Errorf("tools: parse Skill input: %w", err)
 	}
-	for _, s := range b.Skills {
+	for _, s := range types.LoadableSkills(skills) {
 		if s.Name == args.Name {
 			out, _ := json.Marshal(map[string]string{"prompt": s.Prompt})
 			return Result{ToolUseID: call.ID, Output: out}, nil
