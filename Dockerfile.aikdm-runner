@@ -33,6 +33,10 @@ WORKDIR /repo
 COPY --from=builder --chown=runner:runner /repo/aikdm /repo/aikdm
 COPY --chown=runner:runner scripts /repo/scripts
 ENV PATH="/repo/aikdm/.venv/bin:$PATH"
+# runner is a system user with HOME=/nonexistent, so uv cannot create its
+# default cache (~/.cache/uv) and every `uv run` in scripts/ fails. Point it
+# at a writable path (also writable under the chart's runAsUser 65532).
+ENV UV_CACHE_DIR=/tmp/uv-cache
 USER runner
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["bash"]
