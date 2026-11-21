@@ -97,6 +97,9 @@ class ResourceFactory:
         if r.returncode != 0:
             raise AssertionError(f"seed_bundle.py exited {r.returncode}\n{r.stdout}\n{r.stderr}")
 
+    def attach_backend(self, version_id: str, backend_id: str) -> None:
+        self.api.attach_backend(version_id, backend_id)
+
     # --- chats and deployed sessions ---------------------------------------------
 
     def chat(self, seeded: Seeded) -> str:

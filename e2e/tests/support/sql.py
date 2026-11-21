@@ -47,6 +47,11 @@ class Db:
             raise AssertionError(f"training session {sid} not found")
         return row["v"]
 
+    def version_backend_ids(self, version_id: str) -> set[str]:
+        rows = self._all("SELECT backend_id::text AS b FROM agent_version_mcp_backend "
+                         "WHERE agent_version_id = %s::uuid", version_id)
+        return {r["b"] for r in rows}
+
     def backend_id(self, name: str) -> str:
         row = self._one("SELECT id::text FROM tool_backends WHERE name = %s", name)
         if row is None:
