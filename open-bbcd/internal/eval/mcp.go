@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
+	"net/http"
 	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/tools"
@@ -126,9 +126,7 @@ func buildMCPBackends(ctx context.Context, refs []MCPBackendRef, mock bool, over
 		if !mock {
 			entry.URL = ref.Config.URL
 			entry.Transport = ref.Config.Transport
-			headers := map[string]string{}
-			maps.Copy(headers, ref.Config.DefaultHeaders)
-			maps.Copy(headers, ovr)
+			headers := mergeHeaders(ref.Config.DefaultHeaders, ovr)
 			if len(headers) > 0 {
 				entry.Headers = headers
 			}
@@ -136,4 +134,19 @@ func buildMCPBackends(ctx context.Context, refs []MCPBackendRef, mock bool, over
 		out[ref.Name] = entry
 	}
 	return out, nil
+}
+
+// mergeHeaders applies overrides over defaults per header, keyed by
+// http.CanonicalHeaderKey: header names are case-insensitive and the runtime
+// transport (Header.Set) treats {"X-User"} and {"x-user"} as one header, so
+// the export must carry exactly one entry for them, the override winning.
+func mergeHeaders(defaults, overrides map[string]string) map[string]string {
+	out := make(map[string]string, len(defaults)+len(overrides))
+	for k, v := range defaults {
+		out[http.CanonicalHeaderKey(k)] = v
+	}
+	for k, v := range overrides {
+		out[http.CanonicalHeaderKey(k)] = v
+	}
+	return out
 }

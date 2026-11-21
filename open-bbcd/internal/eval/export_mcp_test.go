@@ -4,7 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,5 +164,62 @@ func TestExportBuild_MCPBackends_TimeoutBounded(t *testing.T) {
 	}
 	if d.gotDeadline <= 14*time.Second || d.gotDeadline > DefaultMCPDiscoveryTimeout {
 		t.Errorf("default deadline = %v, want ~15s", d.gotDeadline)
+	}
+}
+
+// A default and an override that differ only in header-name case are one
+// header (HTTP names are case-insensitive; the runtime transport uses
+// Header.Set). The export must carry exactly one entry with the override
+// value, and discovery must send only the override value.
+func TestExportBuild_MCPBackends_HeaderMergeCaseInsensitive(t *testing.T) {
+	upstream := mcpParityServer(t)
+	target, _ := url.Parse(upstream.URL)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	var mu sync.Mutex
+	var seen [][]string
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Values("X-User"))
+		mu.Unlock()
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(front.Close)
+
+	s := &fakeStore{
+		eval: &types.Eval{
+			ID: "e-mcp", AgentVersionID: "av-1", DatasetVersionID: "dv-1",
+			MCPHeaderOverrides: map[string]map[string]string{"kb": {"x-user": "test"}},
+		},
+		bundle: []byte(`{"main_prompt":"hi","tools":[]}`),
+		mcpBackends: []MCPBackendRef{{
+			ID: "b-kb", Name: "kb",
+			Config: tools.MCPBackendCfg{
+				URL: front.URL, Transport: "streamable_http",
+				DefaultHeaders: map[string]string{"X-User": "svc"},
+			},
+		}},
+	}
+	got, err := BuildWith(context.Background(), s, "e-mcp", Options{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	hdrs := got.MCPBackends["kb"].Headers
+	if len(hdrs) != 1 {
+		t.Fatalf("headers = %v, want exactly one X-User entry", hdrs)
+	}
+	for _, v := range hdrs {
+		if v != "test" {
+			t.Errorf("headers = %v, want the override value", hdrs)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 {
+		t.Fatal("discovery sent no requests")
+	}
+	for i, vals := range seen {
+		if len(vals) != 1 || vals[0] != "test" {
+			t.Errorf("request %d X-User = %v, want [test]", i, vals)
+		}
 	}
 }
