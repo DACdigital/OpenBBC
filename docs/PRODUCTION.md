@@ -347,7 +347,8 @@ To confirm which adapter serves traffic, check the boot line `"llm adapter ready
 call then logs an `"llm call"` line with `adapter`, `model`, `stop_reason`, token counts,
 `reasoning_chars` and `duration_ms`. `reasoning_chars` counts the reasoning ("thinking")
 characters the model streamed; only the `bifrost` adapter fills it (0 on `anthropic`), and
-the reasoning text itself is never shown to users.
+the reasoning text itself is never shown to users. It is also 0 when a gateway streams no
+usage chunk.
 
 ### 7.1. An OpenAI-compatible gateway (e.g. a client's Bifrost gateway)
 
@@ -418,11 +419,13 @@ OPENBBC_LLM_REQUEST_EXTRAS='[{"match":"*/glm-*","headers":{"x-bf-passthrough-ext
   alphas CronJob, so generation only gets it from the Secret). `open-bbcd` only sends to a
   `<PROVIDER>_BASE_URL` that is `https` (or plain `http` to loopback); `aikdm` does not
   check LiteLLM's `OPENAI_BASE_URL`, so make sure it is `https` when a header carries a
-  credential.
+  credential. With `AIKDM_LOG_LEVEL=DEBUG`, LiteLLM's own request log masks only headers
+  named like `token`, `key`, `secret` or `authorization`, so do not run DEBUG in
+  production with secret extras under other header names.
 
 ### 7.3. LLM timeouts (`open-bbcd`)
 
-- `OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS` — positive integer. On `bifrost` it is the
+- `OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS` — integer 1–86400. On `bifrost` it is the
   per-request timeout (default 300 when unset). On `anthropic` it is applied only when
   set (unset: no timeout, as before) and bounds a **whole streaming turn**, including
   reading the stream, so set it above your longest expected turn.

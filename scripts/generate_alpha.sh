@@ -21,6 +21,9 @@
 #   AIKDM_MODEL_GENERATOR / AIKDM_MODEL_CRITIC  models (default claude-haiku-4-5)
 #   <PROVIDER>_API_KEY the key of each of those models' providers
 #                      (ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY)
+#                      This script checks only the generator/critic keys, but
+#                      aikdm's load_settings still requires keys for all six
+#                      roles: set every AIKDM_MODEL_* for a non-Anthropic setup.
 #   OPENBBC_LLM_REQUEST_EXTRAS  optional per-model extra headers/body, read by aikdm
 #
 # open-bbcd/.env and aikdm/.env are auto-sourced if present.
