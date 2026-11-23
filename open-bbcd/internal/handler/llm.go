@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/anthropic"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/bifrost"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llmextras"
 )
 
 // newBifrost is a seam so tests can force an init failure.
@@ -19,7 +21,9 @@ var newBifrost = bifrost.New
 // shutdown func releases adapter resources; it is a no-op for the direct
 // Anthropic adapter. One adapter serves both orchestrators and every
 // sub-agent. Either adapter is wrapped by llm.WithCallLog, so with
-// LOG_LEVEL=debug every LLM call logs the adapter that served it.
+// LOG_LEVEL=debug every LLM call logs the adapter that served it. The
+// OPENBBC_LLM_REQUEST_EXTRAS rules (names and keys only, never values) and
+// the active one are logged next to "llm adapter ready".
 func NewLLM(cfg *config.Config, logger *slog.Logger) (llm.LLM, func(), error) {
 	if cfg.LLM.Adapter == config.LLMAdapterBifrost {
 		b, err := newBifrost(context.Background(), cfg.LLM, logger)
@@ -27,10 +31,15 @@ func NewLLM(cfg *config.Config, logger *slog.Logger) (llm.LLM, func(), error) {
 			return nil, nil, err
 		}
 		logger.Info("llm adapter ready", slog.String("adapter", b.Name()), slog.String("model", cfg.LLM.Model))
+		llmextras.LogRules(logger, cfg.LLMRequestExtras, cfg.LLM.Extras)
 		return llm.WithCallLog(b, logger), b.Shutdown, nil
 	}
-	a := anthropic.New(cfg.Anthropic)
+	a := anthropic.NewWithOptions(cfg.Anthropic, anthropic.Options{
+		Extras:         cfg.LLM.Extras,
+		RequestTimeout: time.Duration(cfg.LLM.RequestTimeoutSeconds) * time.Second,
+	})
 	logger.Info("llm adapter ready", slog.String("adapter", a.Name()), slog.String("model", cfg.LLMModel()))
+	llmextras.LogRules(logger, cfg.LLMRequestExtras, cfg.LLM.Extras)
 	return llm.WithCallLog(a, logger), func() {}, nil
 }
 

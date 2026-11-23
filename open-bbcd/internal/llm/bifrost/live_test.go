@@ -6,12 +6,14 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llmextras"
 )
 
 // Live smoke (spec acceptance "Live smoke"): runs only with
@@ -20,7 +22,14 @@ import (
 // OPENBBC_LIVE_MODEL_<PROVIDER> (e.g. OPENBBC_LIVE_MODEL_OPENAI=gpt-4o-mini)
 // and its endpoint with <PROVIDER>_BASE_URL (e.g. a Bifrost gateway).
 // Defaults are small, tool-capable models, one per allow-listed provider
-// (config.bifrostProviders); keep the two in step.
+// (config.bifrostProviders); keep the two in step. OPENBBC_LLM_REQUEST_EXTRAS
+// and the two OPENBBC_LLM_*_TIMEOUT_SECONDS variables apply as at boot, so
+// e.g. the GLM rule can be checked live:
+//
+//	OPENBBC_LIVE_LLM_TEST=1 OPENAI_API_KEY=… OPENAI_BASE_URL=https://<gateway> \
+//	OPENBBC_LIVE_MODEL_OPENAI=vllm/glm-5.3-flash \
+//	OPENBBC_LLM_REQUEST_EXTRAS='[{"match":"*/glm-*","headers":{"x-bf-passthrough-extra-params":"true"},"body":{"chat_template_kwargs":{"reasoning_effort":"low"}}}]' \
+//	go test ./internal/llm/bifrost -run 'TestLive/openai/tool_round' -v
 var liveModels = map[string]string{
 	"openai":     "gpt-4o-mini",
 	"anthropic":  "claude-haiku-4-5-20251001",
@@ -59,13 +68,36 @@ func liveLLM(t *testing.T, provider string) (*LLM, bool) {
 	if m := liveModelOverride(provider); m != "" {
 		model = m
 	}
-	cfg := config.LLMConfig{Adapter: "bifrost", Provider: provider, Model: model, APIKey: key, BaseURL: os.Getenv(config.BaseURLEnv(provider))}
+	rules, err := llmextras.Parse(os.Getenv(llmextras.EnvVar))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.LLMConfig{Adapter: "bifrost", Provider: provider, Model: model, APIKey: key, BaseURL: os.Getenv(config.BaseURLEnv(provider)),
+		Extras:                   llmextras.Resolve(rules, provider+"/"+model),
+		RequestTimeoutSeconds:    liveIntEnv(t, "OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS"),
+		StreamIdleTimeoutSeconds: liveIntEnv(t, "OPENBBC_LLM_STREAM_IDLE_TIMEOUT_SECONDS"),
+	}
+	if cfg.Extras != nil {
+		t.Logf("%s/%s: request extras rule %d (%q) active", provider, model, cfg.Extras.Index, cfg.Extras.Match)
+	}
 	l, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("%s: New: %v", provider, err)
 	}
 	t.Cleanup(l.Shutdown)
 	return l, true
+}
+
+func liveIntEnv(t *testing.T, name string) int {
+	v := os.Getenv(name)
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		t.Fatalf("%s: expected a positive integer, got %q", name, v)
+	}
+	return n
 }
 
 // turn runs one Generate call and returns text, tool calls and the stop reason.

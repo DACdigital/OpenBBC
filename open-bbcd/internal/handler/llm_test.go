@@ -12,6 +12,7 @@ import (
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/bifrost"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm/bifrost/bifrosttest"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llmextras"
 )
 
 func TestNewLLM_DefaultsToAnthropic(t *testing.T) {
@@ -88,5 +89,67 @@ func TestNewLLM_EveryCallLogsItsAdapter(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("log missing %s:\n%s", want, out)
 		}
+	}
+}
+
+// Acceptance 5: the startup log shows the rules (header names, body keys)
+// and the active one, and neither the startup log nor the debug call log
+// ever shows a header or body value, even though the value reaches the wire.
+func TestNewLLM_RequestExtrasLoggedWithoutValues(t *testing.T) {
+	const secret = "sk-gw-SECRET-9f8e7d6c5b4a"
+	rules, err := llmextras.Parse(`[{"match":"*/glm-*","headers":{"x-gateway-token":"` + secret + `"},"body":{"chat_template_kwargs":{"api_secret":"` + secret + `"}}}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := bifrosttest.New(t)
+	fake.Route("sys", bifrosttest.Text("hello"))
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg := &config.Config{
+		LLM: config.LLMConfig{Adapter: config.LLMAdapterBifrost, Provider: "openai", Model: "vllm/glm-5.3-flash", APIKey: "sk", BaseURL: fake.URL(),
+			Extras: llmextras.Resolve(rules, "openai/vllm/glm-5.3-flash")},
+		LLMRequestExtras: rules,
+	}
+	client, shutdown, err := NewLLM(cfg, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdown()
+	req := llm.Request{System: "sys", Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{llm.TextBlock{Text: "hi"}}}}}
+	for _, err := range client.Generate(context.Background(), req) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := fake.Requests("sys"); len(got) != 1 || got[0].Header.Get("x-gateway-token") != secret {
+		t.Fatalf("secret header did not reach the wire: %+v", got)
+	}
+	out := buf.String()
+	if strings.Contains(out, secret) || strings.Contains(out, "9f8e7d6c5b4a") {
+		t.Fatalf("log leaks a value:\n%s", out)
+	}
+	for _, want := range []string{`"msg":"llm request extras rule"`, `"headers":["x-gateway-token"]`, `"body_keys":["chat_template_kwargs"]`,
+		`"msg":"llm request extras active","rule":0,"match":"*/glm-*"`, `"msg":"llm call"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log missing %s:\n%s", want, out)
+		}
+	}
+}
+
+func TestNewLLM_AnthropicLogsActiveRule(t *testing.T) {
+	rules, _ := llmextras.Parse(`[{"match":"claude-sonnet-*","headers":{"x-a":"v"}}]`)
+	var buf bytes.Buffer
+	cfg := &config.Config{
+		Anthropic:        config.AnthropicConfig{DefaultModel: "claude-sonnet-4-6"},
+		LLM:              config.LLMConfig{Adapter: config.LLMAdapterAnthropic, Model: "claude-sonnet-4-6", Extras: llmextras.Resolve(rules, "claude-sonnet-4-6")},
+		LLMRequestExtras: rules,
+	}
+	_, shutdown, err := NewLLM(cfg, slog.New(slog.NewTextHandler(&buf, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown()
+	if !strings.Contains(buf.String(), `msg="llm request extras active" rule=0`) {
+		t.Fatalf("log:\n%s", buf.String())
 	}
 }
