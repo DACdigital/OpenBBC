@@ -301,3 +301,32 @@ func TestStream_ReservedIDIsRewritten(t *testing.T) {
 		t.Fatalf("id2 = %q", s.ID)
 	}
 }
+
+// Reasoning deltas are not part of the stream, but their characters
+// (runes, both wire spellings) are counted onto the usage event for the
+// debug call log.
+func TestTranslate_CountsReasoningChars(t *testing.T) {
+	tr := newStreamTranslator("openai")
+	var evs []llm.Event
+	for _, c := range []*schemas.BifrostStreamChunk{
+		choiceChunk(&schemas.ChatStreamResponseChoiceDelta{Reasoning: strp("think é")}, nil),
+		choiceChunk(&schemas.ChatStreamResponseChoiceDelta{Reasoning: strp("")}, nil),
+		choiceChunk(&schemas.ChatStreamResponseChoiceDelta{Reasoning: strp("ing"), Content: strp("hi")}, nil),
+		choiceChunk(&schemas.ChatStreamResponseChoiceDelta{}, strp("stop")),
+		{BifrostChatResponse: &schemas.BifrostChatResponse{Usage: &schemas.BifrostLLMUsage{PromptTokens: 4, CompletionTokens: 9}}},
+	} {
+		got, err := tr.translate(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evs = append(evs, got...)
+	}
+	want := []llm.Event{
+		llm.TextDeltaEvent{Delta: "hi"},
+		llm.MessageStopEvent{StopReason: "end_turn"},
+		llm.UsageEvent{InputTokens: 4, OutputTokens: 9, ReasoningChars: 10},
+	}
+	if !reflect.DeepEqual(evs, want) {
+		t.Fatalf("events = %#v", evs)
+	}
+}

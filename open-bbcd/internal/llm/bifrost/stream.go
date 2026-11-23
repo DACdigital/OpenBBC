@@ -3,6 +3,7 @@ package bifrost
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -22,6 +23,10 @@ type streamTranslator struct {
 	order    []uint16
 	opened   bool // at least one ToolUseStartEvent emitted
 	finished bool // a finish_reason was seen
+	// reasoningChars counts reasoning-delta characters (reasoning_content /
+	// reasoning on the wire). They are not part of the stream; the total
+	// rides on usage events for the debug call log.
+	reasoningChars int
 }
 
 type pendingCall struct {
@@ -63,6 +68,9 @@ func (t *streamTranslator) translate(c *schemas.BifrostStreamChunk) ([]llm.Event
 			continue
 		}
 		if s := ch.ChatStreamResponseChoice; s != nil && s.Delta != nil {
+			if s.Delta.Reasoning != nil {
+				t.reasoningChars += utf8.RuneCountInString(*s.Delta.Reasoning)
+			}
 			if s.Delta.Content != nil && *s.Delta.Content != "" {
 				evs = append(evs, llm.TextDeltaEvent{Delta: *s.Delta.Content})
 			}
@@ -79,7 +87,7 @@ func (t *streamTranslator) translate(c *schemas.BifrostStreamChunk) ([]llm.Event
 		}
 	}
 	if u := r.Usage; u != nil && (u.PromptTokens > 0 || u.CompletionTokens > 0) {
-		evs = append(evs, llm.UsageEvent{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens})
+		evs = append(evs, llm.UsageEvent{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens, ReasoningChars: t.reasoningChars})
 	}
 	return evs, nil
 }

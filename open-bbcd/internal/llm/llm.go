@@ -302,7 +302,15 @@ type MessageStopEvent struct{ StopReason string }
 
 // UsageEvent: token usage. Adapters may emit multiple Usage events per
 // turn; orchestrator should keep the highest cumulative value.
-type UsageEvent struct{ InputTokens, OutputTokens int }
+//
+// ReasoningChars is the cumulative count of reasoning ("thinking") delta
+// characters the provider streamed, which never become text events. Only
+// the Bifrost adapter sets it; it feeds the debug call log and nothing else
+// (orchestrators ignore it).
+type UsageEvent struct {
+	InputTokens, OutputTokens int
+	ReasoningChars            int
+}
 
 func (TextDeltaEvent) isEvent()    {}
 func (ToolUseStartEvent) isEvent() {}
