@@ -272,6 +272,24 @@
       "field": "body.a\\b"
     },
     {
+      "name": "header name with trailing newline",
+      "config": "[{\"match\": \"*\", \"headers\": {\"x-a\\n\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers"
+    },
+    {
+      "name": "header value with CR LF",
+      "config": "[{\"match\": \"*\", \"headers\": {\"x-a\": \"v\\r\\nInjected: 1\"}}]",
+      "rule": 0,
+      "field": "control characters"
+    },
+    {
+      "name": "header value with DEL",
+      "config": "[{\"match\": \"*\", \"headers\": {\"x-a\": \"v\\u007f\"}}]",
+      "rule": 0,
+      "field": "control characters"
+    },
+    {
       "name": "error in third rule",
       "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"b\", \"headers\": {\"x-y\": \"z\"}}, {\"match\": \"c\"}]",
       "rule": 2,

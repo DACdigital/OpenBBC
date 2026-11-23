@@ -152,6 +152,11 @@ func parseHeaders(raw json.RawMessage) (map[string]string, error) {
 		if t := bytes.TrimSpace(m[name]); len(t) == 0 || t[0] != '"' || json.Unmarshal(t, &v) != nil {
 			return nil, fmt.Errorf("headers.%s: value must be a string", name)
 		}
+		for i := 0; i < len(v); i++ {
+			if c := v[i]; (c < 0x20 && c != '\t') || c == 0x7f {
+				return nil, fmt.Errorf("headers.%s: value must not contain control characters", name)
+			}
+		}
 		out[name] = v
 	}
 	return out, nil

@@ -113,12 +113,15 @@ def _parse_headers(h: Any) -> dict[str, str]:
     for name in sorted(h):
         if name == "":
             raise RequestExtrasError("headers: empty header name")
-        if not _TOKEN.match(name):
+        if not _TOKEN.fullmatch(name):
             raise RequestExtrasError(f"headers.{name}: not a valid header name (RFC 7230 token)")
         if name.lower() in RESERVED_HEADERS:
             raise RequestExtrasError(f"headers.{name}: reserved header, set by the adapter")
         if not isinstance(h[name], str):
             raise RequestExtrasError(f"headers.{name}: value must be a string")
+        if any((ord(c) < 0x20 and c != "\t") or ord(c) == 0x7F for c in h[name]):
+            raise RequestExtrasError(
+                f"headers.{name}: value must not contain control characters")
     return dict(h)
 
 

@@ -39,9 +39,13 @@ type LLMConfig struct {
 	StreamIdleTimeoutSeconds int
 }
 
-// maxStreamIdleTimeoutSeconds is Bifrost's own cap on
-// NetworkConfig.StreamIdleTimeoutInSeconds.
+// maxStreamIdleTimeoutSeconds is this spec's ruling for the upper bound of
+// OPENBBC_LLM_STREAM_IDLE_TIMEOUT_SECONDS (not a Bifrost cap).
 const maxStreamIdleTimeoutSeconds = 3600
+
+// maxRequestTimeoutSeconds bounds OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS (24h) so
+// time.Duration arithmetic on it cannot overflow.
+const maxRequestTimeoutSeconds = 86400
 
 // applyLLMRequestExtras parses OPENBBC_LLM_REQUEST_EXTRAS and the two LLM
 // timeout variables from environ, and resolves the active rule against the
@@ -61,7 +65,7 @@ func applyLLMRequestExtras(environ []string, cfg *Config) error {
 	cfg.LLMRequestExtras = rules
 	cfg.LLM.Extras = llmextras.Resolve(rules, cfg.RuntimeModel())
 
-	if cfg.LLM.RequestTimeoutSeconds, err = boundedIntEnv(kv, "OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS", 0); err != nil {
+	if cfg.LLM.RequestTimeoutSeconds, err = boundedIntEnv(kv, "OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS", maxRequestTimeoutSeconds); err != nil {
 		return err
 	}
 	if cfg.LLM.StreamIdleTimeoutSeconds, err = boundedIntEnv(kv, "OPENBBC_LLM_STREAM_IDLE_TIMEOUT_SECONDS", maxStreamIdleTimeoutSeconds); err != nil {
