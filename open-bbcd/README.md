@@ -179,6 +179,9 @@ Config is env-driven (`internal/config/config.go`, `caarlos0/env` + `joho/godote
 | `<PROVIDER>_API_KEY` | — | No | `bifrost` only: key for the selected provider (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, …). Only the selected provider's key is read. Missing → LLM-backed endpoints fail at first call. |
 | `<PROVIDER>_BASE_URL` | — | No | `bifrost` only, providers `openai`, `anthropic`, `cohere`, `mistral`: endpoint override (e.g. a corporate proxy). Must be `https`; plain `http` only to a loopback host. Set for another provider, or invalid → boot fails. |
 | `OPENBBC_MAX_TOKENS` | `4096` | No | Per-response cap. |
+| `OPENBBC_LLM_REQUEST_EXTRAS` | — | No | JSON array of `{match, headers?, body?}` rules adding extra headers / top-level body fields to LLM requests for models matching the glob (first match wins; shared with aikdm). See [`docs/PRODUCTION.md` §7.2](../docs/PRODUCTION.md). Invalid → boot fails. Header values may be secret. |
+| `OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS` | bifrost: `300`; anthropic: none | No | Positive integer. On `anthropic` applied only when set, bounding a whole streaming turn. Invalid → boot fails. |
+| `OPENBBC_LLM_STREAM_IDLE_TIMEOUT_SECONDS` | `120` | No | `bifrost` only, 1–3600: longest gap between stream chunks. Invalid → boot fails. |
 | `OPENBBC_CHAT_TRANSPORT` | `agui` | No | Chat transport selector. |
 | `OPENBBC_MAX_TOOL_ROUNDS` | `10` | No | Per-turn tool-call loop bound. |
 | `AGENT_TOOL_MAX_DEPTH` | `3` | No | Max sub-agent nesting depth (root = 0); integer >= 1. |
