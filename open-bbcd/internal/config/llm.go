@@ -5,7 +5,10 @@ import (
 	"net"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llmextras"
 )
 
 // LLM adapter names accepted in OPENBBC_LLM_ADAPTER.
@@ -20,12 +23,68 @@ const (
 // and APIKey/BaseURL from the selected provider's <PROVIDER>_* vars. An empty
 // APIKey is not a boot error: the adapter fails the first LLM call instead,
 // matching ANTHROPIC_API_KEY.
+//
+// Extras is the OPENBBC_LLM_REQUEST_EXTRAS rule that matched the effective
+// model (RuntimeModel) at boot, or nil. RequestTimeoutSeconds and
+// StreamIdleTimeoutSeconds are 0 when unset (adapter defaults apply).
 type LLMConfig struct {
 	Adapter  string
 	Provider string
 	Model    string
 	APIKey   string
 	BaseURL  string
+
+	Extras                   *llmextras.Rule
+	RequestTimeoutSeconds    int
+	StreamIdleTimeoutSeconds int
+}
+
+// maxStreamIdleTimeoutSeconds is Bifrost's own cap on
+// NetworkConfig.StreamIdleTimeoutInSeconds.
+const maxStreamIdleTimeoutSeconds = 3600
+
+// applyLLMRequestExtras parses OPENBBC_LLM_REQUEST_EXTRAS and the two LLM
+// timeout variables from environ, and resolves the active rule against the
+// effective model (cfg.RuntimeModel(): the configured value with the
+// service default applied). Rules are resolved once, here; never per request.
+func applyLLMRequestExtras(environ []string, cfg *Config) error {
+	kv := make(map[string]string, len(environ))
+	for _, e := range environ {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			kv[k] = v
+		}
+	}
+	rules, err := llmextras.Parse(kv[llmextras.EnvVar])
+	if err != nil {
+		return err
+	}
+	cfg.LLMRequestExtras = rules
+	cfg.LLM.Extras = llmextras.Resolve(rules, cfg.RuntimeModel())
+
+	if cfg.LLM.RequestTimeoutSeconds, err = boundedIntEnv(kv, "OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS", 0); err != nil {
+		return err
+	}
+	if cfg.LLM.StreamIdleTimeoutSeconds, err = boundedIntEnv(kv, "OPENBBC_LLM_STREAM_IDLE_TIMEOUT_SECONDS", maxStreamIdleTimeoutSeconds); err != nil {
+		return err
+	}
+	return nil
+}
+
+// boundedIntEnv reads name as an integer >= 1 (and <= max when max > 0).
+// Unset or empty returns 0.
+func boundedIntEnv(kv map[string]string, name string, max int) (int, error) {
+	v := kv[name]
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || (max > 0 && n > max) {
+		if max > 0 {
+			return 0, fmt.Errorf("%s: expected an integer from 1 to %d, got %q", name, max, v)
+		}
+		return 0, fmt.Errorf("%s: expected a positive integer, got %q", name, v)
+	}
+	return n, nil
 }
 
 // bifrostProviders is the v1 key-only allow-list. Cloud-credential providers

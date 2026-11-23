@@ -10,6 +10,8 @@ import (
 
 	"github.com/caarlos0/env/v10"
 	"github.com/joho/godotenv"
+
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llmextras"
 )
 
 type Config struct {
@@ -21,6 +23,10 @@ type Config struct {
 	Chat      ChatConfig
 	Artifacts ArtifactsConfig
 	Eval      EvalConfig
+
+	// LLMRequestExtras is every parsed OPENBBC_LLM_REQUEST_EXTRAS rule, in
+	// order (for the startup log); LLM.Extras is the one that applies.
+	LLMRequestExtras []llmextras.Rule
 }
 
 // EvalConfig tunes the eval export. MCPDiscoveryTimeout bounds tools/list per
@@ -329,6 +335,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.LLM = llmCfg
+
+	if err := applyLLMRequestExtras(os.Environ(), cfg); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
 }
