@@ -13,7 +13,7 @@ import click
 import yaml as _yaml
 from dotenv import find_dotenv, load_dotenv
 
-from aikdm import orchestrator
+from aikdm import models, orchestrator
 from aikdm.config import ConfigError, load_settings
 from aikdm.eval.orchestrator import run_eval
 from aikdm.eval.schemas import EvalInput
@@ -71,6 +71,7 @@ def generate_agent(config_path: Path, output_path: Path | None) -> None:
         sys.exit(2)
 
     logging.basicConfig(level=settings.log_level.upper(), stream=sys.stderr)
+    models.log_request_extras(settings)
 
     try:
         config = load_flow_map_config(config_path)
@@ -116,6 +117,7 @@ def evaluate(input_path: Path, output_path: Path) -> None:
         sys.exit(2)
 
     logging.basicConfig(level=settings.log_level.upper(), stream=sys.stderr)
+    models.log_request_extras(settings)
 
     try:
         raw = _yaml.safe_load(input_path.read_text(encoding="utf-8"))
@@ -168,6 +170,7 @@ def train_agent(input_path: Path, epochs: int, patience: int, out_dir: Path) -> 
         sys.exit(2)
 
     logging.basicConfig(level=settings.log_level.upper(), stream=sys.stderr)
+    models.log_request_extras(settings)
 
     try:
         raw = _yaml.safe_load(input_path.read_text(encoding="utf-8"))
