@@ -11,12 +11,14 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llmextras"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -155,4 +157,86 @@ func TestWire_NoRuleRequestUnchanged(t *testing.T) {
 		t.Fatalf("requests = %d", len(reqs))
 	}
 	compareGolden(t, "testdata/unchanged_request.json", map[string]any{"headers": stableHeaders(reqs[0].Header), "body": reqs[0].Body})
+}
+
+func extrasRule(t *testing.T, raw, model string) *llmextras.Rule {
+	t.Helper()
+	rules, err := llmextras.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return llmextras.Resolve(rules, model)
+}
+
+// Acceptance 1 through the production constructor: no matching rule and
+// no timeout add no per-call option, and the request equals the golden.
+func TestWire_NoRuleViaConstructorUnchanged(t *testing.T) {
+	f := newFakeMessages(t)
+	rule := extrasRule(t, `[{"match":"*/glm-*","headers":{"x-a":"b"}}]`, "claude-sonnet-4-6")
+	if rule != nil {
+		t.Fatal("rule unexpectedly matched")
+	}
+	l := NewWithOptions(config.AnthropicConfig{APIKey: "sk-ant-test"}, Options{Extras: rule, ClientOptions: f.clientOptions()})
+	if len(l.callOpts) != 0 {
+		t.Fatalf("callOpts = %d, want 0", len(l.callOpts))
+	}
+	run(t, l, wireRequest())
+	compareGolden(t, "testdata/unchanged_request.json", map[string]any{"headers": stableHeaders(f.requests()[0].Header), "body": f.requests()[0].Body})
+}
+
+// Acceptance 6: a matching rule's headers and top-level body keys reach
+// the request (WithJSONSet replaces each whole top-level key).
+func TestWire_MatchingRuleAddsHeaderAndBody(t *testing.T) {
+	f := newFakeMessages(t)
+	rule := extrasRule(t, `[{"match":"claude-*","headers":{"x-gw-flag":"on","x-other":"2"},"body":{"metadata":{"user_id":"u-1"},"top_k":5}}]`, "claude-sonnet-4-6")
+	l := NewWithOptions(config.AnthropicConfig{APIKey: "sk-ant-test"}, Options{Extras: rule, ClientOptions: f.clientOptions()})
+	evs := run(t, l, wireRequest())
+	if len(evs) == 0 {
+		t.Fatal("no events")
+	}
+	r := f.requests()[0]
+	if r.Header.Get("x-gw-flag") != "on" || r.Header.Get("x-other") != "2" || r.Header.Get("X-Api-Key") != "sk-ant-test" {
+		t.Fatalf("headers = %v", r.Header)
+	}
+	md, _ := r.Body["metadata"].(map[string]any)
+	if md["user_id"] != "u-1" || r.Body["top_k"] != float64(5) || r.Body["model"] != "claude-test" || r.Body["stream"] != true {
+		t.Fatalf("body = %v", r.Body)
+	}
+	if got := headerNames(stableHeaders(r.Header)); len(got) != 12 {
+		t.Fatalf("header names = %v", got)
+	}
+}
+
+// Acceptance 8 (anthropic): an unset request timeout adds no option; a set
+// one is applied.
+func TestRequestTimeout(t *testing.T) {
+	if n := len(NewWithOptions(config.AnthropicConfig{APIKey: "k"}, Options{}).callOpts); n != 0 {
+		t.Fatalf("unset: callOpts = %d, want 0", n)
+	}
+	release := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer slow.Close()
+	defer close(release) // runs first: unblocks the handler so Close returns
+	l := NewWithOptions(config.AnthropicConfig{APIKey: "k"}, Options{
+		RequestTimeout: time.Second,
+		ClientOptions:  []option.RequestOption{option.WithBaseURL(slow.URL), option.WithMaxRetries(0)},
+	})
+	if len(l.callOpts) != 1 {
+		t.Fatalf("set: callOpts = %d, want 1", len(l.callOpts))
+	}
+	start := time.Now()
+	var gotErr error
+	for _, err := range l.Generate(context.Background(), wireRequest()) {
+		if err != nil {
+			gotErr = err
+		}
+	}
+	if gotErr == nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("err = %v after %v, want a timeout after ~1s", gotErr, time.Since(start))
+	}
 }
