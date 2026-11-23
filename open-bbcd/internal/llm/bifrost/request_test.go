@@ -30,7 +30,7 @@ func TestBuildChatRequest_SystemFirstAndParams(t *testing.T) {
 		Messages:    []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{llm.TextBlock{Text: "hi"}}}},
 		MaxTokens:   512,
 		Temperature: 0.3,
-	}, schemas.OpenAI, "gpt-4o")
+	}, schemas.OpenAI, "gpt-4o", nil)
 	if r.Provider != schemas.OpenAI || r.Model != "gpt-4o" {
 		t.Fatalf("provider/model = %s/%s", r.Provider, r.Model)
 	}
@@ -44,7 +44,7 @@ func TestBuildChatRequest_SystemFirstAndParams(t *testing.T) {
 }
 
 func TestBuildChatRequest_NoSystemZeroParams(t *testing.T) {
-	r := buildChatRequest(llm.Request{Model: "override", Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{llm.TextBlock{Text: "hi"}}}}}, schemas.OpenAI, "gpt-4o")
+	r := buildChatRequest(llm.Request{Model: "override", Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{llm.TextBlock{Text: "hi"}}}}}, schemas.OpenAI, "gpt-4o", nil)
 	if r.Model != "override" {
 		t.Fatalf("model = %s, want req.Model to win", r.Model)
 	}
@@ -60,7 +60,7 @@ func TestBuildChatRequest_UserImageDataURI(t *testing.T) {
 	r := buildChatRequest(llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.Block{
 		llm.TextBlock{Text: "look"},
 		llm.InlineMediaBlock{MIME: "image/png", Data: []byte{0x89, 0x50}},
-	}}}}, schemas.OpenAI, "m")
+	}}}}, schemas.OpenAI, "m", nil)
 	parts := wire(t, r)[0]["content"].([]any)
 	img := parts[1].(map[string]any)
 	if img["type"] != "image_url" || img["image_url"].(map[string]any)["url"] != "data:image/png;base64,iVA=" {
@@ -73,7 +73,7 @@ func TestBuildChatRequest_AssistantToolUseRoundTrip(t *testing.T) {
 		llm.TextBlock{Text: "checking"},
 		llm.ToolUseBlock{ID: "call_1", Name: "lookup", Input: json.RawMessage(`{"q":"x"}`)},
 		llm.ToolUseBlock{ID: "call_2", Name: "ping"},
-	}}}}, schemas.OpenAI, "m")
+	}}}}, schemas.OpenAI, "m", nil)
 	m := wire(t, r)[0]
 	if m["role"] != "assistant" || m["content"] != "checking" {
 		t.Fatalf("assistant = %v", m)
@@ -93,7 +93,7 @@ func TestBuildChatRequest_ToolResults(t *testing.T) {
 	r := buildChatRequest(llm.Request{Messages: []llm.Message{{Role: llm.RoleTool, Content: []llm.Block{
 		llm.ToolResultBlock{ToolUseID: "call_1", Result: json.RawMessage(`"W says hi"`)},
 		llm.ToolResultBlock{ToolUseID: "call_2", Result: json.RawMessage(`{"n":1}`), IsError: true},
-	}}}}, schemas.OpenAI, "m")
+	}}}}, schemas.OpenAI, "m", nil)
 	msgs := wire(t, r)
 	if len(msgs) != 2 {
 		t.Fatalf("messages = %v", msgs)
@@ -112,7 +112,7 @@ func TestBuildChatRequest_ToolAttachmentsGoToSyntheticUserMessage(t *testing.T) 
 		llm.ToolResultBlock{ToolUseID: "call_2", Result: json.RawMessage(`"ok"`)},
 		llm.InlineMediaBlock{MIME: "image/png", Data: []byte("x")},
 		llm.TextBlock{Text: "[Attachment: r.pdf (application/pdf, 1 KB)]"},
-	}}}}, schemas.OpenAI, "m")
+	}}}}, schemas.OpenAI, "m", nil)
 	msgs := wire(t, r)
 	if len(msgs) != 3 || msgs[0]["role"] != "tool" || msgs[1]["role"] != "tool" || msgs[2]["role"] != "user" {
 		t.Fatalf("messages = %v", msgs)
@@ -129,7 +129,7 @@ func TestBuildChatRequest_ToolAttachmentsGoToSyntheticUserMessage(t *testing.T) 
 func TestBuildChatRequest_NoAttachmentsNoSyntheticMessage(t *testing.T) {
 	r := buildChatRequest(llm.Request{Messages: []llm.Message{{Role: llm.RoleTool, Content: []llm.Block{
 		llm.ToolResultBlock{ToolUseID: "call_1", Result: json.RawMessage(`"ok"`)},
-	}}}}, schemas.OpenAI, "m")
+	}}}}, schemas.OpenAI, "m", nil)
 	if msgs := wire(t, r); len(msgs) != 1 {
 		t.Fatalf("messages = %v", msgs)
 	}
@@ -139,7 +139,7 @@ func TestBuildChatRequest_Tools(t *testing.T) {
 	r := buildChatRequest(llm.Request{Tools: []llm.ToolDef{
 		{Name: "lookup", Description: "find", InputSchema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)},
 		{Name: "ping"},
-	}}, schemas.OpenAI, "m")
+	}}, schemas.OpenAI, "m", nil)
 	raw, _ := json.Marshal(r.Params.Tools)
 	want := `[{"type":"function","function":{"name":"lookup","description":"find","parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}},{"type":"function","function":{"name":"ping","parameters":{"type":"object","properties":{}}}}]`
 	if string(raw) != want {

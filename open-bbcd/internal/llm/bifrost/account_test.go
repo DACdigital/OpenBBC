@@ -66,3 +66,18 @@ func TestSlogLogger_FormatsAndTags(t *testing.T) {
 		}
 	}
 }
+
+// Acceptance 8: unset timeouts keep Bifrost's defaults (300 / 120); set
+// ones reach NetworkConfig.
+func TestAccount_Timeouts(t *testing.T) {
+	a := &account{provider: schemas.OpenAI}
+	pc, _ := a.GetConfigForProvider(schemas.OpenAI)
+	if pc.NetworkConfig.DefaultRequestTimeoutInSeconds != 300 || pc.NetworkConfig.StreamIdleTimeoutInSeconds != 120 {
+		t.Fatalf("defaults = %+v", pc.NetworkConfig)
+	}
+	a = &account{provider: schemas.OpenAI, requestTimeoutSeconds: 900, streamIdleTimeoutSeconds: 600}
+	pc, _ = a.GetConfigForProvider(schemas.OpenAI)
+	if pc.NetworkConfig.DefaultRequestTimeoutInSeconds != 900 || pc.NetworkConfig.StreamIdleTimeoutInSeconds != 600 {
+		t.Fatalf("set = %+v", pc.NetworkConfig)
+	}
+}

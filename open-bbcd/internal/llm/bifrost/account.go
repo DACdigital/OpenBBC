@@ -14,6 +14,10 @@ type account struct {
 	provider schemas.ModelProvider
 	apiKey   string
 	baseURL  string
+
+	// 0 keeps Bifrost's defaults (300 s request, 120 s stream idle).
+	requestTimeoutSeconds    int
+	streamIdleTimeoutSeconds int
 }
 
 func (a *account) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
@@ -44,6 +48,12 @@ func (a *account) GetConfigForProvider(p schemas.ModelProvider) (*schemas.Provid
 	}
 	nc := schemas.DefaultNetworkConfig
 	nc.BaseURL = a.baseURL
+	if a.requestTimeoutSeconds > 0 {
+		nc.DefaultRequestTimeoutInSeconds = a.requestTimeoutSeconds
+	}
+	if a.streamIdleTimeoutSeconds > 0 {
+		nc.StreamIdleTimeoutInSeconds = a.streamIdleTimeoutSeconds
+	}
 	return &schemas.ProviderConfig{
 		NetworkConfig: nc,
 		ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
