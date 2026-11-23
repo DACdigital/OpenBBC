@@ -64,6 +64,7 @@ async def run_session(
     mcp_backends: dict[str, Any] | None = None,
     user_turn_mode: UserTurnMode = "verbatim",
     history_mode: HistoryMode = "simulated",
+    target_extra_kwargs: dict[str, Any] | None = None,
 ) -> SessionOutcome:
     if user_turn_mode not in get_args(UserTurnMode):
         raise ValueError(f"invalid user_turn_mode: {user_turn_mode!r}")
@@ -122,7 +123,8 @@ async def run_session(
                 try:
                     tt = await target_mod.target_turn(
                         model=target_model, system_prompt=system_prompt, tools_spec=tools_spec,
-                        history=turn.context + [turn.user], tool_caller=tool_caller)
+                        history=turn.context + [turn.user], tool_caller=tool_caller,
+                        **({"extra_kwargs": target_extra_kwargs} if target_extra_kwargs else {}))
                     tokens_in += tt.tokens_in
                     tokens_out += tt.tokens_out
                     turn.span = tt.span

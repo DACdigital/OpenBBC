@@ -1,0 +1,179 @@
+{
+  "_comment": "(patterns, model) -> index of the rule that applies (null: none), shared by open-bbcd (Go) and aikdm (Python). model null means the model variable is unset: open-bbcd (anthropic adapter) falls back to claude-sonnet-4-6, aikdm roles to claude-haiku-4-5, so expect_by_service gives the index per service.",
+  "cases": [
+    {
+      "name": "GLM rule matches the gateway model",
+      "patterns": [
+        "*/glm-*"
+      ],
+      "model": "openai/vllm/glm-5.3-flash",
+      "expect": 0
+    },
+    {
+      "name": "GLM rule matches the LiteLLM model string",
+      "patterns": [
+        "*/glm-*"
+      ],
+      "model": "openai/glm-5.3-flash",
+      "expect": 0
+    },
+    {
+      "name": "no match leaves the request unchanged",
+      "patterns": [
+        "*/glm-*"
+      ],
+      "model": "openai/gpt-4o-mini",
+      "expect": null
+    },
+    {
+      "name": "first match wins",
+      "patterns": [
+        "*glm*",
+        "*/glm-*"
+      ],
+      "model": "openai/vllm/glm-5.3-flash",
+      "expect": 0
+    },
+    {
+      "name": "later rule when earlier misses",
+      "patterns": [
+        "*/gpt-*",
+        "*/glm-*"
+      ],
+      "model": "openai/vllm/glm-5.3-flash",
+      "expect": 1
+    },
+    {
+      "name": "star crosses slash",
+      "patterns": [
+        "openai*flash"
+      ],
+      "model": "openai/vllm/glm-5.3-flash",
+      "expect": 0
+    },
+    {
+      "name": "star matches empty",
+      "patterns": [
+        "glm*"
+      ],
+      "model": "glm",
+      "expect": 0
+    },
+    {
+      "name": "multiple stars",
+      "patterns": [
+        "*a*b*"
+      ],
+      "model": "xaybz",
+      "expect": 0
+    },
+    {
+      "name": "question mark is one character",
+      "patterns": [
+        "gpt-?o"
+      ],
+      "model": "gpt-4o",
+      "expect": 0
+    },
+    {
+      "name": "question mark is not zero characters",
+      "patterns": [
+        "gpt-?o"
+      ],
+      "model": "gpt-o",
+      "expect": null
+    },
+    {
+      "name": "question mark is not two characters",
+      "patterns": [
+        "gpt-?o"
+      ],
+      "model": "gpt-44o",
+      "expect": null
+    },
+    {
+      "name": "question mark matches slash",
+      "patterns": [
+        "a?b"
+      ],
+      "model": "a/b",
+      "expect": 0
+    },
+    {
+      "name": "brackets are literal",
+      "patterns": [
+        "model-[1]"
+      ],
+      "model": "model-[1]",
+      "expect": 0
+    },
+    {
+      "name": "brackets are not a class",
+      "patterns": [
+        "model-[12]"
+      ],
+      "model": "model-1",
+      "expect": null
+    },
+    {
+      "name": "backslash is literal",
+      "patterns": [
+        "a\\*"
+      ],
+      "model": "a\\xyz",
+      "expect": 0
+    },
+    {
+      "name": "backslash does not escape star",
+      "patterns": [
+        "a\\*"
+      ],
+      "model": "a*",
+      "expect": null
+    },
+    {
+      "name": "case-sensitive",
+      "patterns": [
+        "*/GLM-*"
+      ],
+      "model": "openai/vllm/glm-5.3-flash",
+      "expect": null
+    },
+    {
+      "name": "whole string: no implicit prefix",
+      "patterns": [
+        "glm"
+      ],
+      "model": "openai/glm",
+      "expect": null
+    },
+    {
+      "name": "whole string: no implicit suffix",
+      "patterns": [
+        "*glm"
+      ],
+      "model": "glm-5",
+      "expect": null
+    },
+    {
+      "name": "exact literal",
+      "patterns": [
+        "openai/gpt-4o-mini"
+      ],
+      "model": "openai/gpt-4o-mini",
+      "expect": 0
+    },
+    {
+      "name": "unset model uses the service default",
+      "patterns": [
+        "claude-haiku-*",
+        "claude-sonnet-*"
+      ],
+      "model": null,
+      "expect_by_service": {
+        "open-bbcd": 1,
+        "aikdm": 0
+      }
+    }
+  ]
+}

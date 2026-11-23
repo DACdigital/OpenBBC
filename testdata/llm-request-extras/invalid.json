@@ -1,0 +1,299 @@
+{
+  "_comment": "Configs OPENBBC_LLM_REQUEST_EXTRAS must reject at startup, shared by open-bbcd (Go) and aikdm (Python). 'config' is the raw variable value; 'rule' is the index the message must name (null: a whole-config error, message starts 'OPENBBC_LLM_REQUEST_EXTRAS: ' and names no rule); 'field' is a substring the message must contain.",
+  "cases": [
+    {
+      "name": "invalid JSON",
+      "config": "[{",
+      "rule": null,
+      "field": "invalid JSON"
+    },
+    {
+      "name": "top level object",
+      "config": "{\"match\": \"*\", \"body\": {\"a\": 1}}",
+      "rule": null,
+      "field": "array"
+    },
+    {
+      "name": "top level string",
+      "config": "\"x\"",
+      "rule": null,
+      "field": "array"
+    },
+    {
+      "name": "top level null",
+      "config": "null",
+      "rule": null,
+      "field": "array"
+    },
+    {
+      "name": "rule not an object",
+      "config": "[1]",
+      "rule": 0,
+      "field": "object"
+    },
+    {
+      "name": "rule null",
+      "config": "[null]",
+      "rule": 0,
+      "field": "object"
+    },
+    {
+      "name": "match missing",
+      "config": "[{\"headers\": {\"x-a\": \"b\"}}]",
+      "rule": 0,
+      "field": "match"
+    },
+    {
+      "name": "match empty",
+      "config": "[{\"match\": \"\", \"body\": {\"a\": 1}}]",
+      "rule": 0,
+      "field": "match"
+    },
+    {
+      "name": "match not a string",
+      "config": "[{\"match\": 5, \"body\": {\"a\": 1}}]",
+      "rule": 0,
+      "field": "match"
+    },
+    {
+      "name": "neither headers nor body",
+      "config": "[{\"match\": \"*\"}]",
+      "rule": 0,
+      "field": "neither headers nor body"
+    },
+    {
+      "name": "only empty headers and body",
+      "config": "[{\"match\": \"*\", \"headers\": {}, \"body\": {}}]",
+      "rule": 0,
+      "field": "neither headers nor body"
+    },
+    {
+      "name": "unknown key",
+      "config": "[{\"match\": \"*\", \"body\": {\"a\": 1}, \"extra\": 1}]",
+      "rule": 0,
+      "field": "extra"
+    },
+    {
+      "name": "headers not an object",
+      "config": "[{\"match\": \"*\", \"headers\": [\"x-a\"]}]",
+      "rule": 0,
+      "field": "headers"
+    },
+    {
+      "name": "headers null",
+      "config": "[{\"match\": \"*\", \"headers\": null}]",
+      "rule": 0,
+      "field": "headers"
+    },
+    {
+      "name": "header value not a string",
+      "config": "[{\"match\": \"*\", \"headers\": {\"x-a\": 1}}]",
+      "rule": 0,
+      "field": "headers.x-a"
+    },
+    {
+      "name": "header name empty",
+      "config": "[{\"match\": \"*\", \"headers\": {\"\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers"
+    },
+    {
+      "name": "header name not a token (space)",
+      "config": "[{\"match\": \"*\", \"headers\": {\"x a\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers.x a"
+    },
+    {
+      "name": "header name not a token (colon)",
+      "config": "[{\"match\": \"*\", \"headers\": {\"x:a\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers.x:a"
+    },
+    {
+      "name": "body not an object",
+      "config": "[{\"match\": \"*\", \"body\": [1]}]",
+      "rule": 0,
+      "field": "body"
+    },
+    {
+      "name": "body null",
+      "config": "[{\"match\": \"*\", \"body\": null}]",
+      "rule": 0,
+      "field": "body"
+    },
+    {
+      "name": "body key empty",
+      "config": "[{\"match\": \"*\", \"body\": {\"\": 1}}]",
+      "rule": 0,
+      "field": "body"
+    },
+    {
+      "name": "reserved body key model",
+      "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"*\", \"body\": {\"model\": 1}}]",
+      "rule": 1,
+      "field": "body.model"
+    },
+    {
+      "name": "reserved body key messages",
+      "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"*\", \"body\": {\"messages\": 1}}]",
+      "rule": 1,
+      "field": "body.messages"
+    },
+    {
+      "name": "reserved body key tools",
+      "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"*\", \"body\": {\"tools\": 1}}]",
+      "rule": 1,
+      "field": "body.tools"
+    },
+    {
+      "name": "reserved body key tool_choice",
+      "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"*\", \"body\": {\"tool_choice\": 1}}]",
+      "rule": 1,
+      "field": "body.tool_choice"
+    },
+    {
+      "name": "reserved body key stream",
+      "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"*\", \"body\": {\"stream\": 1}}]",
+      "rule": 1,
+      "field": "body.stream"
+    },
+    {
+      "name": "reserved body key stream_options",
+      "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"*\", \"body\": {\"stream_options\": 1}}]",
+      "rule": 1,
+      "field": "body.stream_options"
+    },
+    {
+      "name": "reserved body key max_tokens",
+      "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"*\", \"body\": {\"max_tokens\": 1}}]",
+      "rule": 1,
+      "field": "body.max_tokens"
+    },
+    {
+      "name": "reserved body key max_completion_tokens",
+      "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"*\", \"body\": {\"max_completion_tokens\": 1}}]",
+      "rule": 1,
+      "field": "body.max_completion_tokens"
+    },
+    {
+      "name": "reserved body key system",
+      "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"*\", \"body\": {\"system\": 1}}]",
+      "rule": 1,
+      "field": "body.system"
+    },
+    {
+      "name": "reserved header Authorization",
+      "config": "[{\"match\": \"*\", \"headers\": {\"Authorization\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers.Authorization"
+    },
+    {
+      "name": "reserved header X-API-KEY",
+      "config": "[{\"match\": \"*\", \"headers\": {\"X-API-KEY\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers.X-API-KEY"
+    },
+    {
+      "name": "reserved header content-type",
+      "config": "[{\"match\": \"*\", \"headers\": {\"content-type\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers.content-type"
+    },
+    {
+      "name": "reserved header Content-Length",
+      "config": "[{\"match\": \"*\", \"headers\": {\"Content-Length\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers.Content-Length"
+    },
+    {
+      "name": "reserved header host",
+      "config": "[{\"match\": \"*\", \"headers\": {\"host\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers.host"
+    },
+    {
+      "name": "reserved header Transfer-Encoding",
+      "config": "[{\"match\": \"*\", \"headers\": {\"Transfer-Encoding\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers.Transfer-Encoding"
+    },
+    {
+      "name": "reserved header x-goog-api-key",
+      "config": "[{\"match\": \"*\", \"headers\": {\"x-goog-api-key\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers.x-goog-api-key"
+    },
+    {
+      "name": "reserved header Anthropic-Version",
+      "config": "[{\"match\": \"*\", \"headers\": {\"Anthropic-Version\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers.Anthropic-Version"
+    },
+    {
+      "name": "body key with sjson syntax 'a.b'",
+      "config": "[{\"match\": \"*\", \"body\": {\"a.b\": 1}}]",
+      "rule": 0,
+      "field": "body.a.b"
+    },
+    {
+      "name": "body key with sjson syntax 'a*'",
+      "config": "[{\"match\": \"*\", \"body\": {\"a*\": 1}}]",
+      "rule": 0,
+      "field": "body.a*"
+    },
+    {
+      "name": "body key with sjson syntax 'a?'",
+      "config": "[{\"match\": \"*\", \"body\": {\"a?\": 1}}]",
+      "rule": 0,
+      "field": "body.a?"
+    },
+    {
+      "name": "body key with sjson syntax 'a|b'",
+      "config": "[{\"match\": \"*\", \"body\": {\"a|b\": 1}}]",
+      "rule": 0,
+      "field": "body.a|b"
+    },
+    {
+      "name": "body key with sjson syntax 'a#'",
+      "config": "[{\"match\": \"*\", \"body\": {\"a#\": 1}}]",
+      "rule": 0,
+      "field": "body.a#"
+    },
+    {
+      "name": "body key with sjson syntax 'a@b'",
+      "config": "[{\"match\": \"*\", \"body\": {\"a@b\": 1}}]",
+      "rule": 0,
+      "field": "body.a@b"
+    },
+    {
+      "name": "body key with sjson syntax 'a\\\\b'",
+      "config": "[{\"match\": \"*\", \"body\": {\"a\\\\b\": 1}}]",
+      "rule": 0,
+      "field": "body.a\\b"
+    },
+    {
+      "name": "header name with trailing newline",
+      "config": "[{\"match\": \"*\", \"headers\": {\"x-a\\n\": \"v\"}}]",
+      "rule": 0,
+      "field": "headers"
+    },
+    {
+      "name": "header value with CR LF",
+      "config": "[{\"match\": \"*\", \"headers\": {\"x-a\": \"v\\r\\nInjected: 1\"}}]",
+      "rule": 0,
+      "field": "control characters"
+    },
+    {
+      "name": "header value with DEL",
+      "config": "[{\"match\": \"*\", \"headers\": {\"x-a\": \"v\\u007f\"}}]",
+      "rule": 0,
+      "field": "control characters"
+    },
+    {
+      "name": "error in third rule",
+      "config": "[{\"match\": \"a\", \"body\": {\"x\": 1}}, {\"match\": \"b\", \"headers\": {\"x-y\": \"z\"}}, {\"match\": \"c\"}]",
+      "rule": 2,
+      "field": "neither headers nor body"
+    }
+  ]
+}

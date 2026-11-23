@@ -30,6 +30,7 @@ async def run_eval(inp: EvalInput, settings: Settings) -> EvalResult:
     simulator_agent = sim_mod.build_simulator_agent(sim_model)
     judge_agent = judge_mod.build_judge_agent(judge_model)
     target_model_str = settings.model_target
+    target_extra_kwargs = models.extra_kwargs("target", settings)
 
     sem = asyncio.Semaphore(settings.parallelism)
 
@@ -75,6 +76,7 @@ async def run_eval(inp: EvalInput, settings: Settings) -> EvalResult:
                     mcp_backends=mcp_backends,
                     user_turn_mode=settings.eval_user_turn_mode,
                     history_mode=settings.eval_history_mode,
+                    target_extra_kwargs=target_extra_kwargs,
                 )
             except Exception as e:
                 # Failures outside the executor (e.g. tool-caller construction,

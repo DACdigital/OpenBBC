@@ -10,6 +10,7 @@ import (
 // WithCallLog wraps an adapter so every Generate call writes one debug-level
 // "llm call" line naming the adapter that served it (Name(), e.g. "anthropic"
 // or "bifrost:openai"), the model, request size, stop reason, token usage,
+// reasoning_chars (reasoning delta characters; Bifrost only, 0 otherwise),
 // duration and any error. The line is written when the call ends, including
 // when the consumer stops iterating early. Run with LOG_LEVEL=debug to see it.
 //
@@ -44,6 +45,7 @@ func (c *callLogged) Generate(ctx context.Context, req Request) iter.Seq2[Event,
 		var (
 			stopReason    string
 			inTok, outTok int
+			reasoning     int
 			callErr       error
 		)
 		defer func() {
@@ -55,6 +57,7 @@ func (c *callLogged) Generate(ctx context.Context, req Request) iter.Seq2[Event,
 				slog.String("stop_reason", stopReason),
 				slog.Int("input_tokens", inTok),
 				slog.Int("output_tokens", outTok),
+				slog.Int("reasoning_chars", reasoning),
 				slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 			}
 			if callErr != nil {
@@ -73,6 +76,7 @@ func (c *callLogged) Generate(ctx context.Context, req Request) iter.Seq2[Event,
 				// Same rule as the orchestrator: keep the highest value seen.
 				inTok = max(inTok, e.InputTokens)
 				outTok = max(outTok, e.OutputTokens)
+				reasoning = max(reasoning, e.ReasoningChars)
 			}
 			if !yield(ev, err) {
 				return

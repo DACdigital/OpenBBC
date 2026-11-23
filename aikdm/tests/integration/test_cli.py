@@ -168,3 +168,26 @@ def test_full_pipeline_golden_file(stub_llm):
     expected["metadata"].pop("generated_at", None)
 
     assert actual == expected
+
+
+def test_invalid_request_extras_returns_exit_2(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-xxx")
+    monkeypatch.setenv("OPENBBC_LLM_REQUEST_EXTRAS",
+                       '[{"match":"*","headers":{"Authorization":"x"}}]')
+    result = CliRunner().invoke(main, ["generate-agent", "--config", str(CONFIG)])
+    assert result.exit_code == 2
+    assert '"error":"config"' in result.stderr
+    assert "OPENBBC_LLM_REQUEST_EXTRAS: rule 0: headers.Authorization" in result.stderr
+
+
+def test_generate_agent_logs_request_extras_without_values(stub_llm, monkeypatch, caplog):
+    # pytest owns the root logger here, so read the records via caplog.
+    secret = "sk-gw-SECRET-77aa88bb"
+    monkeypatch.setenv("OPENBBC_LLM_REQUEST_EXTRAS",
+                       '[{"match":"claude-*","headers":{"x-gw-token":"' + secret + '"}}]')
+    with caplog.at_level("INFO", logger="aikdm.request_extras"):
+        result = CliRunner().invoke(main, ["generate-agent", "--config", str(CONFIG)])
+    assert result.exit_code == 0, result.stderr
+    assert "llm request extras active role=generator rule=0" in caplog.text
+    for out in (caplog.text, result.stderr, result.stdout):
+        assert secret not in out

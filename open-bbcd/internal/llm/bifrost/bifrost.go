@@ -16,6 +16,7 @@ import (
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llmextras"
 )
 
 // LLM is the Bifrost provider adapter.
@@ -29,8 +30,11 @@ type LLM struct {
 // error here: Generate fails lazily, matching the anthropic adapter.
 func New(ctx context.Context, cfg config.LLMConfig, logger *slog.Logger) (*LLM, error) {
 	client, err := bifrostcore.Init(ctx, schemas.BifrostConfig{
-		Account: &account{provider: schemas.ModelProvider(cfg.Provider), apiKey: cfg.APIKey, baseURL: cfg.BaseURL},
-		Logger:  newSlogLogger(logger),
+		Account: &account{
+			provider: schemas.ModelProvider(cfg.Provider), apiKey: cfg.APIKey, baseURL: cfg.BaseURL,
+			requestTimeoutSeconds: cfg.RequestTimeoutSeconds, streamIdleTimeoutSeconds: cfg.StreamIdleTimeoutSeconds,
+		},
+		Logger: newSlogLogger(logger),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bifrost: init: %w", err)
@@ -54,7 +58,9 @@ func (l *LLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event
 		}
 		bctx, cancel := schemas.NewBifrostContextWithCancel(ctx)
 		defer cancel()
-		stream, berr := l.client.ChatCompletionStreamRequest(bctx, buildChatRequest(req, schemas.ModelProvider(l.cfg.Provider), l.cfg.Model))
+		breq := buildChatRequest(req, schemas.ModelProvider(l.cfg.Provider), l.cfg.Model, l.cfg.Extras)
+		applyExtras(bctx, l.cfg.Extras, breq)
+		stream, berr := l.client.ChatCompletionStreamRequest(bctx, breq)
 		if berr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				yield(nil, ctxErr)
@@ -104,6 +110,24 @@ func (l *LLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event
 				}
 			}
 		}
+	}
+}
+
+// applyExtras puts the boot-resolved OPENBBC_LLM_REQUEST_EXTRAS rule's
+// headers on the per-request context. Whenever the request carries
+// ExtraParams it also sets the passthrough flag, without which Bifrost drops
+// them silently; this is the one place that flag is set. With no rule the
+// context is left untouched, so the request is exactly as before.
+func applyExtras(bctx *schemas.BifrostContext, rule *llmextras.Rule, breq *schemas.BifrostChatRequest) {
+	if rule != nil && len(rule.Headers) > 0 {
+		h := make(map[string][]string, len(rule.Headers))
+		for k, v := range rule.Headers {
+			h[k] = []string{v}
+		}
+		bctx.SetValue(schemas.BifrostContextKeyExtraHeaders, h)
+	}
+	if breq.Params != nil && len(breq.Params.ExtraParams) > 0 {
+		bctx.SetValue(schemas.BifrostContextKeyPassthroughExtraParams, true)
 	}
 }
 

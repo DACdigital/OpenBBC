@@ -1,0 +1,76 @@
+{
+  "body": {
+    "max_tokens": 256,
+    "messages": [
+      {
+        "content": [
+          {
+            "text": "hi",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "claude-test",
+    "stream": true,
+    "system": [
+      {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "text": "sys",
+        "type": "text"
+      }
+    ],
+    "tools": [
+      {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "description": "Look up",
+        "input_schema": {
+          "properties": {
+            "q": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "lookup"
+      }
+    ]
+  },
+  "headers": {
+    "Accept": [
+      "application/json"
+    ],
+    "Anthropic-Version": [
+      "2023-06-01"
+    ],
+    "Content-Length": [
+      "359"
+    ],
+    "Content-Type": [
+      "application/json"
+    ],
+    "User-Agent": [
+      "Anthropic/Go 1.49.0"
+    ],
+    "X-Api-Key": [
+      "sk-ant-test"
+    ],
+    "X-Stainless-Lang": [
+      "go"
+    ],
+    "X-Stainless-Package-Version": [
+      "1.49.0"
+    ],
+    "X-Stainless-Retry-Count": [
+      "0"
+    ],
+    "X-Stainless-Runtime": [
+      "go"
+    ]
+  }
+}

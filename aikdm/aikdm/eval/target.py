@@ -162,16 +162,20 @@ class TargetTurn:
 async def target_turn(
     *, model: str, system_prompt: str, tools_spec: list[dict[str, Any]],
     history: list[dict[str, Any]], tool_caller,
+    extra_kwargs: dict[str, Any] | None = None,
 ) -> TargetTurn:
     """One assistant turn against the tested agent. `history` is aikdm entries
     ending with the current user message; it is never mutated. Loops through
-    tool calls (up to MAX_TOOL_ROUNDS) until a plain text answer."""
+    tool calls (up to MAX_TOOL_ROUNDS) until a plain text answer.
+    `extra_kwargs` (extra_headers / extra_body from OPENBBC_LLM_REQUEST_EXTRAS,
+    models.extra_kwargs("target", …)) go on every completion call."""
     msgs = [{"role": "system", "content": system_prompt}] + to_target_messages(history)
     span: list[dict[str, Any]] = []
     tool_call_count = 0
     tokens_in = tokens_out = 0
     for _ in range(MAX_TOOL_ROUNDS):
-        resp = await litellm.acompletion(model=model, messages=msgs, tools=tools_spec or None)
+        resp = await litellm.acompletion(model=model, messages=msgs, tools=tools_spec or None,
+                                         **(extra_kwargs or {}))
         choice = resp.choices[0].message
         usage = getattr(resp, "usage", None)
         if usage:

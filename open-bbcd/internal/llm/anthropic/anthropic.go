@@ -11,6 +11,7 @@ import (
 	"errors"
 	"iter"
 	"strings"
+	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/config"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llmextras"
 )
 
 // LLM is the Anthropic provider adapter. It holds a copy of the SDK client
@@ -25,19 +27,60 @@ import (
 type LLM struct {
 	cfg    config.AnthropicConfig
 	client *sdk.Client
+	// callOpts are passed to every Messages.NewStreaming call: the
+	// OPENBBC_LLM_REQUEST_EXTRAS rule and the request timeout. Empty when
+	// neither is configured, so the request is exactly as before.
+	callOpts []option.RequestOption
+}
+
+// Options are the optional adapter settings beyond AnthropicConfig.
+type Options struct {
+	// Extras is the boot-resolved OPENBBC_LLM_REQUEST_EXTRAS rule, or nil.
+	Extras *llmextras.Rule
+	// RequestTimeout (OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS) bounds each
+	// streaming call, including reading the whole stream. 0 adds no
+	// timeout option.
+	RequestTimeout time.Duration
+	// ClientOptions are extra SDK client options (tests: base URL).
+	ClientOptions []option.RequestOption
 }
 
 // New constructs an LLM adapter. If APIKey is empty, the client field is
 // left nil; Generate then yields an error on first call. This implements
 // the lazy-fail policy from design §8.1.
-func New(cfg config.AnthropicConfig) *LLM {
+func New(cfg config.AnthropicConfig) *LLM { return NewWithOptions(cfg, Options{}) }
+
+// NewWithOptions is New with request extras, a request timeout and extra
+// client options.
+func NewWithOptions(cfg config.AnthropicConfig, o Options) *LLM {
 	var client *sdk.Client
 	if cfg.APIKey != "" {
 		// NewClient returns a value in sdk v1.49.0; take its address.
-		c := sdk.NewClient(option.WithAPIKey(cfg.APIKey))
+		c := sdk.NewClient(append([]option.RequestOption{option.WithAPIKey(cfg.APIKey)}, o.ClientOptions...)...)
 		client = &c
 	}
-	return &LLM{cfg: cfg, client: client}
+	return &LLM{cfg: cfg, client: client, callOpts: callOptions(o)}
+}
+
+// callOptions turns the rule into one WithHeader per header and one
+// WithJSONSet per top-level body key (replacing that whole key), plus the
+// request timeout when set. Body keys are validated by llmextras.Parse to
+// hold no sjson path syntax, so each is a plain top-level key.
+func callOptions(o Options) []option.RequestOption {
+	var opts []option.RequestOption
+	if r := o.Extras; r != nil {
+		for _, name := range r.HeaderNames() {
+			opts = append(opts, option.WithHeader(name, r.Headers[name]))
+		}
+		values := r.BodyValues()
+		for _, k := range r.BodyKeys() {
+			opts = append(opts, option.WithJSONSet(k, values[k]))
+		}
+	}
+	if o.RequestTimeout > 0 {
+		opts = append(opts, option.WithRequestTimeout(o.RequestTimeout))
+	}
+	return opts
 }
 
 // Name implements llm.LLM.
@@ -53,7 +96,7 @@ func (l *LLM) Generate(ctx context.Context, req llm.Request) iter.Seq2[llm.Event
 			return
 		}
 		params := buildMessageNewParams(req)
-		stream := l.client.Messages.NewStreaming(ctx, params)
+		stream := l.client.Messages.NewStreaming(ctx, params, l.callOpts...)
 		t := &chunkTranslator{}
 		for stream.Next() {
 			chunk := stream.Current()

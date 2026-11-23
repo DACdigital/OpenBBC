@@ -197,3 +197,25 @@ func TestGenerate_CancelledBeforeStreamReturnsCtxErr(t *testing.T) {
 		t.Fatalf("errs = %v, want [context.Canceled]", errs)
 	}
 }
+
+// Acceptance 9 over the wire: reasoning deltas in a bifrosttest stream, in
+// either spelling (reasoning_content / reasoning), are counted and never
+// become text.
+func TestGenerate_ReasoningCharsCounted(t *testing.T) {
+	fake := bifrosttest.New(t)
+	fake.Route("sys", bifrosttest.SSE(
+		bifrosttest.Delta(map[string]any{"role": "assistant", "reasoning_content": "abcd"}, nil),
+		bifrosttest.Delta(map[string]any{"reasoning": "ef"}, nil),
+		bifrosttest.Delta(map[string]any{"content": "answer"}, nil),
+		bifrosttest.Delta(map[string]any{}, "stop"),
+		bifrosttest.Usage(5, 30),
+	))
+	evs, err := collect(t, newTestLLM(t, fake.URL(), "sk"), userReq("sys", "hi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []llm.Event{llm.TextDeltaEvent{Delta: "answer"}, llm.MessageStopEvent{StopReason: "end_turn"}, llm.UsageEvent{InputTokens: 5, OutputTokens: 30, ReasoningChars: 6}}
+	if !reflect.DeepEqual(evs, want) {
+		t.Fatalf("events = %#v", evs)
+	}
+}

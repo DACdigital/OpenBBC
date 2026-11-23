@@ -18,7 +18,13 @@
 # Env:
 #   OPENBBCD_URL       base URL of the open-bbcd server (default http://localhost:8080)
 #   DATABASE_URL       Postgres DSN — required by seed_bundle.py
-#   ANTHROPIC_API_KEY  required by aikdm generate-agent
+#   AIKDM_MODEL_GENERATOR / AIKDM_MODEL_CRITIC  models (default claude-haiku-4-5)
+#   <PROVIDER>_API_KEY the key of each of those models' providers
+#                      (ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY)
+#                      This script checks only the generator/critic keys, but
+#                      aikdm's load_settings still requires keys for all six
+#                      roles: set every AIKDM_MODEL_* for a non-Anthropic setup.
+#   OPENBBC_LLM_REQUEST_EXTRAS  optional per-model extra headers/body, read by aikdm
 #
 # open-bbcd/.env and aikdm/.env are auto-sourced if present.
 
@@ -46,13 +52,39 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# Env files: open-bbcd/.env for DATABASE_URL, aikdm/.env for ANTHROPIC_API_KEY.
+# Env files: open-bbcd/.env for DATABASE_URL, aikdm/.env for the model keys.
 [ -f "$ROOT/open-bbcd/.env" ] && set -a && . "$ROOT/open-bbcd/.env" && set +a
 [ -f "$ROOT/aikdm/.env" ]     && set -a && . "$ROOT/aikdm/.env"     && set +a
 
+# provider_key_env <model>: the API-key variable of the model's provider, with
+# the same inference as aikdm's config._provider_of (aikdm's load_settings
+# still checks every role and fails fast).
+provider_key_env() {
+    local model="$1" provider
+    case "$model" in
+        */*)          provider="${model%%/*}" ;;
+        claude*)      provider=anthropic ;;
+        gpt*|openai*) provider=openai ;;
+        gemini*)      provider=gemini ;;
+        *) echo "error: cannot infer provider from model name: $model" >&2; return 1 ;;
+    esac
+    case "$provider" in
+        anthropic) echo ANTHROPIC_API_KEY ;;
+        openai)    echo OPENAI_API_KEY ;;
+        gemini)    echo GEMINI_API_KEY ;;
+        *) echo "error: unknown provider '$provider' for model $model" >&2; return 1 ;;
+    esac
+}
+
 OPENBBCD_URL="${OPENBBCD_URL:-http://localhost:8080}"
 : "${DATABASE_URL:?DATABASE_URL not set}"
-: "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY not set}"
+for model in "${AIKDM_MODEL_GENERATOR:-claude-haiku-4-5}" "${AIKDM_MODEL_CRITIC:-claude-haiku-4-5}"; do
+    key_env="$(provider_key_env "$model")" || exit 2
+    if [ -z "${!key_env:-}" ]; then
+        echo "error: $key_env not set (needed for model $model)" >&2
+        exit 2
+    fi
+done
 
 WORK="$(mktemp -d -t generate-alpha-XXXXXX)"
 if [ "$KEEP" = true ]; then

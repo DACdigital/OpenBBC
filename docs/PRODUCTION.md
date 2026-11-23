@@ -344,8 +344,97 @@ through `openbbcd.envFromSecret`.
 
 To confirm which adapter serves traffic, check the boot line `"llm adapter ready"` (its
 `adapter` field is `anthropic` or `bifrost:<provider>`), or set `LOG_LEVEL=debug`: every LLM
-call then logs an `"llm call"` line with `adapter`, `model`, `stop_reason`, token counts and
-`duration_ms`.
+call then logs an `"llm call"` line with `adapter`, `model`, `stop_reason`, token counts,
+`reasoning_chars` and `duration_ms`. `reasoning_chars` counts the reasoning ("thinking")
+characters the model streamed; only the `bifrost` adapter fills it (0 on `anthropic`), and
+the reasoning text itself is never shown to users. It is also 0 when a gateway streams no
+usage chunk.
+
+### 7.1. An OpenAI-compatible gateway (e.g. a client's Bifrost gateway)
+
+Both services can call a model behind an OpenAI-compatible gateway:
+
+- **`open-bbcd`:** `OPENBBC_LLM_ADAPTER=bifrost`,
+  `OPENBBC_DEFAULT_MODEL=openai/<gateway model id>` (e.g. `openai/vllm/glm-5.3-flash`),
+  `OPENAI_API_KEY=<gateway key>`, `OPENAI_BASE_URL=https://<gateway>` — **without** `/v1`
+  (the adapter appends `/v1/chat/completions`).
+- **`aikdm`:** `AIKDM_MODEL_<ROLE>=openai/<gateway model id>` for all six roles,
+  `OPENAI_API_KEY=<gateway key>`, `OPENAI_BASE_URL=https://<gateway>/v1` — **with** `/v1`
+  (LiteLLM's convention).
+
+### 7.2. Per-model request extras: `OPENBBC_LLM_REQUEST_EXTRAS`
+
+Some models need provider-specific request extras. `OPENBBC_LLM_REQUEST_EXTRAS` adds extra
+HTTP headers and top-level JSON body fields to every outbound LLM request for models whose
+name matches a glob. `open-bbcd` and `aikdm` read the same variable with the same meaning;
+set the same value in both. Unset or `[]` means no extras: requests are exactly as without
+the variable.
+
+Worked example — GLM 5.3 behind a Bifrost gateway only keeps its thinking short with this
+header **and** body field (without them it uses 3–4× the output tokens and time, and can
+hit `OPENBBC_MAX_TOKENS`):
+
+```sh
+OPENBBC_LLM_REQUEST_EXTRAS='[{"match":"*/glm-*","headers":{"x-bf-passthrough-extra-params":"true"},"body":{"chat_template_kwargs":{"reasoning_effort":"low"}}}]'
+```
+
+- **Shape.** A JSON array of rules `{"match": "<glob>", "headers": {…}, "body": {…}}`.
+  `match` is required; at least one of `headers` (header name → string value) and `body`
+  (a JSON object) is required, and an empty object counts as absent. No other keys.
+- **Matching.** Rules are tried in order and the **first** match wins (rules are never
+  merged). The glob is tested against the whole effective model string, case-sensitively:
+  `*` matches any run of characters including none and including `/`; `?` matches exactly
+  one character; every other character (including `[`, `]`, `\`) is literal. The model
+  string is the configured one with the service default applied: `OPENBBC_DEFAULT_MODEL`
+  in `open-bbcd` (default `claude-sonnet-4-6` on the `anthropic` adapter), and each role's
+  `AIKDM_MODEL_<ROLE>` in `aikdm` (default `claude-haiku-4-5`). The two services may spell
+  the same model differently (`openai/vllm/glm-5.3-flash` vs `openai/glm-5.3-flash`), so
+  prefer leading-`*` globs such as `*/glm-*` that fit both. `open-bbcd` resolves the rule
+  once at boot.
+- **Body merge.** On `bifrost` the body is deep-merged into the provider request (the
+  adapter also sets Bifrost's passthrough flag, without which extra fields are dropped).
+  On `anthropic` each top-level key replaces that whole key. In `aikdm` the fields go to
+  LiteLLM's `extra_body`.
+- **Reserved, rejected at boot.** Top-level body keys `model`, `messages`, `tools`,
+  `tool_choice`, `stream`, `stream_options`, `max_tokens`, `max_completion_tokens`,
+  `system`; body keys containing any of `. * ? | # @ \`; headers (any case)
+  `Authorization`, `x-api-key`, `x-goog-api-key`, `anthropic-version`, `Content-Type`,
+  `Content-Length`, `Host`, `Transfer-Encoding`; header names that are not valid HTTP
+  tokens. Any invalid value fails `open-bbcd` boot (`load config: OPENBBC_LLM_REQUEST_EXTRAS:
+  rule <i>: <field>: …`) and makes `aikdm` exit with code 2 (`"error":"config"`).
+- **Not reserved.** Other fields the adapters set — e.g. `temperature`, `top_p`,
+  `thinking`, `metadata` — **can** be overwritten by a rule. That is deliberate: you own
+  the config.
+- **Provider coverage.** Tested on `bifrost` with provider `openai` (the gateway path) and
+  on the direct `anthropic` adapter. Other `bifrost` providers get the same mechanism, but
+  it is not separately tested; whether a provider accepts an extra is up to it.
+- **Startup log.** Each service logs one line per rule (index, `match`, header names, body
+  keys — never values) and which rule is active (`open-bbcd`: `"llm request extras
+  active"` with `rule` and `match` next to `"llm adapter ready"`; `aikdm`: one line per
+  role).
+- **Secrets.** Header values may be credentials. Put the variable in a Secret, not a
+  ConfigMap or a committed `.env`: on Helm use the Secret named by `openbbcd.envFromSecret`
+  for `open-bbcd`, and the Secret named by `aikdmRunner.secrets.existingSecret` for
+  `aikdm` (`aikdmRunner.extraEnv` reaches the evals and trainings CronJobs but **not** the
+  alphas CronJob, so generation only gets it from the Secret). `open-bbcd` only sends to a
+  `<PROVIDER>_BASE_URL` that is `https` (or plain `http` to loopback); `aikdm` does not
+  check LiteLLM's `OPENAI_BASE_URL`, so make sure it is `https` when a header carries a
+  credential. With `AIKDM_LOG_LEVEL=DEBUG`, LiteLLM's own request log masks only headers
+  named like `token`, `key`, `secret` or `authorization`, so do not run DEBUG in
+  production with secret extras under other header names.
+
+### 7.3. LLM timeouts (`open-bbcd`)
+
+- `OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS` — integer 1–86400. On `bifrost` it is the
+  per-request timeout (default 300 when unset). On `anthropic` it is applied only when
+  set (unset: no timeout, as before) and bounds a **whole streaming turn**, including
+  reading the stream, so set it above your longest expected turn.
+- `OPENBBC_LLM_STREAM_IDLE_TIMEOUT_SECONDS` — integer 1–3600, `bifrost` only: the longest
+  gap between stream chunks before the call is aborted (default 120 when unset). Raise it
+  for models that think silently for long stretches.
+
+Invalid values fail boot. Longer timeouts let a slow gateway finish; they do not make it
+faster.
 
 Set the keys in each service's environment. The compose file wires the aikdm profile
 with `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` from the shell environment

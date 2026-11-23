@@ -9,11 +9,14 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llm"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/llmextras"
 )
 
 // buildChatRequest maps an llm.Request onto Bifrost's OpenAI-shaped
-// chat-completions request. model is used when req.Model is empty.
-func buildChatRequest(req llm.Request, provider schemas.ModelProvider, model string) *schemas.BifrostChatRequest {
+// chat-completions request. model is used when req.Model is empty. A non-nil
+// extras rule's body becomes ExtraParams (deep-merged into the provider body
+// by Bifrost once Generate sets the passthrough flag).
+func buildChatRequest(req llm.Request, provider schemas.ModelProvider, model string, extras *llmextras.Rule) *schemas.BifrostChatRequest {
 	if req.Model != "" {
 		model = req.Model
 	}
@@ -35,6 +38,9 @@ func buildChatRequest(req llm.Request, provider schemas.ModelProvider, model str
 	}
 	for _, t := range req.Tools {
 		params.Tools = append(params.Tools, convertTool(t))
+	}
+	if extras != nil {
+		params.ExtraParams = extras.BodyValues()
 	}
 	return &schemas.BifrostChatRequest{Provider: provider, Model: model, Input: input, Params: params}
 }

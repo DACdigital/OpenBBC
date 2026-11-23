@@ -45,6 +45,12 @@ openbbcd:
   #     OPENBBC_DEFAULT_MODEL: openai/gpt-4o
   # and put the provider key (e.g. OPENAI_API_KEY) in the Secret named by
   # openbbcd.envFromSecret below. Mount only the selected provider's key.
+  #
+  # Per-model request extras (docs/PRODUCTION.md §7.2): put
+  # OPENBBC_LLM_REQUEST_EXTRAS in that same Secret, not in extraEnv — header
+  # values may be credentials. Timeouts (non-secret) can go in extraEnv:
+  #     OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS: "600"
+  #     OPENBBC_LLM_STREAM_IDLE_TIMEOUT_SECONDS: "300"
 
   # Extra env vars (key/value) merged into the container. For secrets prefer
   # openbbcd.envFromSecret below.
@@ -113,6 +119,10 @@ aikdmRunner:
 
   # These are the LLM provider API keys aikdm needs. Prefer existingSecret in
   # production; the inline map is for quick smoke tests.
+  # OPENBBC_LLM_REQUEST_EXTRAS (per-model extra headers/body, same value as
+  # open-bbcd's; docs/PRODUCTION.md §7.2) and a gateway's OPENAI_BASE_URL (with
+  # /v1) belong in existingSecret: it reaches all three CronJobs, including
+  # alphas, which extraEnv below does not.
   secrets:
     existingSecret: ""   # if set, uses this Secret's keys as envFrom on cron pods
     ANTHROPIC_API_KEY: ""

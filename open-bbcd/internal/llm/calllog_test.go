@@ -97,7 +97,7 @@ func TestWithCallLog_LogsAdapterAndPassesEventsThrough(t *testing.T) {
 	want := map[string]any{
 		"level": "DEBUG", "msg": "llm call", "adapter": "bifrost:anthropic", "model": "claude-sonnet-4-6",
 		"messages": float64(2), "tools": float64(3), "stop_reason": "end_turn",
-		"input_tokens": float64(11), "output_tokens": float64(3),
+		"input_tokens": float64(11), "output_tokens": float64(3), "reasoning_chars": float64(0),
 	}
 	for k, v := range want {
 		if m[k] != v {
@@ -162,5 +162,17 @@ func TestWithCallLog_KeepsMultimodalRenderer(t *testing.T) {
 	}
 	if _, ok := WithCallLog(&scriptedLLM{name: "x"}, logger).(MultimodalRenderer); ok {
 		t.Fatal("non-renderer gained MultimodalRenderer")
+	}
+}
+
+// reasoning_chars is on every line; the highest value seen wins, like tokens.
+func TestWithCallLog_ReasoningChars(t *testing.T) {
+	logger, line := debugLog(t)
+	events := []Event{UsageEvent{InputTokens: 2, ReasoningChars: 40}, UsageEvent{OutputTokens: 5, ReasoningChars: 120}, MessageStopEvent{StopReason: "end_turn"}}
+	if _, err := drain(t, WithCallLog(&scriptedLLM{name: "bifrost:openai", events: events}, logger), Request{Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if m := line(); m["reasoning_chars"] != float64(120) || m["output_tokens"] != float64(5) {
+		t.Fatalf("line = %v", m)
 	}
 }

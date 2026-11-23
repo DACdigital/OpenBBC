@@ -5,9 +5,10 @@ from __future__ import annotations
 import os
 from functools import cache
 
-from pydantic import Field, ValidationError
+from pydantic import Field, PrivateAttr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from aikdm import request_extras
 from aikdm.eval.schemas import HistoryMode, UserTurnMode
 
 
@@ -55,6 +56,14 @@ class Settings(BaseSettings):
     eval_user_turn_mode: UserTurnMode = "verbatim"
     eval_history_mode: HistoryMode = "simulated"
 
+    # OPENBBC_LLM_REQUEST_EXTRAS rules (unprefixed: shared with open-bbcd),
+    # parsed by load_settings. A Settings built directly has none.
+    _request_extras: list[request_extras.Rule] = PrivateAttr(default_factory=list)
+
+    @property
+    def request_extras(self) -> list[request_extras.Rule]:
+        return self._request_extras
+
 
 @cache
 def load_settings() -> Settings:
@@ -67,6 +76,11 @@ def load_settings() -> Settings:
     try:
         s = Settings()
     except ValidationError as e:
+        raise ConfigError(str(e)) from e
+
+    try:
+        s._request_extras = request_extras.parse_rules(os.environ.get(request_extras.ENV_VAR))
+    except request_extras.RequestExtrasError as e:
         raise ConfigError(str(e)) from e
 
     if s.eval_history_mode == "reference" and s.eval_user_turn_mode == "paraphrase":

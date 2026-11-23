@@ -26,6 +26,17 @@ services:
       DATABASE_URL: postgres://openbbcd:openbbcd@postgres:5432/openbbcd?sslmode=disable
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: "8080"
+      # LLM gateway settings (docs/PRODUCTION.md §7): a bare key passes the
+      # host value through only when it is set. OPENBBC_LLM_REQUEST_EXTRAS
+      # may hold credentials in header values; keep it out of committed files.
+      # open-bbcd (Bifrost) wants OPENAI_BASE_URL WITHOUT /v1, aikdm (LiteLLM)
+      # WITH /v1, so one host value cannot serve both. This service does not
+      # set OPENBBC_LLM_ADAPTER, OPENBBC_DEFAULT_MODEL or the provider API
+      # key: the gateway recipe must add them.
+      OPENAI_BASE_URL:
+      OPENBBC_LLM_REQUEST_EXTRAS:
+      OPENBBC_LLM_REQUEST_TIMEOUT_SECONDS:
+      OPENBBC_LLM_STREAM_IDLE_TIMEOUT_SECONDS:
     ports:
       - "8080:8080"
     healthcheck:
@@ -54,6 +65,11 @@ services:
       AIKDM_MODEL_CRITIC:
       AIKDM_EVAL_USER_TURN_MODE:
       AIKDM_EVAL_HISTORY_MODE:
+      # LiteLLM's OpenAI-compatible endpoint (with /v1) and the per-model
+      # request extras shared with open-bbcd. Note: open-bbcd needs this URL
+      # WITHOUT /v1 (see its service above).
+      OPENAI_BASE_URL:
+      OPENBBC_LLM_REQUEST_EXTRAS:
     volumes:
       - ./aikdm-work:/work
     working_dir: /work
