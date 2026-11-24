@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -33,8 +34,15 @@ func main() {
 		err = runMigrate()
 	case "healthcheck":
 		err = runHealthcheck()
+	case "seed":
+		err = runSeedCmd(os.Args[2:], os.Stdout)
+		var ue *usageError
+		if errors.As(err, &ue) {
+			fmt.Fprintf(os.Stderr, "%v\n", ue)
+			os.Exit(2)
+		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown subcommand: %q (valid: serve, migrate, healthcheck)\n", sub)
+		fmt.Fprintf(os.Stderr, "unknown subcommand: %q (valid: serve, migrate, healthcheck, seed)\n", sub)
 		os.Exit(2)
 	}
 	if err != nil {
@@ -80,6 +88,10 @@ func run() error {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 	logger.Info("migrations applied")
+
+	if err := runBootSeed(context.Background(), db, cfg.Seed.Path, logger); err != nil {
+		return fmt.Errorf("seed import: %w", err)
+	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	server := &http.Server{

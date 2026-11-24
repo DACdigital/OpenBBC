@@ -23,6 +23,7 @@ type Config struct {
 	Chat      ChatConfig
 	Artifacts ArtifactsConfig
 	Eval      EvalConfig
+	Seed      SeedConfig
 
 	// LLMRequestExtras is every parsed OPENBBC_LLM_REQUEST_EXTRAS rule, in
 	// order (for the startup log); LLM.Extras is the one that applies.
@@ -34,6 +35,12 @@ type Config struct {
 // (OPENBBC_EVAL_MCP_DISCOVERY_TIMEOUT, Go duration > 0, default 15s).
 type EvalConfig struct {
 	MCPDiscoveryTimeout time.Duration
+}
+
+// SeedConfig drives the boot-time declarative seed import. An empty Path
+// (SEED_PATH unset) disables seeding and unlocks previously seeded backends.
+type SeedConfig struct {
+	Path string `env:"SEED_PATH"`
 }
 
 type ServerConfig struct {

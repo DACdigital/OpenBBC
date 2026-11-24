@@ -202,3 +202,21 @@ func TestLoad_EvalMCPDiscoveryTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_SeedPathFromEnv(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("SEED_PATH", "/etc/seed")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Seed.Path != "/etc/seed" {
+		t.Errorf("Seed.Path = %q", cfg.Seed.Path)
+	}
+	os.Unsetenv("SEED_PATH")
+	cfg, err = Load()
+	if err != nil || cfg.Seed.Path != "" {
+		t.Errorf("unset: path = %q, err = %v", cfg.Seed.Path, err)
+	}
+}
