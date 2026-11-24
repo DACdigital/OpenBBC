@@ -70,6 +70,9 @@ func (r *SeedRepository) Export(ctx context.Context, versionID string, req Expor
 	if err := ex.checkExportable(versionID); err != nil {
 		return nil, nil, err
 	}
+	if err := ex.checkSuppliedKeys(req.StaticIDs); err != nil {
+		return nil, nil, err
+	}
 	if err := ex.assignStaticIDs(supplied); err != nil {
 		return nil, nil, err
 	}
@@ -431,6 +434,28 @@ func (ex *seedExport) loadMCP(v *exportVersion) error {
 // value or a default (agents first, since version defaults derive from the
 // agent's), and persists it write-once. A supplied value that differs from an
 // existing ID, or is already taken, is ErrStaticIDConflict.
+// checkSuppliedKeys rejects a static_ids key that is not the UUID of an agent
+// or version in the export closure: such an entry would otherwise be
+// silently ignored.
+func (ex *seedExport) checkSuppliedKeys(supplied map[string]string) error {
+	keys := make([]string, 0, len(supplied))
+	for k := range supplied {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		id := strings.ToLower(k)
+		if _, ok := ex.agents[id]; ok {
+			continue
+		}
+		if _, ok := ex.versions[id]; ok {
+			continue
+		}
+		return fmt.Errorf("%w: static_ids key %q is not an agent or version of this export", types.ErrInvalidStaticID, k)
+	}
+	return nil
+}
+
 func (ex *seedExport) assignStaticIDs(supplied map[string]string) error {
 	for _, id := range ex.agentOrder {
 		a := ex.agents[id]

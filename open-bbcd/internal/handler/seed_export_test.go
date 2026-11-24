@@ -74,6 +74,7 @@ func TestSeedExport_Errors(t *testing.T) {
 		{"bad json", "/agent_versions/sales_v1/export", "{", http.StatusBadRequest},
 		{"bad deploy", "/agent_versions/sales_v1/export", `{"deploy":"always"}`, http.StatusBadRequest},
 		{"invalid static id", "/agent_versions/sales_v1/export", `{"static_ids":{"` + versionID + `":"Not Valid"}}`, http.StatusBadRequest},
+		{"static id key outside closure", "/agent_versions/sales_v1/export", `{"static_ids":{"123e4567-e89b-12d3-a456-426614174000":"other"}}`, http.StatusBadRequest},
 		{"static id conflict", "/agent_versions/sales_v1/export", `{"static_ids":{"` + agentID + `":"other"}}`, http.StatusConflict},
 	}
 	for _, c := range cases {

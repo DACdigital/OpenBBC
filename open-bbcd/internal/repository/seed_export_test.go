@@ -213,6 +213,30 @@ func TestExport_SuppliedIDsAndDeploy(t *testing.T) {
 	}
 }
 
+// A static_ids key that is not an agent or version of the export closure is
+// rejected rather than silently ignored; nothing is assigned.
+func TestExport_UnknownStaticIDKeyFails(t *testing.T) {
+	db := openTestDB(t)
+	f := seedExportFixture(t, db)
+	outside := insertExportAgent(t, db, "Outside", "", `{}`)
+	for name, key := range map[string]string{
+		"not a uuid":    "not-a-uuid",
+		"agent outside": outside,
+		"random uuid":   "123e4567-e89b-12d3-a456-426614174000",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := NewSeedRepository(db).Export(context.Background(), f.salesV2,
+				ExportRequest{StaticIDs: map[string]string{f.salesID: "seller", key: "whatever"}})
+			if !errors.Is(err, types.ErrInvalidStaticID) || !strings.Contains(err.Error(), key) {
+				t.Fatalf("err = %v, want ErrInvalidStaticID naming %s", err, key)
+			}
+			if sid := staticIDOf(t, db, "agents", f.salesID); sid != "" {
+				t.Errorf("agent static_id persisted on failed export: %q", sid)
+			}
+		})
+	}
+}
+
 func TestExport_Stable(t *testing.T) {
 	db := openTestDB(t)
 	f := seedExportFixture(t, db)
