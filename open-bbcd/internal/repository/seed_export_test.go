@@ -237,6 +237,44 @@ func TestExport_UnknownStaticIDKeyFails(t *testing.T) {
 	}
 }
 
+// Name ordering (backend list, mcp_backends, sub_agents, and so the _2
+// placeholder suffixes) is byte order, independent of the database collation:
+// en_US sorts "crm_mcp" before "CRM-MCP" and "ab" before "a_c"; byte order is
+// the reverse.
+func TestExport_ByteOrderIndependentOfCollation(t *testing.T) {
+	db := openTestDB(t)
+	agent := insertExportAgent(t, db, "Order", "", `{"tools":[]}`)
+	target1 := insertExportVersion(t, db, agent, "", types.AgentStatusReady, `{}`, nil)
+	target2 := insertExportVersion(t, db, agent, target1, types.AgentStatusReady, `{}`, nil)
+	v := insertExportVersion(t, db, agent, target2, types.AgentStatusReady, `{}`, nil)
+	lower := insertExportBackend(t, db, "crm_mcp", "mcp_client", `{"url":"https://a","default_headers":{"Authorization":"x"}}`)
+	upper := insertExportBackend(t, db, "CRM-MCP", "mcp_client", `{"url":"https://b","default_headers":{"Authorization":"y"}}`)
+	mustExec(t, db, `INSERT INTO agent_version_mcp_backend (agent_version_id, backend_id) VALUES ($1::uuid, $2::uuid), ($1::uuid, $3::uuid)`, v, lower, upper)
+	mustExec(t, db, `INSERT INTO agent_version_subagent (caller_version_id, target_version_id, name) VALUES ($1::uuid, $2::uuid, 'ab'), ($1::uuid, $3::uuid, 'a_c')`, v, target1, target2)
+
+	s, env := mustExport(t, NewSeedRepository(db), v, ExportRequest{})
+	if got := []string{s.Backends[0].Name, s.Backends[1].Name}; got[0] != "CRM-MCP" || got[1] != "crm_mcp" {
+		t.Errorf("backends = %v, want [CRM-MCP crm_mcp]", got)
+	}
+	mcp := s.Versions[0].MCPBackends
+	if len(mcp) != 2 || mcp[0].Backend != "CRM-MCP" || mcp[1].Backend != "crm_mcp" {
+		t.Errorf("mcp_backends = %+v, want CRM-MCP first", mcp)
+	}
+	subs := s.Versions[0].SubAgents
+	if len(subs) != 2 || subs[0].Name != "a_c" || subs[1].Name != "ab" {
+		t.Errorf("sub_agents = %+v, want a_c first", subs)
+	}
+	if h := s.Backends[0].Config["default_headers"].(map[string]any)["Authorization"]; h != "${CRM_MCP_AUTHORIZATION}" {
+		t.Errorf("CRM-MCP placeholder = %v, want ${CRM_MCP_AUTHORIZATION}", h)
+	}
+	if h := s.Backends[1].Config["default_headers"].(map[string]any)["Authorization"]; h != "${CRM_MCP_AUTHORIZATION_2}" {
+		t.Errorf("crm_mcp placeholder = %v, want ${CRM_MCP_AUTHORIZATION_2}", h)
+	}
+	if !reflect.DeepEqual(env, []string{"CRM_MCP_AUTHORIZATION", "CRM_MCP_AUTHORIZATION_2"}) {
+		t.Errorf("env = %v", env)
+	}
+}
+
 func TestExport_Stable(t *testing.T) {
 	db := openTestDB(t)
 	f := seedExportFixture(t, db)

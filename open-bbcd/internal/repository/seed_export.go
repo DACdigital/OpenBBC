@@ -257,7 +257,7 @@ func (ex *seedExport) closure(versionID string) error {
 
 		rows, err := ex.tx.QueryContext(ex.ctx, `
 			SELECT name, target_version_id::text, note FROM agent_version_subagent
-			WHERE caller_version_id = $1::uuid ORDER BY name`, id)
+			WHERE caller_version_id = $1::uuid ORDER BY name COLLATE "C"`, id)
 		if err != nil {
 			return fmt.Errorf("read bindings: %w", err)
 		}
@@ -415,7 +415,7 @@ func (ex *seedExport) loadMCP(v *exportVersion) error {
 		SELECT b.name, m.note FROM agent_version_mcp_backend m
 		JOIN tool_backends b ON b.id = m.backend_id
 		WHERE m.agent_version_id = $1::uuid
-		ORDER BY b.name`, v.id)
+		ORDER BY b.name COLLATE "C"`, v.id)
 	if err != nil {
 		return fmt.Errorf("version %s: mcp backends: %w", v.id, err)
 	}
@@ -621,7 +621,7 @@ func (ex *seedExport) build(versionID string, deploy seed.DeployMode) (*seed.Set
 	sort.Strings(names)
 	rows, err := ex.tx.QueryContext(ex.ctx, `
 		SELECT name, kind, config FROM tool_backends
-		WHERE name = ANY($1::text[]) ORDER BY name`, pq.Array(names))
+		WHERE name = ANY($1::text[]) ORDER BY name COLLATE "C"`, pq.Array(names))
 	if err != nil {
 		return nil, nil, fmt.Errorf("read backends: %w", err)
 	}
