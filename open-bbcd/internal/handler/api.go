@@ -264,7 +264,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 
 	deployedHandler := NewDeployedHandler(versionRepo, agentRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger).
 		WithClientContextMaxBytes(cfg.Chat.ClientContextMaxBytes)
-	deployHandler := NewDeployHandler(agentRepo, versionRepo, agentWiringRepo)
+	deployHandler := NewDeployHandler(agentRepo, versionRepo)
 
 	mux := http.NewServeMux()
 

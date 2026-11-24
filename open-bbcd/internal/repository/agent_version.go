@@ -4,6 +4,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -173,17 +174,48 @@ func (r *AgentVersionRepository) ListSubAgentBindings(ctx context.Context, versi
 
 // Deploy promotes versionID to DEPLOYED, demoting any other DEPLOYED version of
 // the same agent. Returns the previously-deployed version ID (or nil).
+// Refuses with ErrAgentNotDeployable when the version is not READY and with
+// ErrUnmappedEndpoints when the agent's architecture has an unwired endpoint.
 func (r *AgentVersionRepository) Deploy(ctx context.Context, versionID string) (*string, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	prev, err := deployTx(ctx, tx, versionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return prev, nil
+}
 
-	var status, agentID string
-	err = tx.QueryRowContext(ctx,
-		`SELECT status, agent_id::text FROM agent_versions WHERE id = $1`, versionID,
-	).Scan(&status, &agentID)
+// deployTx is Deploy inside the caller's transaction; the commit is the
+// caller's. It locks the agent row first (agent rows before version rows), so
+// concurrent deploys of one agent serialise. An already-DEPLOYED version is a
+// no-op returning (nil, nil) and runs no checks; otherwise the version must be
+// READY and every endpoint of the agent's architecture must be mapped.
+func deployTx(ctx context.Context, q sqlQueryer, versionID string) (prev *string, err error) {
+	var agentID string
+	err = q.QueryRowContext(ctx,
+		`SELECT agent_id::text FROM agent_versions WHERE id = $1`, versionID,
+	).Scan(&agentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, types.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := lockAgent(ctx, q, agentID); err != nil {
+		return nil, err
+	}
+	// Re-read the status under the agent lock.
+	var status string
+	err = q.QueryRowContext(ctx,
+		`SELECT status FROM agent_versions WHERE id = $1`, versionID,
+	).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, types.ErrNotFound
 	}
@@ -191,16 +223,16 @@ func (r *AgentVersionRepository) Deploy(ctx context.Context, versionID string) (
 		return nil, err
 	}
 	if status == string(types.AgentStatusDeployed) {
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
 		return nil, nil
 	}
 	if status != string(types.AgentStatusReady) {
 		return nil, types.ErrAgentNotDeployable
 	}
+	if err := checkEndpointsMapped(ctx, q, agentID); err != nil {
+		return nil, err
+	}
 	var prevID sql.NullString
-	err = tx.QueryRowContext(ctx, `
+	err = q.QueryRowContext(ctx, `
 		UPDATE agent_versions SET status = 'READY', updated_at = now()
 		WHERE agent_id = $1 AND status = 'DEPLOYED' AND id != $2
 		RETURNING id::text
@@ -208,18 +240,81 @@ func (r *AgentVersionRepository) Deploy(ctx context.Context, versionID string) (
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("demote previous: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx,
+	if _, err := q.ExecContext(ctx,
 		`UPDATE agent_versions SET status='DEPLOYED', updated_at = now() WHERE id = $1`, versionID,
 	); err != nil {
 		return nil, fmt.Errorf("promote target: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 	if prevID.Valid {
 		return &prevID.String, nil
 	}
 	return nil, nil
+}
+
+// checkEndpointsMapped returns ErrUnmappedEndpoints (wrapped with the missing
+// endpoint ids) if the agent's architecture has any tools[].id that isn't
+// present in agent_endpoint_backend for this agent. Returns nil when every
+// endpoint is mapped, or when the agent has no architecture yet (not
+// finalized — the READY precondition rejects such versions on its own).
+func checkEndpointsMapped(ctx context.Context, q sqlQueryer, agentID string) error {
+	var arch []byte
+	err := q.QueryRowContext(ctx, `SELECT architecture FROM agents WHERE id = $1::uuid`, agentID).Scan(&arch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if len(arch) == 0 {
+		return nil
+	}
+
+	// Minimal local shape: we only need the endpoint ids.
+	var snap struct {
+		Tools []struct {
+			ID string `json:"id"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(arch, &snap); err != nil {
+		// Malformed architecture is an internal error, not a deploy-
+		// validation failure. Let it surface as 500.
+		return err
+	}
+	if len(snap.Tools) == 0 {
+		return nil // nothing to map
+	}
+
+	rows, err := q.QueryContext(ctx,
+		`SELECT endpoint_id FROM agent_endpoint_backend WHERE agent_id = $1::uuid`, agentID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	mapped := map[string]bool{}
+	for rows.Next() {
+		var eid string
+		if err := rows.Scan(&eid); err != nil {
+			return err
+		}
+		mapped[eid] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	var missing []string
+	for _, t := range snap.Tools {
+		if t.ID == "" {
+			continue
+		}
+		if !mapped[t.ID] {
+			missing = append(missing, t.ID)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: %s", types.ErrUnmappedEndpoints, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // Undeploy demotes the version to READY.
@@ -348,6 +443,20 @@ func (r *AgentVersionRepository) LandBundle(ctx context.Context, versionID strin
 	return tx.Commit()
 }
 
+// lockAgent locks the agent row FOR UPDATE. ErrNotFound when the agent does
+// not exist. Lock order everywhere: agent rows before version rows.
+func lockAgent(ctx context.Context, q sqlQueryer, agentID string) error {
+	var locked string
+	err := q.QueryRowContext(ctx, `SELECT id::text FROM agents WHERE id = $1::uuid FOR UPDATE`, agentID).Scan(&locked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock agent: %w", err)
+	}
+	return nil
+}
+
 // lockAgentTip locks the agent row FOR UPDATE and returns the agent's tip:
 // the version no other version names as its parent_version_id (at most one,
 // by UNIQUE (parent_version_id)). Returns "" when the agent has no versions,
@@ -355,13 +464,8 @@ func (r *AgentVersionRepository) LandBundle(ctx context.Context, versionID strin
 // version takes this lock first (agent rows before version rows), so two
 // concurrent appends cannot claim the same tip.
 func lockAgentTip(ctx context.Context, q sqlQueryer, agentID string) (tipID string, err error) {
-	var locked string
-	err = q.QueryRowContext(ctx, `SELECT id::text FROM agents WHERE id = $1::uuid FOR UPDATE`, agentID).Scan(&locked)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", types.ErrNotFound
-	}
-	if err != nil {
-		return "", fmt.Errorf("lock agent: %w", err)
+	if err := lockAgent(ctx, q, agentID); err != nil {
+		return "", err
 	}
 	rows, err := q.QueryContext(ctx, `
 		SELECT v.id::text FROM agent_versions v

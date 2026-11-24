@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -25,21 +24,13 @@ type DeployVersionRepository interface {
 	CurrentDeployedID(ctx context.Context, agentID string) (string, error)
 }
 
-// DeployWiringRepo is the narrow wiring-repo interface DeployHandler needs.
-// Implemented by *repository.AgentWiringRepository — endpoint→backend
-// wiring is agent-keyed (post-017).
-type DeployWiringRepo interface {
-	ListEndpointBackends(ctx context.Context, agentID string) (map[string]string, error)
-}
-
 type DeployHandler struct {
 	agents   DeployAgentRepository
 	versions DeployVersionRepository
-	wiring   DeployWiringRepo
 }
 
-func NewDeployHandler(agents DeployAgentRepository, versions DeployVersionRepository, wiring DeployWiringRepo) *DeployHandler {
-	return &DeployHandler{agents: agents, versions: versions, wiring: wiring}
+func NewDeployHandler(agents DeployAgentRepository, versions DeployVersionRepository) *DeployHandler {
+	return &DeployHandler{agents: agents, versions: versions}
 }
 
 type deployBody struct {
@@ -103,12 +94,8 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Block deploy if any endpoint in the agent's architecture is unmapped.
-	if err := h.validateAllEndpointsMapped(r.Context(), version.AgentID); err != nil {
-		Error(w, err)
-		return
-	}
-
+	// The repository Deploy enforces the READY precondition and the
+	// all-endpoints-mapped check inside its transaction.
 	prev, err := h.versions.Deploy(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
@@ -132,58 +119,6 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		Version:                   updatedVersion,
 		PreviousDeployedVersionID: prev,
 	})
-}
-
-// validateAllEndpointsMapped returns ErrUnmappedEndpoints (wrapped with a
-// detail message about which endpoints are missing) if the agent's
-// architecture has any tools[].id that isn't present in
-// agent_endpoint_backend for this agent. Returns nil when every endpoint
-// is mapped.
-func (h *DeployHandler) validateAllEndpointsMapped(ctx context.Context, agentID string) error {
-	agent, err := h.agents.GetByID(ctx, agentID)
-	if err != nil {
-		return err
-	}
-	if len(agent.Architecture) == 0 {
-		// Not finalized yet — the existing flow rejects non-READY versions
-		// with ErrAgentNotDeployable; don't double-error here.
-		return nil
-	}
-
-	// Minimal local shape: we only need the endpoint ids.
-	var snap struct {
-		Tools []struct {
-			ID string `json:"id"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal(agent.Architecture, &snap); err != nil {
-		// Malformed architecture is an internal error, not a deploy-
-		// validation failure. Let it surface as 500.
-		return err
-	}
-
-	if len(snap.Tools) == 0 {
-		return nil // nothing to map
-	}
-
-	mapping, err := h.wiring.ListEndpointBackends(ctx, agentID)
-	if err != nil {
-		return err
-	}
-
-	var missing []string
-	for _, t := range snap.Tools {
-		if t.ID == "" {
-			continue
-		}
-		if _, ok := mapping[t.ID]; !ok {
-			missing = append(missing, t.ID)
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("%w: %s", types.ErrUnmappedEndpoints, strings.Join(missing, ", "))
-	}
-	return nil
 }
 
 // Undeploy handles POST /agents/{agent_id}/undeploy. Takes the currently-
