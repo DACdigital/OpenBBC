@@ -612,3 +612,40 @@ func TestApply_RollbackOnLateFailure(t *testing.T) {
 		t.Errorf("backends = %d, want 1 (crm-mcp insert rolled back)", n)
 	}
 }
+
+// jsonb prints numbers in plain form (1e-07 → 0.0000001, 1e+21 →
+// 1000000000000000000000) while Go marshals floats in exponent form; the
+// comparisons must not see that as a difference.
+func numericSeedSet() *seed.Set {
+	s := baseSeedSet()
+	s.Agents[0].Architecture = map[string]any{"tools": []any{
+		map[string]any{"id": "get_customer", "name": "get_customer", "minimum": 1e-07, "maximum": 1e+21},
+	}}
+	s.Versions[0].Prompts = map[string]any{"main_prompt": "p", "temperature": 1e-07, "budget": 1e+21}
+	return s
+}
+
+func TestApply_ArchitectureNumbersReapply(t *testing.T) {
+	db := openTestDB(t)
+	r := NewSeedRepository(db)
+	mustApply(t, r, numericSeedSet(), ApplyOptions{Boot: true})
+	actions := mustApply(t, r, numericSeedSet(), ApplyOptions{Boot: true})
+	if a := actionFor(actions, "agent", "sales"); a != "unchanged" {
+		t.Errorf("agent action = %q, want unchanged", a)
+	}
+}
+
+func TestApply_PromptNumbersNoFalseDrift(t *testing.T) {
+	db := openTestDB(t)
+	r := NewSeedRepository(db)
+	promptsOnly := func() *seed.Set {
+		s := numericSeedSet()
+		s.Agents[0].Architecture = seedArch()
+		return s
+	}
+	mustApply(t, r, promptsOnly(), ApplyOptions{Boot: true})
+	actions := mustApply(t, r, promptsOnly(), ApplyOptions{Boot: true})
+	if a := actionFor(actions, "version", "sales_v1"); a != "unchanged" {
+		t.Errorf("version action = %q, want unchanged (%v)", a, actions)
+	}
+}
