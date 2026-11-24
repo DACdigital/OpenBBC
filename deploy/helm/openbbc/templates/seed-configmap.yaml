@@ -1,3 +1,6 @@
+{{- if and .Values.seed.enabled (not .Values.seed.files) (not .Values.seed.existingConfigMap) }}
+{{- fail "seed.enabled=true needs seed.files or seed.existingConfigMap" }}
+{{- end }}
 {{- if and .Values.seed.enabled (not .Values.seed.existingConfigMap) }}
 apiVersion: v1
 kind: ConfigMap

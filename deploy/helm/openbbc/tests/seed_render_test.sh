@@ -49,4 +49,13 @@ check "existing: mounts named map"   present '^ +name: mine$' "$tmp/ex.yaml"
 check "existing: SEED_PATH"          present 'name: SEED_PATH' "$tmp/ex.yaml"
 check "existing: no checksum/seed"   absent  'checksum/seed' "$tmp/ex.yaml"
 
+# enabled with neither files nor existingConfigMap: template-time failure.
+if helm template "$release" "$chart" --set seed.enabled=true >"$tmp/empty.yaml" 2>"$tmp/empty.err"; then
+  echo "FAIL empty: helm template should fail with seed.enabled and no seed source"; fail=1
+elif grep -q 'seed.files or seed.existingConfigMap' "$tmp/empty.err"; then
+  echo "ok   empty: fails with a clear message"
+else
+  echo "FAIL empty: unexpected error"; cat "$tmp/empty.err"; fail=1
+fi
+
 exit $fail
