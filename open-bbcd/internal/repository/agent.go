@@ -19,17 +19,21 @@ func NewAgentRepository(db *sql.DB) *AgentRepository {
 	return &AgentRepository{db: db}
 }
 
-const agentColumns = `id, name, description, (discovery_zip IS NOT NULL AND octet_length(discovery_zip) > 0) AS has_discovery_zip, architecture, finalized_at, created_at`
+const agentColumns = `id, name, static_id, description, (discovery_zip IS NOT NULL AND octet_length(discovery_zip) > 0) AS has_discovery_zip, architecture, finalized_at, created_at`
 
 func scanAgent(s scanner) (*types.Agent, error) {
 	a := &types.Agent{}
 	var description sql.NullString
+	var staticID sql.NullString
 	var arch []byte
 	var finalized sql.NullTime
-	if err := s.Scan(&a.ID, &a.Name, &description, &a.HasDiscoveryZip, &arch, &finalized, &a.CreatedAt); err != nil {
+	if err := s.Scan(&a.ID, &a.Name, &staticID, &description, &a.HasDiscoveryZip, &arch, &finalized, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	a.Description = description.String
+	if staticID.Valid {
+		a.StaticID = &staticID.String
+	}
 	a.Architecture = arch
 	if finalized.Valid {
 		t := finalized.Time
@@ -256,7 +260,7 @@ func (r *AgentRepository) List(ctx context.Context) ([]*types.Agent, error) {
 func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentGroup, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT a.id::text, a.name,
-		       av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.agent_tool_enabled, av.created_at, av.updated_at
+		       av.id::text, av.agent_id::text, av.static_id, av.parent_version_id, av.status, av.agent_tool_enabled, av.created_at, av.updated_at
 		FROM agents a
 		LEFT JOIN agent_versions av ON av.agent_id = a.id
 		ORDER BY a.created_at, av.created_at
@@ -272,11 +276,12 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentGroup, 
 		var aID, aName string
 		var vID sql.NullString
 		var vAgentID sql.NullString
+		var vStaticID sql.NullString
 		var vParent sql.NullString
 		var vStatus sql.NullString
 		var vAgentTool sql.NullBool
 		var vCreated, vUpdated sql.NullTime
-		if err := rows.Scan(&aID, &aName, &vID, &vAgentID, &vParent, &vStatus, &vAgentTool, &vCreated, &vUpdated); err != nil {
+		if err := rows.Scan(&aID, &aName, &vID, &vAgentID, &vStaticID, &vParent, &vStatus, &vAgentTool, &vCreated, &vUpdated); err != nil {
 			return nil, err
 		}
 		g, ok := groupsByID[aID]
@@ -295,6 +300,9 @@ func (r *AgentRepository) ListGrouped(ctx context.Context) ([]types.AgentGroup, 
 			AgentToolEnabled: vAgentTool.Bool,
 			CreatedAt:        vCreated.Time,
 			UpdatedAt:        vUpdated.Time,
+		}
+		if vStaticID.Valid {
+			v.StaticID = &vStaticID.String
 		}
 		if vParent.Valid {
 			v.ParentVersionID = &vParent.String

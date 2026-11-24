@@ -25,9 +25,10 @@ const (
 // when the first version's prompts land; once set, architecture is
 // read-only forever (one-way per agent — re-discovery requires a new agent).
 type Agent struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	StaticID    *string `json:"static_id,omitempty"`
+	Description string  `json:"description,omitempty"`
 	// HasDiscoveryZip is true when the agent has a non-empty discovery_zip
 	// blob stored. Computed at scan time so templates can gate the
 	// download link without hydrating the whole blob on every read.
@@ -45,6 +46,7 @@ type Agent struct {
 type AgentVersion struct {
 	ID                string          `json:"id"`
 	AgentID           string          `json:"agent_id"`
+	StaticID          *string         `json:"static_id,omitempty"`
 	ParentVersionID   *string         `json:"parent_version_id,omitempty"`
 	Status            string          `json:"status"`
 	Prompts           json.RawMessage `json:"prompts,omitempty"`

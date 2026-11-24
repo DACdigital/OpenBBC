@@ -29,12 +29,31 @@ func (r *ToolBackendRepository) Create(ctx context.Context, be *types.ToolBacken
 	return err
 }
 
+const toolBackendColumns = `id, name, kind, config, managed_by_seed, created_at, updated_at`
+
 func (r *ToolBackendRepository) Get(ctx context.Context, id string) (*types.ToolBackend, error) {
-	const q = `SELECT id, name, kind, config, created_at, updated_at FROM tool_backends WHERE id = $1`
+	const q = `SELECT ` + toolBackendColumns + ` FROM tool_backends WHERE id = $1`
 	be := &types.ToolBackend{}
 	var kind string
 	err := r.db.QueryRowContext(ctx, q, id).
-		Scan(&be.ID, &be.Name, &kind, &be.Config, &be.CreatedAt, &be.UpdatedAt)
+		Scan(&be.ID, &be.Name, &kind, &be.Config, &be.ManagedBySeed, &be.CreatedAt, &be.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, types.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	be.Kind = types.ToolBackendKind(kind)
+	return be, nil
+}
+
+// GetByName returns the backend with the given (unique) name, or ErrNotFound.
+func (r *ToolBackendRepository) GetByName(ctx context.Context, name string) (*types.ToolBackend, error) {
+	const q = `SELECT ` + toolBackendColumns + ` FROM tool_backends WHERE name = $1`
+	be := &types.ToolBackend{}
+	var kind string
+	err := r.db.QueryRowContext(ctx, q, name).
+		Scan(&be.ID, &be.Name, &kind, &be.Config, &be.ManagedBySeed, &be.CreatedAt, &be.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, types.ErrNotFound
 	}
@@ -46,7 +65,7 @@ func (r *ToolBackendRepository) Get(ctx context.Context, id string) (*types.Tool
 }
 
 func (r *ToolBackendRepository) List(ctx context.Context) ([]*types.ToolBackend, error) {
-	const q = `SELECT id, name, kind, config, created_at, updated_at FROM tool_backends ORDER BY name`
+	const q = `SELECT ` + toolBackendColumns + ` FROM tool_backends ORDER BY name`
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
@@ -56,7 +75,7 @@ func (r *ToolBackendRepository) List(ctx context.Context) ([]*types.ToolBackend,
 	for rows.Next() {
 		be := &types.ToolBackend{}
 		var kind string
-		if err := rows.Scan(&be.ID, &be.Name, &kind, &be.Config, &be.CreatedAt, &be.UpdatedAt); err != nil {
+		if err := rows.Scan(&be.ID, &be.Name, &kind, &be.Config, &be.ManagedBySeed, &be.CreatedAt, &be.UpdatedAt); err != nil {
 			return nil, err
 		}
 		be.Kind = types.ToolBackendKind(kind)

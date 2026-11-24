@@ -102,12 +102,17 @@ func statusFor(err error) int {
 		errors.Is(err, types.ErrBindingConflict),
 		errors.Is(err, types.ErrVersionReferenced),
 		errors.Is(err, types.ErrMultiAgentEvalUnsupported),
-		errors.Is(err, types.ErrToolNameCollision):
+		errors.Is(err, types.ErrToolNameCollision),
+		errors.Is(err, types.ErrStaticIDConflict),
+		errors.Is(err, types.ErrBackendManaged),
+		errors.Is(err, types.ErrVersionNotExportable),
+		errors.Is(err, types.ErrBackendKindMismatch):
 		status = http.StatusConflict
 	case errors.Is(err, types.ErrSessionAgentMismatch):
 		status = http.StatusForbidden
 	case errors.Is(err, errAgentsFormInvalid),
 		errors.Is(err, types.ErrNameRequired),
+		errors.Is(err, types.ErrInvalidStaticID),
 		errors.Is(err, types.ErrPromptRequired),
 		errors.Is(err, types.ErrAgentRequired),
 		errors.Is(err, types.ErrDiscoveryFileRequired),

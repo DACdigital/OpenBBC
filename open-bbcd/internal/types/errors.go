@@ -116,4 +116,11 @@ var (
 	ErrToolNameCollision         = errors.New("agent tool: the agent's architecture already has an endpoint tool named \"agent\"")
 	ErrTargetNotRunnable         = errors.New("sub-agent binding: target version must be READY or DEPLOYED")
 	ErrTopologyCycle             = errors.New("sub-agent binding: would create a cycle")
+
+	// Declarative seed (spec: docs/superpowers/specs/2026-11-24-declarative-seed-design.md).
+	ErrInvalidStaticID      = errors.New("invalid static_id")
+	ErrStaticIDConflict     = errors.New("static_id already in use")
+	ErrBackendManaged       = errors.New("tool backend is managed by seed and cannot be modified")
+	ErrVersionNotExportable = errors.New("version cannot be exported (must be READY or DEPLOYED)")
+	ErrBackendKindMismatch  = errors.New("tool backend kind does not match the existing backend")
 )
