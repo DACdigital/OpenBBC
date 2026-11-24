@@ -64,6 +64,14 @@ func TestSeedCmd_ValidateBadFileNamesKey(t *testing.T) {
 	}
 }
 
+func TestSeedCmd_ValidateNoEnvMalformedPlaceholder(t *testing.T) {
+	bad := "format: openbbc-seed-v1\nbackends:\n  - name: crm\n    kind: mcp_client\n    config:\n      url: https://x\n      default_headers: {Authorization: \"Bearer ${CRM-TOKEN}\"}\n"
+	err := runSeedCmd([]string{"validate", "--no-env", writeSeed(t, bad)}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "backend crm") || !strings.Contains(err.Error(), "malformed placeholder") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestSeedCmd_Usage(t *testing.T) {
 	for _, args := range [][]string{nil, {"bogus"}, {"validate"}, {"apply"}} {
 		var ue *usageError

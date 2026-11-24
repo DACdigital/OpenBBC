@@ -160,6 +160,7 @@ func Validate(s *Set) error {
 		}
 	}
 
+	errs = append(errs, malformedPlaceholderErrors(s)...)
 	errs = append(errs, cycleErrors(s, versions)...)
 	return errors.Join(errs...)
 }
