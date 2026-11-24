@@ -119,7 +119,7 @@ password. Pin it explicitly for reproducible dry-runs.
 | `aikdmRunner.cronjobs.alphas.schedule` | `*/5 * * * *` | One aikdm LLM call (~30–60s) per finalized version. |
 | `aikdmRunner.cronjobs.evals.schedule` | `*/10 * * * *` | Evals are seconds-per-run. |
 | `aikdmRunner.cronjobs.trainings.schedule` | `*/15 * * * *` | Trainings are minutes-per-epoch. |
-| `seed.enabled` | `false` | Mount a seed ConfigMap at `/etc/openbbc/seed` and set `SEED_PATH`. See "Seeding agents". |
+| `seed.enabled` | `false` | Mount a seed ConfigMap at `/etc/openbbc/seed` and set `SEED_PATH`. Needs `seed.files` or `seed.existingConfigMap` (rendering fails otherwise). See "Seeding agents". |
 | `seed.files` | `{}` | filename -> YAML string, rendered into `<release>-openbbc-seed`. Changes roll the pod. |
 | `seed.existingConfigMap` | `""` | Mount an operator-managed ConfigMap instead (needs a manual `kubectl rollout restart`). |
 | `openbbcd.probes.startup` | `failureThreshold: 30`, `periodSeconds: 10` | Startup probe on `/health`; always rendered. |
@@ -174,10 +174,21 @@ migrations and the seed import run. Raise it for large seeds.
 
 Sharp edges:
 
-- **`force` re-pins on every restart.** An entry marked `force` is re-applied each time the
-  pod starts, overwriting changes made in the backoffice since.
-- **Backend takeover by name.** A seeded MCP backend takes over an existing backend with
-  the same name, and is then marked seed-managed.
+- **`force` re-pins the deployed version on every restart.** Each time the pod starts, a
+  version marked `force` is deployed again unless it is already the deployed one, demoting
+  whatever the backoffice deployed since. It only changes which version is deployed; it
+  does not revert backoffice edits to agents or versions.
+- **Backend takeover by name.** A seeded backend of any kind (`mcp_client` or
+  `http_endpoint`) takes over an existing backend with the same name: its config is
+  replaced from the file on every boot, and it is marked seed-managed (read-only in the
+  backoffice).
+- **Boot fails, nothing is imported** when a `${VAR}` has no key in the Secret, when a
+  deploy the seed performs hits an endpoint tool with no backend wired, or when a version's
+  static ID already exists with different content and the file marks it for deploy
+  (`if_none` or `force`). New content needs a new static ID.
+- **Default static IDs can collide across clusters.** The export defaults to `<agent>` and
+  `<agent>_v<N>`, which another cluster may already use for something else. Choose explicit
+  static IDs in the export dialog (or `static_ids`) for anything you ship to clients.
 - **URLs are exported as-is.** Backend URLs reach the target environment unchanged; edit
   them in the seed file if staging and production differ.
 - Resources removed from the seed are never deleted on boot.
