@@ -696,7 +696,14 @@ func (h *ConfiguratorHandler) mcpSubtabData(ctx context.Context, version *types.
 		"Active":         "agents",
 		"AllMCPBackends": allBackends,
 		"Attachments":    attMap,
+		"MCPLocked":      mcpLocked(version.Status),
 	}, nil
+}
+
+// mcpLocked reports whether a version's MCP attachments are read-only: they
+// are writable only while the version is INITIALIZING or DRAFT.
+func mcpLocked(status string) bool {
+	return status != string(types.AgentStatusInitializing) && status != string(types.AgentStatusDraft)
 }
 
 // ToggleMCPBackend attaches or detaches an MCP backend based on whether the
@@ -849,6 +856,10 @@ func (h *ConfiguratorHandler) mcpCardHTML(ctx context.Context, vid, bid string, 
 	if err != nil {
 		return nil, err
 	}
+	version, _, err := h.repo.GetWithAgent(ctx, vid)
+	if err != nil {
+		return nil, err
+	}
 	atts, err := h.wiring.ListMCPAttachments(ctx, vid)
 	if err != nil {
 		return nil, err
@@ -877,6 +888,7 @@ func (h *ConfiguratorHandler) mcpCardHTML(ctx context.Context, vid, bid string, 
 		"Attachment": att,
 		"PrimaryURL": primaryURL,
 		"OOB":        oob,
+		"Locked":     mcpLocked(version.Status),
 	}); err != nil {
 		return nil, err
 	}

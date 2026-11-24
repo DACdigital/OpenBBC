@@ -69,3 +69,66 @@ func TestMCPTab_LockedVersion409(t *testing.T) {
 		}
 	})
 }
+
+// The MCP tab renders its controls disabled (and no Save button) unless the
+// version is INITIALIZING or DRAFT, matching the 409 the writes would get.
+func TestMCPTab_ControlsDisabledOutsideEditableStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status   string
+		disabled bool
+	}{
+		{"DRAFT", false},
+		{"INITIALIZING", false},
+		{"READY", true},
+		{"DEPLOYED", true},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			db := openConfiguratorTestDB(t)
+			versionID := seedConfiguratorAgentVersion(t, db) // DRAFT
+			attached := seedConfiguratorMCPBackend(t, db, "mcp-att-"+tc.status)
+			seedConfiguratorMCPBackend(t, db, "mcp-free-"+tc.status)
+			if err := repository.NewVersionWiringRepository(db).AttachMCP(context.Background(), versionID, attached, "n"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`UPDATE agent_versions SET status = $2 WHERE id = $1::uuid`, versionID, tc.status); err != nil {
+				t.Fatal(err)
+			}
+			h := newConfigHandlerWithDB(t, db)
+
+			req := httptest.NewRequest(http.MethodGet, "/agent_versions/"+versionID+"/architecture/mcp", nil)
+			req.SetPathValue("version_id", versionID)
+			w := httptest.NewRecorder()
+			h.MCPSubtab(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status %d; body %s", w.Code, w.Body.String())
+			}
+			body := w.Body.String()
+			start := strings.Index(body, `id="mcp-form-block"`)
+			if start < 0 {
+				t.Fatalf("no #mcp-form-block in page")
+			}
+			body = body[start:]
+			nDisabled := strings.Count(body, " disabled")
+			hasSave := strings.Contains(body, `id="mcp-notes-form"`)
+			if tc.disabled {
+				// two checkboxes + one textarea
+				if nDisabled < 3 {
+					t.Errorf("disabled controls = %d, want >= 3:\n%s", nDisabled, body)
+				}
+				if hasSave {
+					t.Errorf("Save form rendered on a locked version")
+				}
+				if strings.Contains(body, "hx-post=\"/agent_versions/"+versionID+"/architecture/mcp/") {
+					t.Errorf("write controls still carry hx-post on a locked version")
+				}
+			} else {
+				if nDisabled != 0 {
+					t.Errorf("disabled controls = %d, want 0:\n%s", nDisabled, body)
+				}
+				if !hasSave {
+					t.Errorf("Save form missing on an editable version")
+				}
+			}
+		})
+	}
+}

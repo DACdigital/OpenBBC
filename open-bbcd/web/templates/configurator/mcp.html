@@ -1,7 +1,7 @@
 {{define "tab_content"}}
 <div class="config-mcp-form" id="mcp-form-block" hx-ext="response-targets">
   <div class="config-banner">
-    Attach MCP servers to this agent version. Each attached server's tools become available at runtime. The note (optional) is folded into the main prompt by aikdm as guidance for when to use the server.
+    {{if .MCPLocked}}This version is {{.AgentStatus}}; MCP attachments can only be changed while it is INITIALIZING or DRAFT. Create a new version to change them.{{else}}Attach MCP servers to this agent version. Each attached server's tools become available at runtime. The note (optional) is folded into the main prompt by aikdm as guidance for when to use the server.{{end}}
   </div>
   {{/* Write errors (e.g. 409: the version is no longer INITIALIZING or
        DRAFT) replace this slot via hx-target-error; see renderMCPError. */}}
@@ -12,7 +12,7 @@
     {{range .AllMCPBackends}}
       {{$bid := .ID}}
       {{$att := index $.Attachments $bid}}
-      {{template "mcp_card" (dict "VersionID" $.VersionID "Backend" . "Attachment" $att "PrimaryURL" .PrimaryURL)}}
+      {{template "mcp_card" (dict "VersionID" $.VersionID "Backend" . "Attachment" $att "PrimaryURL" .PrimaryURL "Locked" $.MCPLocked)}}
     {{end}}
   </div>
 
@@ -23,6 +23,7 @@
     "include enclosing form's data" behaviour doesn't smuggle other
     rows' attached=1 values into the per-row toggle POST.
   */}}
+  {{if not .MCPLocked}}
   <form id="mcp-notes-form"
         hx-post="/agent_versions/{{.VersionID}}/architecture/mcp/notes"
         hx-swap="outerHTML"
@@ -32,6 +33,7 @@
     <button type="submit" class="btn-primary">Save</button>
     {{if .Saved}}<span class="config-mcp-note-saved">Saved ✓</span>{{end}}
   </form>
+  {{end}}
   {{else}}
   <p class="empty-state">No MCP backends registered yet. <a href="/mcp/new?kind=mcp_client">Create one</a>.</p>
   {{end}}
