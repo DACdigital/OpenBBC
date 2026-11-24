@@ -1,8 +1,11 @@
 {{define "tab_content"}}
-<div class="config-mcp-form" id="mcp-form-block">
+<div class="config-mcp-form" id="mcp-form-block" hx-ext="response-targets">
   <div class="config-banner">
     Attach MCP servers to this agent version. Each attached server's tools become available at runtime. The note (optional) is folded into the main prompt by aikdm as guidance for when to use the server.
   </div>
+  {{/* Write errors (e.g. 409: the version is no longer INITIALIZING or
+       DRAFT) replace this slot via hx-target-error; see renderMCPError. */}}
+  {{template "agents_error" (dict "Message" "" "OOB" false "ID" "mcp-error")}}
 
   {{if .AllMCPBackends}}
   <div class="config-mcp-list">
@@ -24,6 +27,7 @@
         hx-post="/agent_versions/{{.VersionID}}/architecture/mcp/notes"
         hx-swap="outerHTML"
         hx-target="#mcp-form-block"
+        hx-target-error="#mcp-error"
         class="config-mcp-form-actions">
     <button type="submit" class="btn-primary">Save</button>
     {{if .Saved}}<span class="config-mcp-note-saved">Saved ✓</span>{{end}}

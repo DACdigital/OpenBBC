@@ -487,9 +487,11 @@ func diffPrompts(current, submitted types.Prompts) []promptDiffEntry {
 }
 
 // savePromptsAsNewVersion is the shared body for SavePrompts (DRAFT) and
-// LandPrompts (READY). Parses the form, forks a new version chained via
-// parent_version_id (with MCP attachments copied forward), and 303-redirects
-// to the new version's prompts tab.
+// LandPrompts (READY). Parses the form, forks a new version with this
+// version's content (MCP attachments, agent tool and bindings copied from it),
+// appended at the agent's tip via parent_version_id (the previous version in
+// the agent's history, not necessarily this one), and 303-redirects to the
+// new version's prompts tab.
 func (h *ConfiguratorHandler) savePromptsAsNewVersion(w http.ResponseWriter, r *http.Request, status types.AgentStatus) {
 	versionID := r.PathValue("version_id")
 	submitted, err := parsePromptsForm(r)
@@ -652,16 +654,17 @@ func (h *ConfiguratorHandler) ToggleMCPBackend(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	var err error
 	if attached {
-		if err := h.wiring.AttachMCP(r.Context(), vid, bid, ""); err != nil {
-			Error(w, err)
-			return
-		}
+		err = h.wiring.AttachMCP(r.Context(), vid, bid, "")
 	} else {
-		if err := h.wiring.DetachMCP(r.Context(), vid, bid); err != nil {
-			Error(w, err)
-			return
-		}
+		err = h.wiring.DetachMCP(r.Context(), vid, bid)
+	}
+	if err != nil {
+		// A refused toggle (e.g. 409 ErrVersionLocked: the version is no
+		// longer INITIALIZING/DRAFT) also snaps the checkbox back.
+		h.renderMCPError(w, r.Context(), err, vid, bid)
+		return
 	}
 	h.renderMCPRowFragment(w, r.Context(), vid, bid)
 }
@@ -714,7 +717,7 @@ func (h *ConfiguratorHandler) UpdateAllMCPNotes(w http.ResponseWriter, r *http.R
 			continue
 		}
 		if err := h.wiring.AttachMCP(r.Context(), versionID, bid, vals[0]); err != nil {
-			Error(w, err)
+			h.renderMCPError(w, r.Context(), err, versionID, "")
 			return
 		}
 	}
@@ -731,21 +734,63 @@ func (h *ConfiguratorHandler) UpdateAllMCPNotes(w http.ResponseWriter, r *http.R
 }
 
 // renderMCPRowFragment renders just the #mcp-row-{bid} outer div for htmx
-// outerHTML swap after a toggle or note update.
+// outerHTML swap after a toggle, followed by an out-of-band empty #mcp-error
+// that clears any earlier error.
 func (h *ConfiguratorHandler) renderMCPRowFragment(w http.ResponseWriter, ctx context.Context, vid, bid string) {
-	if h.backends == nil || h.wiring == nil {
-		http.Error(w, "repos not configured", http.StatusInternalServerError)
+	card, err := h.mcpCardHTML(ctx, vid, bid, false)
+	if err != nil {
+		Error(w, err)
 		return
+	}
+	var buf bytes.Buffer
+	buf.Write(card)
+	_ = h.mcpTmpl.ExecuteTemplate(&buf, "agents_error", map[string]any{"Message": "", "OOB": true, "ID": mcpErrorSlot})
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = buf.WriteTo(w)
+}
+
+// mcpErrorSlot is the MCP tab's error banner id; write controls target it
+// with hx-target-error (htmx response-targets).
+const mcpErrorSlot = "mcp-error"
+
+// renderMCPError writes statusFor(err) and an #mcp-error fragment (5xx are
+// logged and shown as "internal error"). With bid set it appends the row's
+// current state out-of-band, so a refused toggle snaps its checkbox back.
+func (h *ConfiguratorHandler) renderMCPError(w http.ResponseWriter, ctx context.Context, err error, vid, bid string) {
+	status := statusFor(err)
+	msg := err.Error()
+	if status >= http.StatusInternalServerError {
+		slog.Error("configurator mcp tab", slog.Any("error", err))
+		msg = "internal error"
+	}
+	var buf bytes.Buffer
+	if terr := h.mcpTmpl.ExecuteTemplate(&buf, "agents_error", map[string]any{"Message": msg, "OOB": false, "ID": mcpErrorSlot}); terr != nil {
+		slog.Error("template execution failed", slog.String("template", "agents_error"), slog.Any("error", terr))
+		buf.Reset()
+		buf.WriteString(`<div id="` + mcpErrorSlot + `" role="alert">internal error</div>`)
+	} else if bid != "" {
+		if card, cerr := h.mcpCardHTML(ctx, vid, bid, true); cerr == nil {
+			buf.Write(card)
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = buf.WriteTo(w)
+}
+
+// mcpCardHTML renders the #mcp-row-{bid} card for the version's current
+// attachment state; oob marks it hx-swap-oob.
+func (h *ConfiguratorHandler) mcpCardHTML(ctx context.Context, vid, bid string, oob bool) ([]byte, error) {
+	if h.backends == nil || h.wiring == nil {
+		return nil, errors.New("repos not configured")
 	}
 	be, err := h.backends.Get(ctx, bid)
 	if err != nil {
-		Error(w, err)
-		return
+		return nil, err
 	}
 	atts, err := h.wiring.ListMCPAttachments(ctx, vid)
 	if err != nil {
-		Error(w, err)
-		return
+		return nil, err
 	}
 	var att *repository.MCPAttachment
 	for i := range atts {
@@ -764,13 +809,17 @@ func (h *ConfiguratorHandler) renderMCPRowFragment(w http.ResponseWriter, ctx co
 		primaryURL = cfg.URL
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = h.mcpTmpl.ExecuteTemplate(w, "mcp_card", map[string]any{
+	var buf bytes.Buffer
+	if err := h.mcpTmpl.ExecuteTemplate(&buf, "mcp_card", map[string]any{
 		"VersionID":  vid,
 		"Backend":    be,
 		"Attachment": att,
 		"PrimaryURL": primaryURL,
-	})
+		"OOB":        oob,
+	}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // tplDict builds a map[string]any from alternating key/value template args.

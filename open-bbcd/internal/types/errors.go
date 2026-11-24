@@ -108,7 +108,10 @@ var (
 	ErrClientContextTooLarge = errors.New("client_context exceeds OPENBBC_CLIENT_CONTEXT_MAX_BYTES")
 
 	// Multi-agent (spec: docs/superpowers/specs/2026-10-01-multiagent-feature-design.md).
-	ErrVersionLocked             = errors.New("version: agent-tool config can only change while the version is INITIALIZING or DRAFT")
+	// ErrVersionLocked also guards every other per-version write (MCP wiring,
+	// flow-map config, bundle landing): versions are immutable once they leave
+	// INITIALIZING/DRAFT (spec: 2026-11-24-declarative-seed-design.md §4).
+	ErrVersionLocked             = errors.New("version: locked; it can only change while the version is INITIALIZING or DRAFT")
 	ErrEvalOrTrainingActive      = errors.New("version: agent-tool config cannot change while an eval or training session is pending or in progress")
 	ErrBindingConflict           = errors.New("sub-agent binding: name or target already bound on this version")
 	ErrVersionReferenced         = errors.New("version: cannot delete; it is a sub-agent binding target, runs a deployed sub-agent session, or has locked BO sessions")

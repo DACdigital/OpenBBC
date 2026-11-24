@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
@@ -18,21 +19,52 @@ type MCPAttachment struct {
 	Note      string
 }
 
+// AttachMCP attaches the MCP backend to the version, or updates the note of
+// an existing attachment. Refused with ErrVersionLocked unless the version is
+// INITIALIZING or DRAFT (and ErrEvalOrTrainingActive while an eval or
+// training on it is pending or running).
 func (r *VersionWiringRepository) AttachMCP(ctx context.Context, versionID, backendID, note string) error {
 	const q = `INSERT INTO agent_version_mcp_backend (agent_version_id, backend_id, note)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (agent_version_id, backend_id)
 		DO UPDATE SET note = EXCLUDED.note`
-	_, err := r.db.ExecContext(ctx, q, versionID, backendID, note)
-	return err
+	return r.writeVersion(ctx, versionID, q, versionID, backendID, note)
 }
 
 // DetachMCP removes the version's attachment to the MCP backend. Returns nil
-// if no attachment existed (idempotent).
+// if no attachment existed (idempotent). Same status guard as AttachMCP.
 func (r *VersionWiringRepository) DetachMCP(ctx context.Context, versionID, backendID string) error {
 	const q = `DELETE FROM agent_version_mcp_backend WHERE agent_version_id = $1 AND backend_id = $2`
-	_, err := r.db.ExecContext(ctx, q, versionID, backendID)
-	return err
+	return r.writeVersion(ctx, versionID, q, versionID, backendID)
+}
+
+// writeVersion runs one per-version write in a transaction that first locks
+// the version row FOR UPDATE and checks it is writable (checkCallerWritable),
+// so a concurrent status change cannot slip between the check and the write.
+func (r *VersionWiringRepository) writeVersion(ctx context.Context, versionID, query string, args ...any) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var status string
+	err = tx.QueryRowContext(ctx,
+		`SELECT status FROM agent_versions WHERE id = $1::uuid FOR UPDATE`, versionID,
+	).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if err := checkCallerWritable(ctx, tx, versionID, status); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *VersionWiringRepository) ListMCPAttachments(ctx context.Context, versionID string) ([]MCPAttachment, error) {

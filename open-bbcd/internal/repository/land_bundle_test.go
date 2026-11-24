@@ -14,7 +14,7 @@ func TestLandBundle_SplitsBundleAndStampsFinalizedAt(t *testing.T) {
 	repo := NewAgentVersionRepository(db)
 	ctx := context.Background()
 
-	agentID, versionID := seedAgent(t, db)
+	agentID, versionID := seedVersionWithStatus(t, db, types.AgentStatusPending)
 
 	bundle := []byte(`{
 		"main_prompt": "<role>coffee bot</role>",
@@ -77,7 +77,19 @@ func TestLandBundle_SplitsBundleAndStampsFinalizedAt(t *testing.T) {
 		t.Fatalf("skill_prompts wrong: %+v", prompts.SkillPrompts)
 	}
 
-	// Re-land without --force is rejected (prompts already populated).
+	// The version is READY now, so it is immutable: re-land is refused with
+	// and without force.
+	for _, force := range []bool{false, true} {
+		if err := repo.LandBundle(ctx, versionID, bundle, force); !errors.Is(err, types.ErrVersionLocked) {
+			t.Fatalf("re-land READY (force=%v): want ErrVersionLocked, got %v", force, err)
+		}
+	}
+
+	// Back on PENDING with prompts populated: re-land without force is
+	// rejected (bundle already set).
+	if _, err := db.Exec(`UPDATE agent_versions SET status = 'PENDING' WHERE id = $1::uuid`, versionID); err != nil {
+		t.Fatal(err)
+	}
 	err = repo.LandBundle(ctx, versionID, bundle, false)
 	if !errors.Is(err, types.ErrBundleAlreadySet) {
 		t.Fatalf("re-land: want ErrBundleAlreadySet, got %v", err)
