@@ -129,7 +129,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 			cancel()
 			artifactRegistry = reg
 			artifactHandler = NewArtifactHandler(chatRepo, chatRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
-			deployedArtifactHandler = NewDeployedArtifactHandler(versionRepo, deployedRepo, deployedRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
+			deployedArtifactHandler = NewDeployedArtifactHandler(versionRepo, agentRepo, deployedRepo, deployedRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
 			logger.Info("artifacts: registry hydrated",
 				slog.Int("stores", len(reg.IDs())),
 				slog.String("default", reg.DefaultID()),
@@ -262,7 +262,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 			WithArtifactUploader(artifactUploader{registry: artifactRegistry})
 	}
 
-	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger).
+	deployedHandler := NewDeployedHandler(versionRepo, agentRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger).
 		WithClientContextMaxBytes(cfg.Chat.ClientContextMaxBytes)
 	deployHandler := NewDeployHandler(agentRepo, versionRepo, agentWiringRepo)
 

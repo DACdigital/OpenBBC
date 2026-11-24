@@ -17,6 +17,10 @@ type stubDeployAgentRepo struct {
 	getErr error
 }
 
+func (s *stubDeployAgentRepo) ResolveID(ctx context.Context, ref string) (string, error) {
+	return ref, nil
+}
+
 func (s *stubDeployAgentRepo) GetByID(ctx context.Context, agentID string) (*types.Agent, error) {
 	return s.agent, s.getErr
 }
@@ -31,6 +35,10 @@ type stubDeployVersionRepo struct {
 	undeployCalls int
 	currentID     string
 	currentErr    error
+}
+
+func (s *stubDeployVersionRepo) ResolveID(ctx context.Context, ref string) (string, error) {
+	return ref, nil
 }
 
 func (s *stubDeployVersionRepo) GetByID(ctx context.Context, versionID string) (*types.AgentVersion, error) {

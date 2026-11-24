@@ -32,7 +32,7 @@ func newDeployedHarness(t *testing.T, deployedID string) *deployedHarness {
 	sessions.sessions[testSessionID] = &types.DeployedSession{ID: testSessionID, AgentID: testAgentID, UserID: "u1"}
 	sessions.sessions[otherAgentSessionID] = &types.DeployedSession{ID: otherAgentSessionID, AgentID: otherAgentID, UserID: "u1"}
 	rows := &memRows{}
-	h := NewDeployedArtifactHandler(&stubDeployedAgentReader{deployedID: deployedID}, sessions, rows, buildRegistry(t, store), 1, 10, nil)
+	h := NewDeployedArtifactHandler(&stubDeployedAgentReader{deployedID: deployedID}, stubResolver{}, sessions, rows, buildRegistry(t, store), 1, 10, nil)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	return &deployedHarness{mux: mux, rows: rows, store: store}

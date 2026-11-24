@@ -12,11 +12,13 @@ import (
 
 // DeployAgentRepository is the narrow per-agent dependency.
 type DeployAgentRepository interface {
+	ResolveID(ctx context.Context, ref string) (string, error)
 	GetByID(ctx context.Context, agentID string) (*types.Agent, error)
 }
 
 // DeployVersionRepository is the narrow per-version dependency.
 type DeployVersionRepository interface {
+	ResolveID(ctx context.Context, ref string) (string, error)
 	GetByID(ctx context.Context, versionID string) (*types.AgentVersion, error)
 	Deploy(ctx context.Context, versionID string) (*string, error)
 	Undeploy(ctx context.Context, versionID string) error
@@ -58,7 +60,10 @@ type deployResponse struct {
 // 400 if version_id is missing. 404 if the version doesn't belong to the agent
 // or doesn't exist. 409 if the version is not READY or has unmapped endpoints.
 func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
+	agentID, ok := resolvePathID(w, r, h.agents, "agent_id")
+	if !ok {
+		return
+	}
 	// htmx's hx-vals serializes to urlencoded by default; external API
 	// callers post JSON. Dispatch on Content-Type, defaulting to JSON so
 	// existing curl-style callers that omit the header keep working.
@@ -81,8 +86,14 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the version belongs to this agent before mutating.
-	version, err := h.versions.GetByID(r.Context(), body.VersionID)
+	// version_id may be a UUID or a version static ID; resolve it, then verify
+	// the version belongs to this agent before mutating.
+	versionID, err := h.versions.ResolveID(r.Context(), body.VersionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	version, err := h.versions.GetByID(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -98,7 +109,7 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prev, err := h.versions.Deploy(r.Context(), body.VersionID)
+	prev, err := h.versions.Deploy(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -109,7 +120,7 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	updatedVersion, err := h.versions.GetByID(r.Context(), body.VersionID)
+	updatedVersion, err := h.versions.GetByID(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -178,7 +189,10 @@ func (h *DeployHandler) validateAllEndpointsMapped(ctx context.Context, agentID 
 // Undeploy handles POST /agents/{agent_id}/undeploy. Takes the currently-
 // deployed version of the agent offline. Returns 409 if nothing is deployed.
 func (h *DeployHandler) Undeploy(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
+	agentID, ok := resolvePathID(w, r, h.agents, "agent_id")
+	if !ok {
+		return
+	}
 	curID, err := h.versions.CurrentDeployedID(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)

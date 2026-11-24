@@ -40,6 +40,7 @@ type DeployedStore interface {
 
 type DeployedHandler struct {
 	agents    DeployedAgentReader
+	resolver  idResolver
 	store     DeployedStore
 	orch      TurnRunner
 	transport transport.Factory
@@ -51,6 +52,7 @@ type DeployedHandler struct {
 
 func NewDeployedHandler(
 	agents DeployedAgentReader,
+	resolver idResolver,
 	store DeployedStore,
 	chatStore chat.ChatStore,
 	orch TurnRunner,
@@ -61,7 +63,7 @@ func NewDeployedHandler(
 		logger = slog.Default()
 	}
 	return &DeployedHandler{
-		agents: agents, store: store, orch: orch,
+		agents: agents, resolver: resolver, store: store, orch: orch,
 		transport: tf, chatStore: chatStore, logger: logger,
 		clientContextMaxBytes: defaultClientContextMaxBytes,
 	}
@@ -74,30 +76,31 @@ func (h *DeployedHandler) WithClientContextMaxBytes(n int) *DeployedHandler {
 	return h
 }
 
-// requireDeployed resolves the chain root's currently-deployed version.
-// Returns (versionID, true) if a version is deployed; ("", false) and a
-// 404 written to w if no version is deployed (no existence leak).
-func (h *DeployedHandler) requireDeployed(w http.ResponseWriter, r *http.Request, agentID string) (string, bool) {
-	if !validUUID(agentID) {
-		Error(w, types.ErrNotFound)
-		return "", false
+// requireDeployed resolves the {agent_id} path value (UUID or static ID) and
+// the agent's currently-deployed version. Returns (agentID, versionID, true)
+// with the resolved canonical UUID; ("", "", false) and a 404 written to w if
+// the agent is unknown or no version is deployed (no existence leak).
+func (h *DeployedHandler) requireDeployed(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+	agentID, ok := resolvePathID(w, r, h.resolver, "agent_id")
+	if !ok {
+		return "", "", false
 	}
 	v, err := h.agents.CurrentDeployedID(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)
-		return "", false
+		return "", "", false
 	}
 	if v == "" {
 		Error(w, types.ErrNotFound)
-		return "", false
+		return "", "", false
 	}
-	return v, true
+	return agentID, v, true
 }
 
 // CreateSession handles POST /deployed/{agent_id}/sessions
 func (h *DeployedHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
-	if _, ok := h.requireDeployed(w, r, agentID); !ok {
+	agentID, _, ok := h.requireDeployed(w, r)
+	if !ok {
 		return
 	}
 	var body struct {
@@ -124,8 +127,8 @@ func (h *DeployedHandler) CreateSession(w http.ResponseWriter, r *http.Request) 
 
 // ListSessions handles GET /deployed/{agent_id}/sessions?user_id=X
 func (h *DeployedHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
-	if _, ok := h.requireDeployed(w, r, agentID); !ok {
+	agentID, _, ok := h.requireDeployed(w, r)
+	if !ok {
 		return
 	}
 	userID := r.URL.Query().Get("user_id")
@@ -144,9 +147,9 @@ func (h *DeployedHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 
 // GetSession handles GET /deployed/{agent_id}/sessions/{session_id}?user_id=X
 func (h *DeployedHandler) GetSession(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
 	sessionID := r.PathValue("session_id")
-	if _, ok := h.requireDeployed(w, r, agentID); !ok {
+	agentID, _, ok := h.requireDeployed(w, r)
+	if !ok {
 		return
 	}
 	if !validUUID(sessionID) {
@@ -185,10 +188,10 @@ func (h *DeployedHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 // root's tree. Same JSON shape as GetSession; the child's session carries
 // parent_session_id, parent_tool_call_id, depth and agent_version_id.
 func (h *DeployedHandler) GetChildSession(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
 	rootID := r.PathValue("root_id")
 	childID := r.PathValue("child_id")
-	if _, ok := h.requireDeployed(w, r, agentID); !ok {
+	agentID, _, ok := h.requireDeployed(w, r)
+	if !ok {
 		return
 	}
 	if !validUUID(rootID) || !validUUID(childID) {
@@ -228,9 +231,9 @@ func (h *DeployedHandler) GetChildSession(w http.ResponseWriter, r *http.Request
 
 // UpdateTitle handles PATCH /deployed/{agent_id}/sessions/{session_id}/title
 func (h *DeployedHandler) UpdateTitle(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
 	sessionID := r.PathValue("session_id")
-	if _, ok := h.requireDeployed(w, r, agentID); !ok {
+	agentID, _, ok := h.requireDeployed(w, r)
+	if !ok {
 		return
 	}
 	if !validUUID(sessionID) {
@@ -258,9 +261,9 @@ func (h *DeployedHandler) UpdateTitle(w http.ResponseWriter, r *http.Request) {
 
 // DeleteSession handles DELETE /deployed/{agent_id}/sessions/{session_id}?user_id=X
 func (h *DeployedHandler) DeleteSession(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
 	sessionID := r.PathValue("session_id")
-	if _, ok := h.requireDeployed(w, r, agentID); !ok {
+	agentID, _, ok := h.requireDeployed(w, r)
+	if !ok {
 		return
 	}
 	if !validUUID(sessionID) {
@@ -294,10 +297,9 @@ type turnRequest struct {
 // AG-UI SSE on success. Validates (session_id, user_id) before opening the
 // stream so we can return clean 4xx codes for auth/scope failures.
 func (h *DeployedHandler) Turn(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
 	sessionID := r.PathValue("session_id")
 
-	versionID, ok := h.requireDeployed(w, r, agentID)
+	agentID, versionID, ok := h.requireDeployed(w, r)
 	if !ok {
 		return
 	}

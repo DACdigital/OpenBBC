@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"sort"
+	"strings"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/staticid"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/google/uuid"
 )
@@ -347,4 +349,19 @@ func assignVersionNumbers(g *types.AgentGroup) {
 		}
 		g.Versions[i].VersionNum = num
 	}
+}
+
+// ResolveID maps ref — a UUID (dashed or 32-hex, any case) or a static ID —
+// to the stored lower-case dashed UUID. Unknown refs yield types.ErrNotFound.
+func (r *AgentRepository) ResolveID(ctx context.Context, ref string) (string, error) {
+	col := "static_id"
+	if staticid.IsUUID(ref) {
+		col, ref = "id", strings.ToLower(ref)
+	}
+	var id string
+	err := r.db.QueryRowContext(ctx, `SELECT id::text FROM agents WHERE `+col+` = $1`, ref).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	return id, err
 }

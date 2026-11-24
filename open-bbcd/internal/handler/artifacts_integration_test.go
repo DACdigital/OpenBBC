@@ -271,7 +271,7 @@ func TestIntegration_DeployedSessionDeletedMidUpload_404(t *testing.T) {
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
-	h := NewDeployedArtifactHandler(repository.NewAgentVersionRepository(db), deployedRepo, deployedRepo, reg, 5, 10, testLogger())
+	h := NewDeployedArtifactHandler(repository.NewAgentVersionRepository(db), repository.NewAgentRepository(db), deployedRepo, deployedRepo, reg, 5, 10, testLogger())
 	mux := http.NewServeMux()
 	h.Register(mux)
 

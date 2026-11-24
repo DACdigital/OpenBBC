@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/staticid"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -693,4 +695,19 @@ func (r *AgentVersionRepository) GetRootVersion(ctx context.Context, agentID str
 // INITIALIZING.
 func (r *AgentVersionRepository) UpdateFlowMapConfigForAgent(ctx context.Context, agentID string, cfg []byte) error {
 	return r.writeRootFlowMapConfig(ctx, `agent_id = $1::uuid AND parent_version_id IS NULL`, agentID, cfg)
+}
+
+// ResolveID maps ref — a UUID (dashed or 32-hex, any case) or a static ID —
+// to the stored lower-case dashed UUID. Unknown refs yield types.ErrNotFound.
+func (r *AgentVersionRepository) ResolveID(ctx context.Context, ref string) (string, error) {
+	col := "static_id"
+	if staticid.IsUUID(ref) {
+		col, ref = "id", strings.ToLower(ref)
+	}
+	var id string
+	err := r.db.QueryRowContext(ctx, `SELECT id::text FROM agent_versions WHERE `+col+` = $1`, ref).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
+	}
+	return id, err
 }

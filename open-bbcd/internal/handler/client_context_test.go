@@ -75,7 +75,7 @@ func turnRoutes() []turnRoute {
 				store := newStubDeployedStore()
 				store.sessions[testSessionID] = &types.DeployedSession{ID: testSessionID, AgentID: testAgentID, UserID: "u1"}
 				store.hasPending = pending
-				h := NewDeployedHandler(&stubDeployedAgentReader{deployedID: "v1"}, store, nil, runner, jsonl.NewFactory(), testLogger())
+				h := NewDeployedHandler(&stubDeployedAgentReader{deployedID: "v1"}, stubResolver{}, store, nil, runner, jsonl.NewFactory(), testLogger())
 				if maxBytes > 0 {
 					h.WithClientContextMaxBytes(maxBytes)
 				}
