@@ -518,3 +518,35 @@ func TestExportImport_RoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// An explicitly empty root flow_map_config ({}) survives export → import; it
+// does not come back as NULL.
+func TestExportImport_EmptyFlowMapConfig(t *testing.T) {
+	db := openTestDB(t)
+	empty := `{}`
+	agent := insertExportAgent(t, db, "Flow", "", `{"tools":[]}`)
+	v := insertExportVersion(t, db, agent, "", types.AgentStatusReady, `{"main_prompt":"p"}`, &empty)
+	set, _ := mustExport(t, NewSeedRepository(db), v, ExportRequest{})
+	out, err := seed.Marshal(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db = openTestDB(t)
+	path := filepath.Join(t.TempDir(), "flow.seed.yaml")
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := seed.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v\n%s", err, out)
+	}
+	mustApply(t, NewSeedRepository(db), loaded, ApplyOptions{})
+	var fm sql.NullString
+	if err := db.QueryRow(`SELECT flow_map_config::text FROM agent_versions WHERE static_id = 'flow_v1'`).Scan(&fm); err != nil {
+		t.Fatal(err)
+	}
+	if !fm.Valid || fm.String != "{}" {
+		t.Errorf("imported flow_map_config = %v, want {}\n%s", fm, out)
+	}
+}

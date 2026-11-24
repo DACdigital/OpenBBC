@@ -85,6 +85,34 @@ func TestMarshal_Omissions(t *testing.T) {
 	}
 }
 
+// An explicitly empty flow_map_config survives Marshal → Load (only an
+// absent one is omitted), so export → import does not turn {} into NULL.
+func TestMarshal_EmptyFlowMapConfigKept(t *testing.T) {
+	src := marshalFixture()
+	src.Agents[0].FlowMapConfig = map[string]any{}
+	out, err := Marshal(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(out), "flow_map_config: {}") != 1 {
+		t.Fatalf("empty flow_map_config not emitted:\n%s", out)
+	}
+	path := filepath.Join(t.TempDir(), "x.seed.yaml")
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fm := got.Agents[0].FlowMapConfig; fm == nil || len(fm) != 0 {
+		t.Errorf("sales flow_map_config = %#v, want empty non-nil map", fm)
+	}
+	if fm := got.Agents[1].FlowMapConfig; fm != nil {
+		t.Errorf("research flow_map_config = %#v, want nil (absent)", fm)
+	}
+}
+
 func TestMarshal_Deterministic(t *testing.T) {
 	a, err := Marshal(marshalFixture())
 	if err != nil {

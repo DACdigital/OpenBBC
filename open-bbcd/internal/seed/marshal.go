@@ -11,8 +11,9 @@ import (
 // Marshal encodes s as an openbbc-seed-v1 YAML document. Output is
 // deterministic: backends are sorted by name, agents and versions keep the
 // order of s (the export emits them in closure order, requested version
-// first), and map keys are sorted. Empty descriptions, absent
-// flow_map_config and `deploy: none` are omitted.
+// first), and map keys are sorted. Empty descriptions, absent (nil)
+// flow_map_config and `deploy: none` are omitted; an empty flow_map_config
+// is kept as {}.
 func Marshal(s *Set) ([]byte, error) {
 	out := marshalSet{Format: s.Format}
 	if out.Format == "" {
@@ -32,12 +33,17 @@ func Marshal(s *Set) ([]byte, error) {
 		if arch == nil {
 			arch = map[string]any{}
 		}
+		var flowMap *map[string]any
+		if a.FlowMapConfig != nil {
+			fm := a.FlowMapConfig
+			flowMap = &fm
+		}
 		out.Agents = append(out.Agents, marshalAgent{
 			StaticID:         a.StaticID,
 			Name:             a.Name,
 			Description:      a.Description,
 			Architecture:     arch,
-			FlowMapConfig:    a.FlowMapConfig,
+			FlowMapConfig:    flowMap,
 			EndpointBackends: a.EndpointBackends,
 		})
 	}
@@ -101,7 +107,7 @@ type marshalAgent struct {
 	Name             string            `yaml:"name"`
 	Description      string            `yaml:"description,omitempty"`
 	Architecture     map[string]any    `yaml:"architecture"`
-	FlowMapConfig    map[string]any    `yaml:"flow_map_config,omitempty"`
+	FlowMapConfig    *map[string]any   `yaml:"flow_map_config,omitempty"` // nil omitted; empty kept as {}
 	EndpointBackends map[string]string `yaml:"endpoint_backends,omitempty"`
 }
 
