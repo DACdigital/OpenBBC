@@ -41,7 +41,6 @@ The `open-bbcd` binary dispatches on its first positional argument (`cmd/open-bb
 | `open-bbcd` / `open-bbcd serve` | Start the HTTP server. Loads config, connects to Postgres, applies pending migrations, then listens on `$SERVER_HOST:$SERVER_PORT`. |
 | `open-bbcd migrate` | Apply pending migrations and exit. Requires `DATABASE_URL`. |
 | `open-bbcd healthcheck` | Probe `http://127.0.0.1:$SERVER_PORT/health` and exit `0` on 2xx, `1` otherwise. Reads only `SERVER_PORT` — a broken `DATABASE_URL` will not fail the probe. Used by the container `HEALTHCHECK`. |
-
 | `open-bbcd seed validate [--no-env] <path>` | Load and validate a seed file or directory without touching the database. With `--no-env`, skip `${VAR}` interpolation and print the required variable names (use this in CI). Exit `1` on an invalid file, `2` on misuse. |
 | `open-bbcd seed apply <path>` | Apply a seed file or directory to the database in `DATABASE_URL` (env vars must be set), print one line per action and exit. |
 
