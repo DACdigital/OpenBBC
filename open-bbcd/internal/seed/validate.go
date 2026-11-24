@@ -105,7 +105,13 @@ func Validate(s *Set) error {
 			hasVersion[v.Agent] = true
 		}
 
+		attached := map[string]bool{}
 		for _, m := range v.MCPBackends {
+			if attached[m.Backend] {
+				add(v.Source, "version", v.StaticID, "mcp_backends backend %q appears more than once", m.Backend)
+				continue
+			}
+			attached[m.Backend] = true
 			b, ok := backends[m.Backend]
 			switch {
 			case !ok:

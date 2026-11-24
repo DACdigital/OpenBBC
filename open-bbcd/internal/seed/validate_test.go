@@ -54,6 +54,9 @@ func TestValidate(t *testing.T) {
 		{"dup target", func(s *Set) {
 			s.Versions[0].SubAgents = []SubAgentRef{{Name: "x", Target: "b_v1"}, {Name: "y", Target: "b_v1"}}
 		}, `target "b_v1" appears more than once`},
+		{"dup mcp backend", func(s *Set) {
+			s.Versions[0].MCPBackends = []MCPRef{{Backend: "mcp1"}, {Backend: "mcp1", Note: "again"}}
+		}, `a_v1: mcp_backends backend "mcp1" appears more than once`},
 		{"self target", func(s *Set) { s.Versions[0].SubAgents = []SubAgentRef{{Name: "me", Target: "a_v1"}} }, "caller and target"},
 		{"agent tool collision enabled", func(s *Set) {
 			s.Agents[0].Architecture = agentToolArch
