@@ -27,7 +27,7 @@ helm template "$release" "$chart" >"$tmp/off.yaml" 2>"$tmp/off.err" \
 
 # fullname for release "t" is "t-openbbc"; the seed ConfigMap is "<fullname>-seed".
 check "enabled: seed ConfigMap"      present '^  name: t-openbbc-seed$' "$tmp/on.yaml"
-check "enabled: ConfigMap file key"  present '^  agents\.yaml: \|' "$tmp/on.yaml"
+check "enabled: ConfigMap file key"  present '^  "agents\.yaml": "' "$tmp/on.yaml"
 check "enabled: mountPath"           present 'mountPath: /etc/openbbc/seed' "$tmp/on.yaml"
 check "enabled: readOnly"            present 'readOnly: true' "$tmp/on.yaml"
 check "enabled: SEED_PATH"           present 'name: SEED_PATH' "$tmp/on.yaml"
@@ -47,5 +47,6 @@ helm template "$release" "$chart" --set seed.enabled=true --set seed.existingCon
 check "existing: no chart ConfigMap" absent  't-openbbc-seed' "$tmp/ex.yaml"
 check "existing: mounts named map"   present '^ +name: mine$' "$tmp/ex.yaml"
 check "existing: SEED_PATH"          present 'name: SEED_PATH' "$tmp/ex.yaml"
+check "existing: no checksum/seed"   absent  'checksum/seed' "$tmp/ex.yaml"
 
 exit $fail

@@ -8,7 +8,6 @@ metadata:
     app.kubernetes.io/component: openbbcd
 data:
   {{- range $name, $content := .Values.seed.files }}
-  {{ $name }}: |
-    {{- $content | nindent 4 }}
+  {{ $name | quote }}: {{ $content | quote }}
   {{- end }}
 {{- end }}

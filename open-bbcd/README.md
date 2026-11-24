@@ -42,7 +42,12 @@ The `open-bbcd` binary dispatches on its first positional argument (`cmd/open-bb
 | `open-bbcd migrate` | Apply pending migrations and exit. Requires `DATABASE_URL`. |
 | `open-bbcd healthcheck` | Probe `http://127.0.0.1:$SERVER_PORT/health` and exit `0` on 2xx, `1` otherwise. Reads only `SERVER_PORT` — a broken `DATABASE_URL` will not fail the probe. Used by the container `HEALTHCHECK`. |
 
+| `open-bbcd seed validate [--no-env] <path>` | Load and validate a seed file or directory without touching the database. With `--no-env`, skip `${VAR}` interpolation and print the required variable names (use this in CI). Exit `1` on an invalid file, `2` on misuse. |
+| `open-bbcd seed apply <path>` | Apply a seed file or directory to the database in `DATABASE_URL` (env vars must be set), print one line per action and exit. |
+
 Unknown subcommands exit `2`.
+
+Seeding is also available at boot: set `SEED_PATH` (below) and the server imports the seed after migrations and before it starts serving; any seed error aborts boot. Leaving `SEED_PATH` unset disables seeding and unlocks previously seeded backends.
 
 ## Make targets
 
@@ -170,6 +175,7 @@ Config is env-driven (`internal/config/config.go`, `caarlos0/env` + `joho/godote
 | `DATABASE_URL` | — | Yes | PostgreSQL connection URL. |
 | `SERVER_HOST` | `0.0.0.0` | No | Server bind host. |
 | `SERVER_PORT` | `8080` | No | Server bind port. Also read by `open-bbcd healthcheck`. |
+| `SEED_PATH` | — | No | Seed file or directory (`openbbc-seed-v1` YAML) imported at boot, after migrations. Backend secrets are `${VAR}` placeholders resolved from the environment; a missing variable fails boot. Unset → no seeding, and seeded backends become editable again. |
 | `LOG_LEVEL` | `info` | No | `debug`, `info`, `warn` or `error`; anything else fails boot. At `debug`, every LLM call logs an `llm call` line naming its adapter (`anthropic` or `bifrost:<provider>`), model, stop reason, tokens and duration. |
 | `DISCOVERY_STORAGE_DIR` | `./data/discovery` | No | Local disk root for discovery zip blobs. In the compose file this is set to `/data/discovery` and backed by a named volume. |
 | `DISCOVERY_MAX_UPLOAD_MB` | `50` | No | Max discovery zip size accepted by the wizard. |

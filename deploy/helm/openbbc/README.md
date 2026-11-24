@@ -135,9 +135,20 @@ password. Pin it explicitly for reproducible dry-runs.
 open-bbcd can import agents, versions and MCP backends from YAML at boot (after
 migrations, before it serves). The chart wires this up through the `seed:` values.
 
-1. **Export locally** from a running open-bbcd to an `openbbc-seed-v1` file (see the
-   declarative-seed docs for the export command / endpoint). Secrets in the export are
-   `${VAR}` placeholders, not values.
+1. **Export locally** from a running open-bbcd to an `openbbc-seed-v1` file: use the
+   **Export** button on the backoffice version page, or call the API directly:
+
+   ```bash
+   curl -si -X POST http://localhost:8080/agent_versions/<version_id>/export \
+     -H 'Content-Type: application/json' \
+     -d '{"static_ids":{...},"deploy":"if_none"}'
+   ```
+
+   Secrets in the export are `${VAR}` placeholders, not values. The response header
+   `X-Seed-Env-Vars` lists the `${VAR}` names that must be set in the
+   `openbbcd.envFromSecret` Secret (step 3). In CI, run
+   `open-bbcd seed validate --no-env <file>` to check the file and list the variables
+   it needs.
 2. **Put the file in values** under `seed.files` (filename -> YAML string) and enable it:
 
    ```bash
