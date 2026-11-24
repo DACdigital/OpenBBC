@@ -119,10 +119,57 @@ password. Pin it explicitly for reproducible dry-runs.
 | `aikdmRunner.cronjobs.alphas.schedule` | `*/5 * * * *` | One aikdm LLM call (~30–60s) per finalized version. |
 | `aikdmRunner.cronjobs.evals.schedule` | `*/10 * * * *` | Evals are seconds-per-run. |
 | `aikdmRunner.cronjobs.trainings.schedule` | `*/15 * * * *` | Trainings are minutes-per-epoch. |
+| `seed.enabled` | `false` | Mount a seed ConfigMap at `/etc/openbbc/seed` and set `SEED_PATH`. See "Seeding agents". |
+| `seed.files` | `{}` | filename -> YAML string, rendered into `<release>-openbbc-seed`. Changes roll the pod. |
+| `seed.existingConfigMap` | `""` | Mount an operator-managed ConfigMap instead (needs a manual `kubectl rollout restart`). |
+| `openbbcd.probes.startup` | `failureThreshold: 30`, `periodSeconds: 10` | Startup probe on `/health`; always rendered. |
 | `postgres.enabled` | `true` | For prod, set `false` and use `externalDatabase.url`. |
 | `postgres.auth.password` | `""` | Empty → random on first install, kept via `helm.sh/resource-policy: keep`. |
 | `externalDatabase.url` | `""` | e.g. `postgres://.../openbbcd?sslmode=require`. |
 | `externalDatabase.existingSecret` | `""` | Alternative: reference a pre-existing Secret with key `DATABASE_URL`. |
+
+---
+
+## Seeding agents
+
+open-bbcd can import agents, versions and MCP backends from YAML at boot (after
+migrations, before it serves). The chart wires this up through the `seed:` values.
+
+1. **Export locally** from a running open-bbcd to an `openbbc-seed-v1` file (see the
+   declarative-seed docs for the export command / endpoint). Secrets in the export are
+   `${VAR}` placeholders, not values.
+2. **Put the file in values** under `seed.files` (filename -> YAML string) and enable it:
+
+   ```bash
+   helm upgrade --install openbbc deploy/helm/openbbc -n openbbc \
+     --set seed.enabled=true \
+     --set-file 'seed.files.agents\.yaml'=./agents.yaml
+   ```
+
+   The chart renders a ConfigMap `<release>-openbbc-seed`, mounts it read-only at
+   `/etc/openbbc/seed` and sets `SEED_PATH=/etc/openbbc/seed`.
+3. **Put the `${VAR}` values in the `openbbcd.envFromSecret` Secret** (the existing knob;
+   there is no separate seed Secret). Create that Secret before installing.
+4. **Install.** A `checksum/seed` pod annotation over `seed.files` rolls the pod whenever
+   the seed changes.
+
+To manage the ConfigMap yourself, set `seed.existingConfigMap=<name>` instead of
+`seed.files`. The chart can't checksum a ConfigMap it doesn't own, so after editing it run
+`kubectl -n openbbc rollout restart deploy/<release>-openbbc-openbbcd`.
+
+A `startupProbe` on `/health` (`openbbcd.probes.startup`, default `failureThreshold: 30`,
+`periodSeconds: 10`, i.e. 300s) is always rendered, so liveness can't kill the pod while
+migrations and the seed import run. Raise it for large seeds.
+
+Sharp edges:
+
+- **`force` re-pins on every restart.** An entry marked `force` is re-applied each time the
+  pod starts, overwriting changes made in the backoffice since.
+- **Backend takeover by name.** A seeded MCP backend takes over an existing backend with
+  the same name, and is then marked seed-managed.
+- **URLs are exported as-is.** Backend URLs reach the target environment unchanged; edit
+  them in the seed file if staging and production differ.
+- Resources removed from the seed are never deleted on boot.
 
 ---
 
