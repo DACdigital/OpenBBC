@@ -59,6 +59,7 @@
     <tr class="clickable" onclick="location.href=this.dataset.href" data-href="{{$href}}">
       <td class="col-version {{if gt .VersionNum 1}}old{{end}}">
         <a class="agent-link" href="{{$href}}">v{{.VersionNum}}</a>
+        {{if .Version.StaticID}}<div class="muted"><code>{{.Version.StaticID}}</code></div>{{end}}
         {{$tf := index $.TrainedFrom .Version.ID}}
         {{if $tf.TargetModel}}<div class="muted" onclick="event.stopPropagation()">Trained on <a href="/training-sessions/{{$tf.SessionID}}">{{$tf.TargetModel}}</a></div>{{end}}
       </td>

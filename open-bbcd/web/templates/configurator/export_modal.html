@@ -1,0 +1,78 @@
+{{define "version_export_modal"}}
+<div class="modal" id="version-export-modal" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content" style="width:min(640px,calc(100vw - 32px));max-width:none">
+    <h2>Export as seed file</h2>
+    <p>
+      Exports <strong>{{.RequestedLabel}}</strong> and every agent version it
+      depends on as an <code>openbbc-seed-v1</code> YAML file. Rows that have no
+      static ID yet get the one shown here; once assigned, a static ID is permanent.
+    </p>
+    <form id="version-export-form" data-action="/agent_versions/{{.VersionID}}/export" style="margin:0;display:flex;flex-direction:column;gap:12px"
+          onsubmit="event.preventDefault();
+var f=this,err=f.querySelector('.export-error'),out=f.querySelector('.export-envvars'),btn=f.querySelector('button[type=submit]');
+err.hidden=true;out.hidden=true;
+var ids={};
+f.querySelectorAll('input[data-row-id]:not([readonly])').forEach(function(i){var v=i.value.trim();if(v){ids[i.dataset.rowId]=v;}});
+btn.disabled=true;
+fetch(f.dataset.action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({static_ids:ids,deploy:f.elements.deploy.value})})
+.then(function(r){
+  if(!r.ok){return r.text().then(function(t){throw new Error(t||('Export failed ('+r.status+')'));});}
+  var vars=(r.headers.get('X-Seed-Env-Vars')||'').split(',').filter(Boolean);
+  var m=/filename=([^;]+)/.exec(r.headers.get('Content-Disposition')||'');
+  var name=m?m[1].trim():'export.seed.yaml';
+  return r.blob().then(function(b){
+    var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;
+    document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);
+    out.querySelector('.export-envvars-list').textContent=vars.length?vars.join(', '):'none';
+    out.hidden=false;
+  });
+})
+.catch(function(e){err.textContent=e.message;err.hidden=false;})
+.then(function(){btn.disabled=false;});">
+      <h3 style="font-size:13px;margin:0">Agents</h3>
+      <table class="data-table">
+        <thead><tr><th>Agent</th><th>Static ID</th></tr></thead>
+        <tbody>
+          {{range .Rows}}{{if eq .Kind "agent"}}
+          <tr>
+            <td>{{.Label}}</td>
+            <td>{{if .Fixed}}<input type="text" readonly data-row-id="{{.ID}}" value="{{.StaticID}}" title="Already assigned">{{else}}<input type="text" data-row-id="{{.ID}}" value="{{.Default}}" maxlength="90">{{end}}</td>
+          </tr>
+          {{end}}{{end}}
+        </tbody>
+      </table>
+      <h3 style="font-size:13px;margin:0">Versions</h3>
+      <table class="data-table">
+        <thead><tr><th>Version</th><th>Static ID</th></tr></thead>
+        <tbody>
+          {{range .Rows}}{{if eq .Kind "version"}}
+          <tr>
+            <td>{{.Label}}</td>
+            <td>{{if .Fixed}}<input type="text" readonly data-row-id="{{.ID}}" value="{{.StaticID}}" title="Already assigned">{{else}}<input type="text" data-row-id="{{.ID}}" value="{{.Default}}" maxlength="90">{{end}}</td>
+          </tr>
+          {{end}}{{end}}
+        </tbody>
+      </table>
+      <label style="font-size:13px">
+        Deploy marker for {{.RequestedLabel}}
+        <select name="deploy">
+          <option value="none">none: import only</option>
+          <option value="if_none" selected>if_none: deploy only when the agent has no deployed version</option>
+          <option value="force">force: always deploy</option>
+        </select>
+      </label>
+      <p class="hint" style="font-size:12px">Backend URLs are exported as-is — a token embedded in a URL will be in the file.</p>
+      <div class="export-error deploy-modal-error" hidden></div>
+      <div class="export-envvars config-banner" hidden>
+        Downloaded. Backend header values are placeholders; set these environment variables where the file is loaded:
+        <code class="export-envvars-list"></code>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+        <button type="button" class="btn-secondary"
+                onclick="document.getElementById('version-export-modal').remove()">Close</button>
+        <button type="submit" class="btn-primary">Export</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

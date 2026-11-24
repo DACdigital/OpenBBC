@@ -367,6 +367,9 @@ type configFixture struct {
 	VersionID   string
 	VersionNum  int
 	ParseError  string
+
+	VersionStaticID string
+	AgentStaticID   string
 }
 
 // renderConfigLayoutFixture parses the real layout.html + a stub tab_content
@@ -835,5 +838,37 @@ func TestConfigurator_Delete_BindingTarget_409(t *testing.T) {
 	var n int
 	if err := db.QueryRow(`SELECT count(*) FROM agent_versions WHERE id = $1::uuid`, target).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("version rows = %d (%v), want 1", n, err)
+	}
+}
+
+func TestVersionLayout_ExportButtonOnlyWhenExportable(t *testing.T) {
+	const marker = `hx-get="/agent_versions/v1/export-modal"`
+	for _, tc := range []struct {
+		status string
+		want   bool
+	}{
+		{"READY", true}, {"TRAINING", true}, {"DEPLOYED", true},
+		{"DRAFT", false}, {"INITIALIZING", false}, {"PENDING", false},
+	} {
+		body := renderConfigLayoutFixture(t, configFixture{
+			Tab: "prompts", ReadOnly: true, AgentStatus: tc.status,
+			AgentID: "a1", VersionID: "v1", AgentName: "Bot",
+		})
+		if got := strings.Contains(body, marker); got != tc.want {
+			t.Errorf("status %s: export button present=%v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+func TestVersionLayout_ShowsStaticIDs(t *testing.T) {
+	body := renderConfigLayoutFixture(t, configFixture{
+		Tab: "prompts", ReadOnly: true, AgentStatus: "READY",
+		AgentID: "a1", VersionID: "v1", AgentName: "Bot",
+		VersionStaticID: "bot_v1", AgentStaticID: "bot",
+	})
+	for _, want := range []string{">bot_v1<", ">bot<"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in header", want)
+		}
 	}
 }

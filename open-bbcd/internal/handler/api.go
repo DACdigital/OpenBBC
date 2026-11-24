@@ -151,6 +151,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 		fatal("init configurator handler", err)
 	}
 	configuratorHandler.WithSubAgents(repository.NewSubAgentRepository(db))
+	configuratorHandler.WithSeedExportPreview(repository.NewSeedRepository(db))
 
 	agentDetailHandler, err := NewAgentDetailHandler(
 		&agentDetailStoreAdapter{agents: agentRepo, versions: versionRepo},
@@ -297,6 +298,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/notes", configuratorHandler.UpdateAllMCPNotes)
 	mux.HandleFunc("GET /agent_versions/{version_id}/delete-confirm", configuratorHandler.DeleteConfirm)
 	mux.HandleFunc("POST /agent_versions/{version_id}/delete", configuratorHandler.Delete)
+	mux.HandleFunc("GET /agent_versions/{version_id}/export-modal", configuratorHandler.ExportModal)
 	// Convenience alias under the new top-level "MCP" version tab.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/mcp", configuratorHandler.MCPSubtab)
 	// Agents tab: agent tool toggle + sub-agent bindings. Writes answer with

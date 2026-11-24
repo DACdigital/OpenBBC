@@ -83,6 +83,117 @@ func (r *SeedRepository) Export(ctx context.Context, versionID string, req Expor
 	return set, envVars, nil
 }
 
+// ExportPreviewRow is one agent or version of an export closure as the
+// backoffice export modal shows it. StaticID is the existing ID (Fixed, so
+// read-only); otherwise Default is the ID Export would assign.
+type ExportPreviewRow struct {
+	Kind     string // "agent" | "version"
+	ID       string
+	Label    string
+	StaticID string
+	Fixed    bool
+	Default  string
+}
+
+// ExportPreview lists the closure of versionID (agents first, then versions,
+// requested version first among them) with the static IDs Export would use,
+// without writing anything. It applies the same status precondition and the
+// same default/collision logic as Export.
+func (r *SeedRepository) ExportPreview(ctx context.Context, versionID string) ([]ExportPreviewRow, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	ex := &seedExport{ctx: ctx, tx: tx}
+	if err := ex.checkExportable(versionID); err != nil {
+		return nil, err
+	}
+	if err := ex.closure(versionID); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id::text, name, COALESCE(static_id, '') FROM agents
+		WHERE id = ANY($1::uuid[])`, pq.Array(ex.agentOrder))
+	if err != nil {
+		return nil, fmt.Errorf("read agents: %w", err)
+	}
+	for rows.Next() {
+		var id string
+		var a exportAgent
+		if err := rows.Scan(&id, &a.name, &a.staticID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		a.id = id
+		*ex.agents[id] = a
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows, err = tx.QueryContext(ctx, `
+		SELECT id::text, status, COALESCE(static_id, '') FROM agent_versions
+		WHERE id = ANY($1::uuid[])`, pq.Array(ex.versionOrder))
+	if err != nil {
+		return nil, fmt.Errorf("read versions: %w", err)
+	}
+	status := map[string]string{}
+	for rows.Next() {
+		var id, st, sid string
+		if err := rows.Scan(&id, &st, &sid); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		status[id] = st
+		ex.versions[id].staticID = sid
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var out []ExportPreviewRow
+	reservedAgents := map[string]bool{}
+	effective := map[string]string{} // agent id → static ID (existing or default)
+	for _, id := range ex.agentOrder {
+		a := ex.agents[id]
+		row := ExportPreviewRow{Kind: "agent", ID: id, Label: a.name, StaticID: a.staticID, Fixed: a.staticID != ""}
+		effective[id] = a.staticID
+		if !row.Fixed {
+			if row.Default, err = ex.freeStaticID("agents", staticid.AgentDefault(a.name), reservedAgents); err != nil {
+				return nil, err
+			}
+			reservedAgents[row.Default] = true
+			effective[id] = row.Default
+		}
+		out = append(out, row)
+	}
+	reservedVersions := map[string]bool{}
+	for _, id := range ex.versionOrder {
+		v := ex.versions[id]
+		n, err := ex.versionNum(id)
+		if err != nil {
+			return nil, fmt.Errorf("version %s: number: %w", id, err)
+		}
+		row := ExportPreviewRow{
+			Kind: "version", ID: id, StaticID: v.staticID, Fixed: v.staticID != "",
+			Label: fmt.Sprintf("%s · v%d · %s", ex.agents[v.agentID].name, n, status[id]),
+		}
+		if !row.Fixed {
+			base := staticid.VersionDefault(effective[v.agentID], n)
+			if row.Default, err = ex.freeStaticID("agent_versions", base, reservedVersions); err != nil {
+				return nil, err
+			}
+			reservedVersions[row.Default] = true
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
 // seedExport is the state of one Export run.
 type seedExport struct {
 	ctx context.Context
@@ -336,8 +447,7 @@ func (ex *seedExport) assignStaticIDs(supplied map[string]string) error {
 		var genErr error
 		sid, err := ex.assignOne("agent_versions", v.id, v.staticID, supplied[v.id], func() string {
 			var n int
-			if genErr = ex.tx.QueryRowContext(ex.ctx, versionChainCTE+`
-				SELECT num FROM chain WHERE id = $1::uuid`, v.id).Scan(&n); genErr != nil {
+			if n, genErr = ex.versionNum(v.id); genErr != nil {
 				return ""
 			}
 			return staticid.VersionDefault(ex.agents[v.agentID].staticID, n)
@@ -363,19 +473,9 @@ func (ex *seedExport) assignOne(table, id, existing, want string, def func() str
 		return existing, nil
 	}
 
-	taken := func(sid string) (bool, error) {
-		var one int
-		err := ex.tx.QueryRowContext(ex.ctx,
-			`SELECT 1 FROM `+table+` WHERE static_id = $1`, sid).Scan(&one)
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		return err == nil, err
-	}
-
 	sid := want
 	if sid != "" {
-		used, err := taken(sid)
+		used, err := ex.staticIDTaken(table, sid)
 		if err != nil {
 			return "", err
 		}
@@ -383,19 +483,9 @@ func (ex *seedExport) assignOne(table, id, existing, want string, def func() str
 			return "", fmt.Errorf("%w: %q", types.ErrStaticIDConflict, sid)
 		}
 	} else {
-		base := def()
-		if base == "" {
-			return "", errors.New("no default static ID")
-		}
-		for k := 1; ; k++ {
-			sid = staticid.WithSuffix(base, k)
-			used, err := taken(sid)
-			if err != nil {
-				return "", err
-			}
-			if !used {
-				break
-			}
+		var err error
+		if sid, err = ex.freeStaticID(table, def(), nil); err != nil {
+			return "", err
 		}
 	}
 
@@ -411,6 +501,47 @@ func (ex *seedExport) assignOne(table, id, existing, want string, def func() str
 		return "", fmt.Errorf("%w: static_id set concurrently", types.ErrStaticIDConflict)
 	}
 	return sid, nil
+}
+
+// staticIDTaken reports whether sid is already used in table (a fixed
+// identifier, never user input).
+func (ex *seedExport) staticIDTaken(table, sid string) (bool, error) {
+	var one int
+	err := ex.tx.QueryRowContext(ex.ctx,
+		`SELECT 1 FROM `+table+` WHERE static_id = $1`, sid).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// freeStaticID returns base, or base with the first "-k" suffix, that is
+// neither used in table nor in reserved (IDs a preview has already handed out).
+func (ex *seedExport) freeStaticID(table, base string, reserved map[string]bool) (string, error) {
+	if base == "" {
+		return "", errors.New("no default static ID")
+	}
+	for k := 1; ; k++ {
+		sid := staticid.WithSuffix(base, k)
+		if reserved[sid] {
+			continue
+		}
+		used, err := ex.staticIDTaken(table, sid)
+		if err != nil {
+			return "", err
+		}
+		if !used {
+			return sid, nil
+		}
+	}
+}
+
+// versionNum is the version's position in its agent's chain (root = 1).
+func (ex *seedExport) versionNum(id string) (int, error) {
+	var n int
+	err := ex.tx.QueryRowContext(ex.ctx, versionChainCTE+`
+		SELECT num FROM chain WHERE id = $1::uuid`, id).Scan(&n)
+	return n, err
 }
 
 // build assembles the seed set: agents and versions in closure order, the

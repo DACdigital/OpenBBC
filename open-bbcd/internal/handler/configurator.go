@@ -55,6 +55,8 @@ type ConfiguratorHandler struct {
 	mcpTmpl     *template.Template
 	agentsTmpl  *template.Template
 	deleteTmpl  *template.Template
+	exportTmpl  *template.Template
+	seedPreview SeedExportPreviewer // nil → export-modal route 500s; set via WithSeedExportPreview
 }
 
 func NewConfiguratorHandler(
@@ -118,7 +120,14 @@ func NewConfiguratorHandler(
 	if err != nil {
 		return nil, err
 	}
+	exportTmpl, err := template.New("").Funcs(funcs).ParseFS(webFS,
+		"templates/configurator/export_modal.html",
+	)
+	if err != nil {
+		return nil, err
+	}
 	return &ConfiguratorHandler{
+		exportTmpl:  exportTmpl,
 		repo:        repo,
 		backends:    backends,
 		wiring:      wiring,
@@ -161,6 +170,8 @@ func renderMarkdown(agentID, md string) template.HTML {
 type configPageData struct {
 	Active           string
 	VersionID        string // URL path param value (a version row's ID)
+	VersionStaticID  string // version static_id; empty when unassigned
+	AgentStaticID    string // agent static_id; empty when unassigned
 	VersionNum       int    // ordinal within the agent's version chain (1 = root); 0 when unknown
 	AgentID          string // stable agent ID, used for back-link to the version list
 	AgentName        string
@@ -213,6 +224,8 @@ func (h *ConfiguratorHandler) load(r *http.Request) (configPageData, error) {
 		Active:           "agents",
 		VersionID:        versionID,
 		VersionNum:       versionNum,
+		VersionStaticID:  derefString(version.StaticID),
+		AgentStaticID:    derefString(agent.StaticID),
 		AgentID:          agent.ID,
 		AgentName:        agent.Name,
 		AgentStatus:      version.Status,
@@ -544,6 +557,54 @@ func (h *ConfiguratorHandler) DeleteConfirm(w http.ResponseWriter, r *http.Reque
 	renderTemplate(w, h.deleteTmpl, "version_delete_confirm_modal", map[string]any{
 		"VersionID": version.ID,
 		"AgentName": agent.Name,
+	})
+}
+
+// SeedExportPreviewer lists the closure of a version with the static IDs an
+// export would use (implemented by repository.SeedRepository).
+type SeedExportPreviewer interface {
+	ExportPreview(ctx context.Context, versionID string) ([]repository.ExportPreviewRow, error)
+}
+
+// WithSeedExportPreview injects the closure-preview source for the export
+// modal. Returns h for chaining.
+func (h *ConfiguratorHandler) WithSeedExportPreview(p SeedExportPreviewer) *ConfiguratorHandler {
+	h.seedPreview = p
+	return h
+}
+
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// ExportModal renders the seed-export modal fragment (declarative-seed spec
+// §5): the version's closure with prefilled static IDs (read-only where
+// already assigned). Loaded via htmx and appended to <body>; the modal posts
+// to POST /agent_versions/{id}/export itself. 409 for a non-exportable status.
+func (h *ConfiguratorHandler) ExportModal(w http.ResponseWriter, r *http.Request) {
+	if h.seedPreview == nil {
+		http.Error(w, "seed export not configured", http.StatusInternalServerError)
+		return
+	}
+	versionID := r.PathValue("version_id")
+	rows, err := h.seedPreview.ExportPreview(r.Context(), versionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	var requested string
+	for _, row := range rows {
+		if row.Kind == "version" && row.ID == versionID {
+			requested = row.Label
+		}
+	}
+	renderTemplate(w, h.exportTmpl, "version_export_modal", map[string]any{
+		"VersionID":      versionID,
+		"RequestedLabel": requested,
+		"Rows":           rows,
 	})
 }
 
