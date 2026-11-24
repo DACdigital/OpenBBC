@@ -1,6 +1,7 @@
 package seed
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,5 +51,30 @@ func TestLoad_DuplicateAcrossFiles(t *testing.T) {
 	_, err := Load(filepath.Join("testdata", "dupdir"))
 	if err == nil || !strings.Contains(err.Error(), "a.yaml") || !strings.Contains(err.Error(), "b.yaml") || !strings.Contains(err.Error(), "crm-api") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A second YAML document in a seed file would otherwise be silently ignored.
+func TestLoad_MultiDocumentFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "multi.yaml")
+	data := "format: openbbc-seed-v1\nbackends: []\n---\nformat: openbbc-seed-v1\nbackends:\n  - name: lost\n    kind: mcp_client\n    config: {url: https://x}\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "document") {
+		t.Fatalf("err = %v, want a multi-document error naming %s", err, path)
+	}
+}
+
+// An empty trailing document ("---" at the end of the file) is not a second
+// document.
+func TestLoad_TrailingSeparatorOK(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trailing.yaml")
+	if err := os.WriteFile(path, []byte("---\nformat: openbbc-seed-v1\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load: %v", err)
 	}
 }

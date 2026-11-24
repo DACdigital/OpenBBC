@@ -95,6 +95,9 @@ func loadFile(path string) (*Set, error) {
 		}
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	if err := noFurtherDocuments(dec); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	if s.Format != FormatV1 {
 		return nil, fmt.Errorf("%s: unsupported format %q (want %q)", path, s.Format, FormatV1)
 	}
@@ -113,6 +116,33 @@ func loadFile(path string) (*Set, error) {
 		s.Versions[i].Prompts = normalizeMap(s.Versions[i].Prompts)
 	}
 	return &s, nil
+}
+
+// noFurtherDocuments fails if the stream holds another non-empty YAML
+// document: a seed file is exactly one document, and a second one would
+// otherwise be silently ignored. An empty trailing document ("---" at the end)
+// is harmless.
+func noFurtherDocuments(dec *yaml.Decoder) error {
+	for {
+		var n yaml.Node
+		err := dec.Decode(&n)
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !emptyDocument(&n) {
+			return errors.New("more than one YAML document (a seed file holds exactly one; split it into separate files)")
+		}
+	}
+}
+
+func emptyDocument(n *yaml.Node) bool {
+	if n.Kind == yaml.DocumentNode && len(n.Content) == 1 {
+		n = n.Content[0]
+	}
+	return n.Kind == 0 || (n.Kind == yaml.ScalarNode && n.Tag == "!!null")
 }
 
 // normalizeMap returns m with every nested map[any]any (produced by yaml.v3
