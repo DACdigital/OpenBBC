@@ -7,14 +7,18 @@
     <span class="badge {{if eq (printf "%s" .Backend.Kind) "http_endpoint"}}badge-ready{{else}}badge-initializing{{end}}">
       {{if eq (printf "%s" .Backend.Kind) "http_endpoint"}}HTTP ENDPOINT{{else}}MCP CLIENT{{end}}
     </span>
+    {{if .Backend.ManagedBySeed}}<span class="badge badge-initializing">managed by seed file</span>{{end}}
     {{if gt .UsageCount 0}}
       <span class="config-header-meta">Used by {{.UsageCount}} version{{if ne .UsageCount 1}}s{{end}}</span>
     {{end}}
   </div>
 
   <div class="config-actions-bar">
+    {{if not .Backend.ManagedBySeed}}
     <button type="submit" form="backend-edit-form" class="btn-primary">Save</button>
-    <a href="/mcp" class="btn-secondary">Cancel</a>
+    {{end}}
+    <a href="/mcp" class="btn-secondary">{{if .Backend.ManagedBySeed}}Back{{else}}Cancel{{end}}</a>
+    {{if not .Backend.ManagedBySeed}}
     <button type="button"
             class="btn-danger"
             style="margin-left:auto"
@@ -24,9 +28,11 @@
             hx-swap="beforeend">
       Delete backend
     </button>
+    {{end}}
   </div>
 
   <form id="backend-edit-form" method="POST" action="/mcp/{{.Backend.ID}}" class="config-form">
+   <fieldset {{if .Backend.ManagedBySeed}}disabled{{end}} style="border:0;padding:0;margin:0">
     <label>
       Name
       <input type="text" name="name" required value="{{.Backend.Name}}">
@@ -80,6 +86,7 @@
       </div>
     </fieldset>
     {{end}}
+   </fieldset>
   </form>
 </div>
 {{end}}

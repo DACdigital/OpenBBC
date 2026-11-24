@@ -40,7 +40,7 @@
   <tbody>
     {{range .Rows}}
     <tr class="clickable" onclick="location.href=this.dataset.href" data-href="/mcp/{{.ID}}">
-      <td><a class="agent-link" href="/mcp/{{.ID}}">{{.Name}}</a></td>
+      <td><a class="agent-link" href="/mcp/{{.ID}}">{{.Name}}</a>{{if .ManagedBySeed}} <span class="badge badge-initializing">managed by seed file</span>{{end}}</td>
       <td><span class="badge badge-{{.Kind}}">{{.Kind}}</span></td>
       <td>{{.PrimaryURL}}</td>
       <td class="col-count">{{.UsageCount}}</td>
