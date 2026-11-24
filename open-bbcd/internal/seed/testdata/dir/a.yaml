@@ -1,0 +1,21 @@
+format: openbbc-seed-v1
+backends:
+  - name: crm-mcp
+    kind: mcp_client
+    config:
+      url: ${CRM_MCP_URL}
+      default_headers:
+        Authorization: ${CRM_MCP_AUTHORIZATION}
+agents:
+  - static_id: sales
+    name: Sales assistant
+    description: d
+    architecture:
+      tools:
+        - id: get_customer
+          name: get_customer
+versions:
+  - static_id: sales_v1
+    agent: sales
+    prompts:
+      main_prompt: "literal ${NOT_A_VAR}"

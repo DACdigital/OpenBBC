@@ -1,0 +1,5 @@
+format: openbbc-seed-v1
+backends:
+  - name: crm-api
+    kind: http_endpoint
+    config: {}
