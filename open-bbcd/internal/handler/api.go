@@ -383,6 +383,10 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	agentVersionHandler := NewAgentVersionHandler(versionRepo)
 	mux.HandleFunc("GET /agent_versions.json", agentVersionHandler.ListJSON)
 
+	// Declarative seed export (static IDs accepted in the path).
+	seedExportHandler := NewSeedExportHandler(versionRepo, repository.NewSeedRepository(db))
+	mux.HandleFunc("POST /agent_versions/{version_id}/export", seedExportHandler.Export)
+
 	// Evals — JSON script surface.
 	mux.HandleFunc("POST /agent_versions/{version_id}/evals", evalHandler.Create)
 	mux.HandleFunc("GET /evals/{eval_id}/export.yaml", evalHandler.Export)

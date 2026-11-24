@@ -124,6 +124,6 @@ var (
 	ErrInvalidStaticID      = errors.New("invalid static_id")
 	ErrStaticIDConflict     = errors.New("static_id already in use")
 	ErrBackendManaged       = errors.New("tool backend is managed by seed and cannot be modified")
-	ErrVersionNotExportable = errors.New("version cannot be exported (must be READY or DEPLOYED)")
+	ErrVersionNotExportable = errors.New("version cannot be exported (must be READY, TRAINING or DEPLOYED)")
 	ErrBackendKindMismatch  = errors.New("tool backend kind does not match the existing backend")
 )
