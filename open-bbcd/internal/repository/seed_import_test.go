@@ -281,6 +281,7 @@ func TestApply_ContentDriftWarns(t *testing.T) {
 	before := rowJSON(t, db, "agent_versions", seeded)
 
 	s := baseSeedSet()
+	s.Versions[0].Deploy = seed.DeployNone
 	s.Versions[0].Prompts = map[string]any{"main_prompt": "changed"}
 	actions := mustApply(t, r, s, ApplyOptions{})
 
@@ -300,10 +301,46 @@ func TestApply_ContentDriftOnMCPNote(t *testing.T) {
 	mustApply(t, r, baseSeedSet(), ApplyOptions{})
 
 	s := baseSeedSet()
+	s.Versions[0].Deploy = seed.DeployNone
 	s.Versions[0].MCPBackends[0].Note = "other note"
 	actions := mustApply(t, r, s, ApplyOptions{})
 	if a := actionFor(actions, "version", "sales_v1"); a != "warning" {
 		t.Errorf("version action = %q, want warning", a)
+	}
+}
+
+// A drifted version that the file also asks to deploy (if_none or force)
+// fails the apply: deploying the stored row would ship content the file does
+// not describe. Nothing from the failed run is persisted.
+func TestApply_DriftWithDeployMarkerFails(t *testing.T) {
+	for _, deploy := range []seed.DeployMode{seed.DeployIfNone, seed.DeployForce} {
+		t.Run(string(deploy), func(t *testing.T) {
+			db := openTestDB(t)
+			r := NewSeedRepository(db)
+			first := baseSeedSet()
+			first.Versions[0].Deploy = seed.DeployNone
+			mustApply(t, r, first, ApplyOptions{})
+			seeded := idByStaticID(t, db, "agent_versions", "sales_v1")
+			before := rowJSON(t, db, "agent_versions", seeded)
+
+			s := baseSeedSet()
+			s.Backends = append(s.Backends, seed.Backend{Name: "extra", Kind: "mcp_client", Config: map[string]any{"url": "https://x.example", "transport": "streamable_http"}})
+			s.Versions[0].Deploy = deploy
+			s.Versions[0].Prompts = map[string]any{"main_prompt": "changed"}
+			_, err := r.Apply(context.Background(), s, ApplyOptions{Boot: true})
+			if err == nil || !strings.Contains(err.Error(), "sales_v1") {
+				t.Fatalf("Apply = %v, want an error naming sales_v1", err)
+			}
+			if got := rowJSON(t, db, "agent_versions", seeded); got != before {
+				t.Errorf("drifted version row changed:\n before %s\n after  %s", before, got)
+			}
+			if n := countRows(t, db, `SELECT count(*) FROM agent_versions WHERE status = 'DEPLOYED'`); n != 0 {
+				t.Errorf("DEPLOYED versions = %d, want 0", n)
+			}
+			if n := countRows(t, db, `SELECT count(*) FROM tool_backends WHERE name = 'extra'`); n != 0 {
+				t.Errorf("backend extra persisted after failed Apply")
+			}
+		})
 	}
 }
 

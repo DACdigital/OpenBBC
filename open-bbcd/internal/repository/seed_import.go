@@ -261,7 +261,8 @@ func (ap *seedApply) agents() error {
 }
 
 // versions is pass 1: an existing version is only checked (owning agent,
-// content drift); a missing one is inserted READY at its agent's tip, in file
+// content drift — a warning, or an error when the file also asks to deploy
+// it); a missing one is inserted READY at its agent's tip, in file
 // order, with prompts, the agent-tool flag and MCP attachments. Sub-agent
 // bindings wait for pass 2.
 func (ap *seedApply) versions() error {
@@ -296,6 +297,9 @@ func (ap *seedApply) versions() error {
 				return fmt.Errorf("version %s: read content: %w", v.StaticID, err)
 			}
 			if seed.ContentHash(dbContent) != seed.ContentHash(content) {
+				if v.Deploy == seed.DeployIfNone || v.Deploy == seed.DeployForce {
+					return fmt.Errorf("version %s: content differs from the seed and the file asks to deploy it (deploy: %s); new content needs a new static_id", v.StaticID, v.Deploy)
+				}
 				ap.log(SeedKindVersion, v.StaticID, SeedActionWarning,
 					"content differs from the seed; left unchanged (new content needs a new static_id)")
 			} else {
