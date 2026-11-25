@@ -78,20 +78,23 @@ class ResourceFactory:
 
     def agent(self) -> Seeded:
         agent_id = self.api.create_agent(self.name("agent"))
+        # Mirror the product flow: per-version wiring (MCP attach) is only
+        # writable while the version is INITIALIZING/DRAFT, and the bundle
+        # lands last, moving the version to READY (immutable from then on).
         with psycopg.connect(self._seed_dsn, autocommit=True) as conn:
             version_id = str(conn.execute(
-                "INSERT INTO agent_versions (agent_id, status) VALUES (%s::uuid, 'DRAFT') "
+                "INSERT INTO agent_versions (agent_id, status) VALUES (%s::uuid, 'INITIALIZING') "
                 "RETURNING id", (agent_id,)).fetchone()[0])
-        self._seed_bundle(version_id)
         backend_name = self.name("kb")
         backend_id = self.api.create_mcp_backend(backend_name, MCP_URL, MCP_DEFAULT_HEADERS)
         self.api.attach_backend(version_id, backend_id)
+        self._seed_bundle(version_id)
         return Seeded(agent_id, version_id, backend_id, backend_name)
 
     def _seed_bundle(self, version_id: str) -> None:
         r = subprocess.run(
             ["uv", "run", "--quiet", "--script", str(SEED_SCRIPT),
-             "--version-id", version_id, "--bundle", str(BUNDLE)],
+             "--version-id", version_id, "--bundle", str(BUNDLE), "--force"],
             env={**os.environ, "DATABASE_URL": self._seed_dsn},
             capture_output=True, text=True, timeout=180)
         if r.returncode != 0:
