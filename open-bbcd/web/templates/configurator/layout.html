@@ -3,6 +3,8 @@
   <div class="config-header">
     <a href="/agents/{{.AgentID}}/configure/versions" class="config-back">← {{.AgentName}}</a>
     <h1>Version detail {{if .VersionNum}}<span class="config-version-num">v{{.VersionNum}}</span>{{end}}</h1>
+    {{if .VersionStaticID}}<code class="config-static-id" title="Version static ID">{{.VersionStaticID}}</code>{{end}}
+    {{if .AgentStaticID}}<code class="config-static-id" title="Agent static ID">{{.AgentStaticID}}</code>{{end}}
     {{if .AgentStatus}}<span class="badge badge-{{.AgentStatus | statusClass}}">{{.AgentStatus}}</span>{{end}}
     {{if .ReadOnly}}
     <span class="config-spacer"></span>
@@ -34,6 +36,11 @@
           style="opacity:0.4;cursor:not-allowed"
           title="No bundle generated for this version yet">Evaluate</button>
         <a href="/agent_versions/{{.VersionID}}/evals" class="btn-secondary">View evals</a>
+      {{end}}
+      {{if or (eq .AgentStatus "READY") (eq .AgentStatus "TRAINING") (eq .AgentStatus "DEPLOYED")}}
+        <button class="btn-secondary"
+                hx-get="/agent_versions/{{.VersionID}}/export-modal"
+                hx-target="body" hx-swap="beforeend">Export</button>
       {{end}}
       {{if eq .AgentStatus "READY"}}
         <button class="btn-primary"

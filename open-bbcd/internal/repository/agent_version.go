@@ -4,9 +4,12 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/staticid"
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 )
 
@@ -18,16 +21,20 @@ func NewAgentVersionRepository(db *sql.DB) *AgentVersionRepository {
 	return &AgentVersionRepository{db: db}
 }
 
-const agentVersionColumns = `id, agent_id, parent_version_id, status, prompts, flow_map_config, flow_map_parse_error, agent_tool_enabled, created_at, updated_at`
+const agentVersionColumns = `id, agent_id, static_id, parent_version_id, status, prompts, flow_map_config, flow_map_parse_error, agent_tool_enabled, created_at, updated_at`
 
 func scanAgentVersion(s scanner) (*types.AgentVersion, error) {
 	v := &types.AgentVersion{}
+	var staticID sql.NullString
 	var parent sql.NullString
 	var prompts []byte
 	var cfg []byte
 	var parseErr sql.NullString
-	if err := s.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &cfg, &parseErr, &v.AgentToolEnabled, &v.CreatedAt, &v.UpdatedAt); err != nil {
+	if err := s.Scan(&v.ID, &v.AgentID, &staticID, &parent, &v.Status, &prompts, &cfg, &parseErr, &v.AgentToolEnabled, &v.CreatedAt, &v.UpdatedAt); err != nil {
 		return nil, err
+	}
+	if staticID.Valid {
+		v.StaticID = &staticID.String
 	}
 	if parent.Valid {
 		v.ParentVersionID = &parent.String
@@ -110,8 +117,8 @@ func (r *AgentVersionRepository) Delete(ctx context.Context, versionID string) e
 // the frozen architecture, the version carries the editable prompts.
 func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID string) (*types.AgentVersion, *types.Agent, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT av.id::text, av.agent_id::text, av.parent_version_id, av.status, av.prompts, av.flow_map_config, av.flow_map_parse_error, av.agent_tool_enabled, av.created_at, av.updated_at,
-		       a.id::text, a.name, a.description,
+		SELECT av.id::text, av.agent_id::text, av.static_id, av.parent_version_id, av.status, av.prompts, av.flow_map_config, av.flow_map_parse_error, av.agent_tool_enabled, av.created_at, av.updated_at,
+		       a.id::text, a.name, a.static_id, a.description,
 		       (a.discovery_zip IS NOT NULL AND octet_length(a.discovery_zip) > 0),
 		       a.architecture, a.finalized_at, a.created_at
 		FROM agent_versions av
@@ -120,6 +127,7 @@ func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID str
 	`, versionID)
 	v := &types.AgentVersion{}
 	a := &types.Agent{}
+	var vStaticID, aStaticID sql.NullString
 	var parent sql.NullString
 	var prompts []byte
 	var vCfg []byte
@@ -127,13 +135,19 @@ func (r *AgentVersionRepository) GetWithAgent(ctx context.Context, versionID str
 	var aDesc sql.NullString
 	var arch []byte
 	var aFinal sql.NullTime
-	err := row.Scan(&v.ID, &v.AgentID, &parent, &v.Status, &prompts, &vCfg, &vParseErr, &v.AgentToolEnabled, &v.CreatedAt, &v.UpdatedAt,
-		&a.ID, &a.Name, &aDesc, &a.HasDiscoveryZip, &arch, &aFinal, &a.CreatedAt)
+	err := row.Scan(&v.ID, &v.AgentID, &vStaticID, &parent, &v.Status, &prompts, &vCfg, &vParseErr, &v.AgentToolEnabled, &v.CreatedAt, &v.UpdatedAt,
+		&a.ID, &a.Name, &aStaticID, &aDesc, &a.HasDiscoveryZip, &arch, &aFinal, &a.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, types.ErrNotFound
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if vStaticID.Valid {
+		v.StaticID = &vStaticID.String
+	}
+	if aStaticID.Valid {
+		a.StaticID = &aStaticID.String
 	}
 	if parent.Valid {
 		v.ParentVersionID = &parent.String
@@ -160,17 +174,48 @@ func (r *AgentVersionRepository) ListSubAgentBindings(ctx context.Context, versi
 
 // Deploy promotes versionID to DEPLOYED, demoting any other DEPLOYED version of
 // the same agent. Returns the previously-deployed version ID (or nil).
+// Refuses with ErrAgentNotDeployable when the version is not READY and with
+// ErrUnmappedEndpoints when the agent's architecture has an unwired endpoint.
 func (r *AgentVersionRepository) Deploy(ctx context.Context, versionID string) (*string, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	prev, err := deployTx(ctx, tx, versionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return prev, nil
+}
 
-	var status, agentID string
-	err = tx.QueryRowContext(ctx,
-		`SELECT status, agent_id::text FROM agent_versions WHERE id = $1`, versionID,
-	).Scan(&status, &agentID)
+// deployTx is Deploy inside the caller's transaction; the commit is the
+// caller's. It locks the agent row first (agent rows before version rows), so
+// concurrent deploys of one agent serialise. An already-DEPLOYED version is a
+// no-op returning (nil, nil) and runs no checks; otherwise the version must be
+// READY and every endpoint of the agent's architecture must be mapped.
+func deployTx(ctx context.Context, q sqlQueryer, versionID string) (prev *string, err error) {
+	var agentID string
+	err = q.QueryRowContext(ctx,
+		`SELECT agent_id::text FROM agent_versions WHERE id = $1`, versionID,
+	).Scan(&agentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, types.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := lockAgent(ctx, q, agentID); err != nil {
+		return nil, err
+	}
+	// Re-read the status under the agent lock.
+	var status string
+	err = q.QueryRowContext(ctx,
+		`SELECT status FROM agent_versions WHERE id = $1`, versionID,
+	).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, types.ErrNotFound
 	}
@@ -178,16 +223,16 @@ func (r *AgentVersionRepository) Deploy(ctx context.Context, versionID string) (
 		return nil, err
 	}
 	if status == string(types.AgentStatusDeployed) {
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
 		return nil, nil
 	}
 	if status != string(types.AgentStatusReady) {
 		return nil, types.ErrAgentNotDeployable
 	}
+	if err := checkEndpointsMapped(ctx, q, agentID); err != nil {
+		return nil, err
+	}
 	var prevID sql.NullString
-	err = tx.QueryRowContext(ctx, `
+	err = q.QueryRowContext(ctx, `
 		UPDATE agent_versions SET status = 'READY', updated_at = now()
 		WHERE agent_id = $1 AND status = 'DEPLOYED' AND id != $2
 		RETURNING id::text
@@ -195,18 +240,81 @@ func (r *AgentVersionRepository) Deploy(ctx context.Context, versionID string) (
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("demote previous: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx,
+	if _, err := q.ExecContext(ctx,
 		`UPDATE agent_versions SET status='DEPLOYED', updated_at = now() WHERE id = $1`, versionID,
 	); err != nil {
 		return nil, fmt.Errorf("promote target: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 	if prevID.Valid {
 		return &prevID.String, nil
 	}
 	return nil, nil
+}
+
+// checkEndpointsMapped returns ErrUnmappedEndpoints (wrapped with the missing
+// endpoint ids) if the agent's architecture has any tools[].id that isn't
+// present in agent_endpoint_backend for this agent. Returns nil when every
+// endpoint is mapped, or when the agent has no architecture yet (not
+// finalized — the READY precondition rejects such versions on its own).
+func checkEndpointsMapped(ctx context.Context, q sqlQueryer, agentID string) error {
+	var arch []byte
+	err := q.QueryRowContext(ctx, `SELECT architecture FROM agents WHERE id = $1::uuid`, agentID).Scan(&arch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if len(arch) == 0 {
+		return nil
+	}
+
+	// Minimal local shape: we only need the endpoint ids.
+	var snap struct {
+		Tools []struct {
+			ID string `json:"id"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(arch, &snap); err != nil {
+		// Malformed architecture is an internal error, not a deploy-
+		// validation failure. Let it surface as 500.
+		return err
+	}
+	if len(snap.Tools) == 0 {
+		return nil // nothing to map
+	}
+
+	rows, err := q.QueryContext(ctx,
+		`SELECT endpoint_id FROM agent_endpoint_backend WHERE agent_id = $1::uuid`, agentID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	mapped := map[string]bool{}
+	for rows.Next() {
+		var eid string
+		if err := rows.Scan(&eid); err != nil {
+			return err
+		}
+		mapped[eid] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	var missing []string
+	for _, t := range snap.Tools {
+		if t.ID == "" {
+			continue
+		}
+		if !mapped[t.ID] {
+			missing = append(missing, t.ID)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: %s", types.ErrUnmappedEndpoints, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // Undeploy demotes the version to READY.
@@ -257,10 +365,14 @@ func (r *AgentVersionRepository) CurrentDeployedID(ctx context.Context, agentID 
 // (frozen on first land via finalized_at) and the version-level prompts,
 // in a single transaction. Sets the version status to READY.
 //
-// force=false rejects a re-land when prompts are already non-default,
-// preserving the "bundle already set" contract that callers depend on.
-// force=true overwrites prompts unconditionally and re-stamps architecture
-// on the parent agent (dev seed escape hatch).
+// It is the one writer allowed on a PENDING version. force=false accepts only
+// PENDING versions and rejects a re-land when prompts are already non-default
+// (ErrBundleAlreadySet). force=true (dev seed escape hatch) also accepts
+// INITIALIZING and overwrites prompts unconditionally. Any other status is
+// ErrVersionLocked. A finalized architecture is never rewritten, with or
+// without force.
+//
+// Lock order: the agent row FOR UPDATE, then the version row.
 func (r *AgentVersionRepository) LandBundle(ctx context.Context, versionID string, bundleJSON []byte, force bool) error {
 	archJSON, promptsJSON, err := types.SplitBundle(bundleJSON)
 	if err != nil {
@@ -274,29 +386,50 @@ func (r *AgentVersionRepository) LandBundle(ctx context.Context, versionID strin
 	defer func() { _ = tx.Rollback() }()
 
 	var agentID string
-	var promptsEmpty bool
-	err = tx.QueryRowContext(ctx, `
-		SELECT agent_id::text, (prompts IS NULL OR prompts::text = '{}'::jsonb::text)
-		FROM agent_versions WHERE id = $1
-	`, versionID).Scan(&agentID, &promptsEmpty)
+	err = tx.QueryRowContext(ctx, `SELECT agent_id::text FROM agent_versions WHERE id = $1`, versionID).Scan(&agentID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return types.ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
+	var finalized bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT finalized_at IS NOT NULL FROM agents WHERE id = $1 FOR UPDATE`, agentID,
+	).Scan(&finalized); err != nil {
+		return fmt.Errorf("lock agent: %w", err)
+	}
+
+	var status string
+	var promptsEmpty bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT status, (prompts IS NULL OR prompts::text = '{}'::jsonb::text)
+		FROM agent_versions WHERE id = $1 FOR UPDATE
+	`, versionID).Scan(&status, &promptsEmpty)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	landable := status == string(types.AgentStatusPending) ||
+		(force && status == string(types.AgentStatusInitializing))
+	if !landable {
+		return types.ErrVersionLocked
+	}
 	if !force && !promptsEmpty {
 		return types.ErrBundleAlreadySet
 	}
 
-	// Architecture is frozen on first land; finalized_at gets stamped iff null.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE agents
-		SET architecture = $2::jsonb,
-		    finalized_at = COALESCE(finalized_at, now())
-		WHERE id = $1
-	`, agentID, archJSON); err != nil {
-		return fmt.Errorf("write architecture: %w", err)
+	// Architecture is frozen on first land: written and stamped only while
+	// finalized_at is null.
+	if !finalized {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE agents SET architecture = $2::jsonb, finalized_at = now()
+			WHERE id = $1
+		`, agentID, archJSON); err != nil {
+			return fmt.Errorf("write architecture: %w", err)
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx, `
@@ -310,41 +443,91 @@ func (r *AgentVersionRepository) LandBundle(ctx context.Context, versionID strin
 	return tx.Commit()
 }
 
-// SetPrompts overwrites the version's prompts row (no agent-level effect).
-// Used by the prompts editor's "save creates new version" flow — the new
-// version is inserted with the edited prompts in one step rather than via
-// this method, but exposing it keeps the data layer symmetrical.
-func (r *AgentVersionRepository) SetPrompts(ctx context.Context, versionID string, promptsJSON []byte) error {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE agent_versions SET prompts = $2::jsonb, updated_at = now() WHERE id = $1
-	`, versionID, promptsJSON)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
+// lockAgent locks the agent row FOR UPDATE. ErrNotFound when the agent does
+// not exist. Lock order everywhere: agent rows before version rows.
+func lockAgent(ctx context.Context, q sqlQueryer, agentID string) error {
+	var locked string
+	err := q.QueryRowContext(ctx, `SELECT id::text FROM agents WHERE id = $1::uuid FOR UPDATE`, agentID).Scan(&locked)
+	if errors.Is(err, sql.ErrNoRows) {
 		return types.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock agent: %w", err)
 	}
 	return nil
 }
 
+// lockAgentTip locks the agent row FOR UPDATE and returns the agent's tip:
+// the version no other version names as its parent_version_id (at most one,
+// by UNIQUE (parent_version_id)). Returns "" when the agent has no versions,
+// ErrNotFound when the agent does not exist. Every path that appends a
+// version takes this lock first (agent rows before version rows), so two
+// concurrent appends cannot claim the same tip.
+func lockAgentTip(ctx context.Context, q sqlQueryer, agentID string) (tipID string, err error) {
+	if err := lockAgent(ctx, q, agentID); err != nil {
+		return "", err
+	}
+	rows, err := q.QueryContext(ctx, `
+		SELECT v.id::text FROM agent_versions v
+		WHERE v.agent_id = $1::uuid
+		  AND NOT EXISTS (SELECT 1 FROM agent_versions c WHERE c.parent_version_id = v.id)
+	`, agentID)
+	if err != nil {
+		return "", fmt.Errorf("read tip: %w", err)
+	}
+	defer rows.Close()
+	var tips []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		tips = append(tips, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	switch len(tips) {
+	case 0:
+		return "", nil
+	case 1:
+		return tips[0], nil
+	default:
+		return "", fmt.Errorf("agent %s has %d tip versions; version chain is broken", agentID, len(tips))
+	}
+}
+
 // insertVersionFromPromptsTx inserts a new agent_versions row inside an
-// existing transaction. Copies MCP attachments, the agent-tool flag and
-// sub-agent bindings forward. Returns the new id.
+// existing transaction, appended at the agent's tip: parent_version_id is the
+// current tip, not sourceVersionID. Content (MCP attachments, the agent-tool
+// flag and sub-agent bindings) is copied from sourceVersionID; the prompts
+// are the submitted ones. Returns the new id.
 // Extracted so training-session Complete can bundle version-creation + session
 // state update in one transaction. Public callers use CreateVersionFromPrompts.
-func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context, tx *sql.Tx, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
-	// FOR SHARE on the parent row: agent-tool config writes take FOR NO KEY
-	// UPDATE on it (SubAgentRepository.lockVersions), so holding the share
-	// lock until commit keeps the flag and bindings copied below from one
-	// consistent point — a concurrent toggle/AddBinding waits for the fork.
+func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context, tx *sql.Tx, sourceVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
 	var agentID string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT agent_id::text FROM agent_versions WHERE id = $1 FOR SHARE`, parentVersionID,
+		`SELECT agent_id::text FROM agent_versions WHERE id = $1`, sourceVersionID,
 	).Scan(&agentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", types.ErrNotFound
+		}
+		return "", err
+	}
+
+	// Agent row first (serialises appends on this agent), then the source
+	// version FOR SHARE: agent-tool config writes take FOR NO KEY UPDATE on
+	// it (SubAgentRepository.lockVersions), so holding the share lock until
+	// commit keeps the flag and bindings copied below from one consistent
+	// point — a concurrent toggle/AddBinding waits for the fork.
+	tipID, err := lockAgentTip(ctx, tx, agentID)
+	if err != nil {
+		return "", err
+	}
+	var locked string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id::text FROM agent_versions WHERE id = $1 FOR SHARE`, sourceVersionID,
+	).Scan(&locked); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", types.ErrNotFound
 		}
@@ -356,7 +539,7 @@ func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context,
 		INSERT INTO agent_versions (agent_id, parent_version_id, status, prompts)
 		VALUES ($1::uuid, $2::uuid, $3::text, $4::jsonb)
 		RETURNING id::text
-	`, agentID, parentVersionID, string(status), promptsJSON).Scan(&newID); err != nil {
+	`, agentID, tipID, string(status), promptsJSON).Scan(&newID); err != nil {
 		return "", fmt.Errorf("insert new version: %w", err)
 	}
 
@@ -365,7 +548,7 @@ func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context,
 		SELECT $2::uuid, backend_id, note
 		FROM agent_version_mcp_backend
 		WHERE agent_version_id = $1::uuid
-	`, parentVersionID, newID); err != nil {
+	`, sourceVersionID, newID); err != nil {
 		return "", fmt.Errorf("copy mcp attachments: %w", err)
 	}
 
@@ -376,7 +559,7 @@ func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context,
 		UPDATE agent_versions
 		SET agent_tool_enabled = (SELECT agent_tool_enabled FROM agent_versions WHERE id = $1::uuid)
 		WHERE id = $2::uuid
-	`, parentVersionID, newID); err != nil {
+	`, sourceVersionID, newID); err != nil {
 		return "", fmt.Errorf("copy agent tool flag: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -384,35 +567,37 @@ func (r *AgentVersionRepository) insertVersionFromPromptsTx(ctx context.Context,
 		SELECT $2::uuid, target_version_id, name, note
 		FROM agent_version_subagent
 		WHERE caller_version_id = $1::uuid
-	`, parentVersionID, newID); err != nil {
+	`, sourceVersionID, newID); err != nil {
 		return "", fmt.Errorf("copy sub-agent bindings: %w", err)
 	}
 
 	return newID, nil
 }
 
-// CreateVersionFromPrompts forks a new agent_versions row from the parent
+// CreateVersionFromPrompts forks a new agent_versions row from the source
 // version. The new row carries the submitted prompts and is created with the
 // caller-supplied status — SavePrompts passes AgentStatusDraft (the user may
 // still iterate before deploying) and LandPrompts passes AgentStatusReady
 // (training is a supervised, y/N-gated action that already scored the bundle).
-// parent_version_id links the version chain; agent_id stays the same
-// (architecture is shared agent-wide).
+// The new row is appended at the agent's tip: parent_version_id is the
+// previous version in the agent's history, which differs from the source when
+// forking from an older version. agent_id stays the same (architecture is
+// shared agent-wide).
 //
 // MCP attachments, the agent-tool flag and sub-agent bindings are copied
-// forward in the same transaction so the new version inherits its
-// predecessor's per-version wiring without manual re-attachment.
+// from the source in the same transaction so the new version inherits its
+// per-version wiring without manual re-attachment.
 // Endpoint→backend wiring is agent-keyed and doesn't need copying.
 //
 // Returns the new version's id.
-func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, parentVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
+func (r *AgentVersionRepository) CreateVersionFromPrompts(ctx context.Context, sourceVersionID string, promptsJSON []byte, status types.AgentStatus) (string, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	newID, err := r.insertVersionFromPromptsTx(ctx, tx, parentVersionID, promptsJSON, status)
+	newID, err := r.insertVersionFromPromptsTx(ctx, tx, sourceVersionID, promptsJSON, status)
 	if err != nil {
 		return "", err
 	}
@@ -523,25 +708,45 @@ func (r *AgentVersionRepository) GetFlowMapConfig(ctx context.Context, versionID
 	return cfg, parseErr.String, nil
 }
 
-// UpdateFlowMapConfig overwrites this version's config in place. (Future:
-// when the FE enables edits, this should spawn a new version. Out of scope
-// for now.)
+// UpdateFlowMapConfig overwrites this version's config in place. Only the
+// root version while it is INITIALIZING is writable; any other version is
+// ErrVersionLocked.
 func (r *AgentVersionRepository) UpdateFlowMapConfig(ctx context.Context, versionID string, cfg []byte) error {
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE agent_versions SET flow_map_config = $2, flow_map_parse_error = NULL, updated_at = now() WHERE id = $1`,
-		versionID, cfg,
-	)
+	return r.writeRootFlowMapConfig(ctx, `id = $1::uuid`, versionID, cfg)
+}
+
+// writeRootFlowMapConfig locks the version matched by where ($1 = key), and
+// writes cfg iff it is the agent's root and INITIALIZING (ErrVersionLocked
+// otherwise, ErrNotFound when no row matches). where is a trusted constant.
+func (r *AgentVersionRepository) writeRootFlowMapConfig(ctx context.Context, where, key string, cfg []byte) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
+	defer func() { _ = tx.Rollback() }()
+
+	var id, status string
+	var isRoot bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT id::text, status, parent_version_id IS NULL
+		FROM agent_versions WHERE `+where+` FOR UPDATE
+	`, key).Scan(&id, &status, &isRoot)
+	if errors.Is(err, sql.ErrNoRows) {
 		return types.ErrNotFound
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	if !isRoot || status != string(types.AgentStatusInitializing) {
+		return types.ErrVersionLocked
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE agent_versions SET flow_map_config = $2, flow_map_parse_error = NULL, updated_at = now() WHERE id = $1::uuid`,
+		id, cfg,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetVersionNum returns the version's ordinal within its chain (1 = oldest,
@@ -590,22 +795,23 @@ func (r *AgentVersionRepository) GetRootVersion(ctx context.Context, agentID str
 // UpdateFlowMapConfigForAgent writes flow_map_config to the agent's root
 // version (parent_version_id IS NULL). Companion of GetFlowMapConfigForAgent
 // so agent-scoped architecture edit handlers don't need to resolve the
-// version_id upfront.
+// version_id upfront. Same guard as UpdateFlowMapConfig: the root must be
+// INITIALIZING.
 func (r *AgentVersionRepository) UpdateFlowMapConfigForAgent(ctx context.Context, agentID string, cfg []byte) error {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE agent_versions
-		SET flow_map_config = $2, flow_map_parse_error = NULL, updated_at = now()
-		WHERE agent_id = $1::uuid AND parent_version_id IS NULL
-	`, agentID, cfg)
-	if err != nil {
-		return err
+	return r.writeRootFlowMapConfig(ctx, `agent_id = $1::uuid AND parent_version_id IS NULL`, agentID, cfg)
+}
+
+// ResolveID maps ref — a UUID (dashed or 32-hex, any case) or a static ID —
+// to the stored lower-case dashed UUID. Unknown refs yield types.ErrNotFound.
+func (r *AgentVersionRepository) ResolveID(ctx context.Context, ref string) (string, error) {
+	col := "static_id"
+	if staticid.IsUUID(ref) {
+		col, ref = "id", strings.ToLower(ref)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
+	var id string
+	err := r.db.QueryRowContext(ctx, `SELECT id::text FROM agent_versions WHERE `+col+` = $1`, ref).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", types.ErrNotFound
 	}
-	if n == 0 {
-		return types.ErrNotFound
-	}
-	return nil
+	return id, err
 }

@@ -11,8 +11,9 @@
 # Usage:
 #   scripts/generate_alpha.sh <version_id> [--force] [--keep]
 #
-#   --force  pass through to seed_bundle.py — overwrite prompts even if
-#            already populated on this version (dev escape hatch).
+#   --force  pass through to seed_bundle.py — also accept an INITIALIZING
+#            version and overwrite prompts even if already populated (dev
+#            escape hatch). Never lands on READY/TRAINING/DEPLOYED/DRAFT.
 #   --keep   keep the tempdir with config.yaml + bundle.yaml for inspection.
 #
 # Env:

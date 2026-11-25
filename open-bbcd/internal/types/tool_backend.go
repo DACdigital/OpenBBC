@@ -13,12 +13,13 @@ const (
 )
 
 type ToolBackend struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Kind      ToolBackendKind `json:"kind"`
-	Config    json.RawMessage `json:"config"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID            string          `json:"id"`
+	Name          string          `json:"name"`
+	Kind          ToolBackendKind `json:"kind"`
+	Config        json.RawMessage `json:"config"`
+	ManagedBySeed bool            `json:"managed_by_seed"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 type HTTPBackendConfig struct {

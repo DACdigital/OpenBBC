@@ -159,6 +159,25 @@ func (r *SubAgentRepository) SetAgentToolEnabled(ctx context.Context, callerID s
 
 // AddBinding pins targetID under name on the caller version.
 func (r *SubAgentRepository) AddBinding(ctx context.Context, callerID, name, targetID, note string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := addBindingTx(ctx, tx, callerID, name, targetID, note, false); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// addBindingTx pins targetID under name on the caller version inside tx; the
+// commit is the caller's. It locks caller and target (ascending id) and runs
+// every binding check: name, self-binding, caller writable, tool-name
+// collision, target runnable and the whole-graph cycle walk. allowReadyCaller
+// skips only the caller-writable check: the seed import binds READY versions
+// it created in the same transaction (the one sanctioned exception to
+// "only INITIALIZING/DRAFT callers bind"); every other check still runs.
+func addBindingTx(ctx context.Context, tx *sql.Tx, callerID, name, targetID, note string, allowReadyCaller bool) error {
 	if name == "" {
 		return types.ErrNameRequired
 	}
@@ -171,11 +190,15 @@ func (r *SubAgentRepository) AddBinding(ctx context.Context, callerID, name, tar
 		return types.ErrTopologyCycle
 	}
 
-	tx, statuses, err := r.beginCallerWrite(ctx, callerID, targetID)
+	statuses, err := lockVersions(ctx, tx, callerID, targetID)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	if !allowReadyCaller {
+		if err := checkCallerWritable(ctx, tx, callerID, statuses[callerID]); err != nil {
+			return err
+		}
+	}
 
 	if err := checkNoCollision(ctx, tx, callerID); err != nil {
 		return err
@@ -184,10 +207,11 @@ func (r *SubAgentRepository) AddBinding(ctx context.Context, callerID, name, tar
 		return types.ErrTargetNotRunnable
 	}
 
-	// Defence in depth: under the status rules a writable caller has no
-	// incoming edges (only READY/DEPLOYED versions can be targets), so the
-	// caller can never be reachable from the target. UNION (not UNION ALL)
-	// makes the walk terminate even over raw cyclic fixtures.
+	// Walk the whole graph from the target: binding caller→target closes a
+	// cycle iff the caller is reachable from the target. Under the status
+	// rules a writable caller has no incoming edges, but a READY caller
+	// (allowReadyCaller) can, so this walk is load-bearing there. UNION (not
+	// UNION ALL) makes the walk terminate even over raw cyclic fixtures.
 	var cycle bool
 	if err := tx.QueryRowContext(ctx, `
 		WITH RECURSIVE reach(id) AS (
@@ -209,7 +233,7 @@ func (r *SubAgentRepository) AddBinding(ctx context.Context, callerID, name, tar
 	`, callerID, targetID, name, note); err != nil {
 		return translateBindingInsertErr(err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 // bindingNameCheck is the auto-generated name of the CHECK on

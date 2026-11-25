@@ -21,12 +21,14 @@ type DeployedSessionReader interface {
 // Registered only when the artifact registry is enabled.
 type DeployedArtifactHandler struct {
 	agents   DeployedAgentReader
+	resolver idResolver
 	sessions DeployedSessionReader
 	svc      *artifactService
 }
 
 func NewDeployedArtifactHandler(
 	agents DeployedAgentReader,
+	resolver idResolver,
 	sessions DeployedSessionReader,
 	rows SessionArtifactStore,
 	registry *artifacts.Registry,
@@ -37,7 +39,7 @@ func NewDeployedArtifactHandler(
 		logger = slog.Default()
 	}
 	return &DeployedArtifactHandler{
-		agents: agents, sessions: sessions,
+		agents: agents, resolver: resolver, sessions: sessions,
 		svc: &artifactService{rows: rows, registry: registry, maxUploadMB: maxUploadMB,
 			maxPending: maxPending, logger: logger},
 	}
@@ -57,11 +59,14 @@ func (h *DeployedArtifactHandler) Register(mux *http.ServeMux) {
 // a missing user_id is 400.
 func (h *DeployedArtifactHandler) guard(next func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		agentID := r.PathValue("agent_id")
+		agentID, ok := resolvePathID(w, r, h.resolver, "agent_id")
+		if !ok {
+			return
+		}
 		sessionID := r.PathValue("session_id")
 		// Malformed ids would reach Postgres as invalid uuid input (500 leaking
 		// driver text); treat them as not found.
-		if !validUUID(agentID) || !validUUID(sessionID) {
+		if !validUUID(sessionID) {
 			Error(w, types.ErrNotFound)
 			return
 		}

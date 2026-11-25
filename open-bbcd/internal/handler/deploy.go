@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -12,32 +11,26 @@ import (
 
 // DeployAgentRepository is the narrow per-agent dependency.
 type DeployAgentRepository interface {
+	ResolveID(ctx context.Context, ref string) (string, error)
 	GetByID(ctx context.Context, agentID string) (*types.Agent, error)
 }
 
 // DeployVersionRepository is the narrow per-version dependency.
 type DeployVersionRepository interface {
+	ResolveID(ctx context.Context, ref string) (string, error)
 	GetByID(ctx context.Context, versionID string) (*types.AgentVersion, error)
 	Deploy(ctx context.Context, versionID string) (*string, error)
 	Undeploy(ctx context.Context, versionID string) error
 	CurrentDeployedID(ctx context.Context, agentID string) (string, error)
 }
 
-// DeployWiringRepo is the narrow wiring-repo interface DeployHandler needs.
-// Implemented by *repository.AgentWiringRepository — endpoint→backend
-// wiring is agent-keyed (post-017).
-type DeployWiringRepo interface {
-	ListEndpointBackends(ctx context.Context, agentID string) (map[string]string, error)
-}
-
 type DeployHandler struct {
 	agents   DeployAgentRepository
 	versions DeployVersionRepository
-	wiring   DeployWiringRepo
 }
 
-func NewDeployHandler(agents DeployAgentRepository, versions DeployVersionRepository, wiring DeployWiringRepo) *DeployHandler {
-	return &DeployHandler{agents: agents, versions: versions, wiring: wiring}
+func NewDeployHandler(agents DeployAgentRepository, versions DeployVersionRepository) *DeployHandler {
+	return &DeployHandler{agents: agents, versions: versions}
 }
 
 type deployBody struct {
@@ -58,7 +51,10 @@ type deployResponse struct {
 // 400 if version_id is missing. 404 if the version doesn't belong to the agent
 // or doesn't exist. 409 if the version is not READY or has unmapped endpoints.
 func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
+	agentID, ok := resolvePathID(w, r, h.agents, "agent_id")
+	if !ok {
+		return
+	}
 	// htmx's hx-vals serializes to urlencoded by default; external API
 	// callers post JSON. Dispatch on Content-Type, defaulting to JSON so
 	// existing curl-style callers that omit the header keep working.
@@ -81,8 +77,14 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the version belongs to this agent before mutating.
-	version, err := h.versions.GetByID(r.Context(), body.VersionID)
+	// version_id may be a UUID or a version static ID; resolve it, then verify
+	// the version belongs to this agent before mutating.
+	versionID, err := h.versions.ResolveID(r.Context(), body.VersionID)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+	version, err := h.versions.GetByID(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -92,13 +94,9 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Block deploy if any endpoint in the agent's architecture is unmapped.
-	if err := h.validateAllEndpointsMapped(r.Context(), version.AgentID); err != nil {
-		Error(w, err)
-		return
-	}
-
-	prev, err := h.versions.Deploy(r.Context(), body.VersionID)
+	// The repository Deploy enforces the READY precondition and the
+	// all-endpoints-mapped check inside its transaction.
+	prev, err := h.versions.Deploy(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -109,7 +107,7 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		Error(w, err)
 		return
 	}
-	updatedVersion, err := h.versions.GetByID(r.Context(), body.VersionID)
+	updatedVersion, err := h.versions.GetByID(r.Context(), versionID)
 	if err != nil {
 		Error(w, err)
 		return
@@ -123,62 +121,13 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// validateAllEndpointsMapped returns ErrUnmappedEndpoints (wrapped with a
-// detail message about which endpoints are missing) if the agent's
-// architecture has any tools[].id that isn't present in
-// agent_endpoint_backend for this agent. Returns nil when every endpoint
-// is mapped.
-func (h *DeployHandler) validateAllEndpointsMapped(ctx context.Context, agentID string) error {
-	agent, err := h.agents.GetByID(ctx, agentID)
-	if err != nil {
-		return err
-	}
-	if len(agent.Architecture) == 0 {
-		// Not finalized yet — the existing flow rejects non-READY versions
-		// with ErrAgentNotDeployable; don't double-error here.
-		return nil
-	}
-
-	// Minimal local shape: we only need the endpoint ids.
-	var snap struct {
-		Tools []struct {
-			ID string `json:"id"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal(agent.Architecture, &snap); err != nil {
-		// Malformed architecture is an internal error, not a deploy-
-		// validation failure. Let it surface as 500.
-		return err
-	}
-
-	if len(snap.Tools) == 0 {
-		return nil // nothing to map
-	}
-
-	mapping, err := h.wiring.ListEndpointBackends(ctx, agentID)
-	if err != nil {
-		return err
-	}
-
-	var missing []string
-	for _, t := range snap.Tools {
-		if t.ID == "" {
-			continue
-		}
-		if _, ok := mapping[t.ID]; !ok {
-			missing = append(missing, t.ID)
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("%w: %s", types.ErrUnmappedEndpoints, strings.Join(missing, ", "))
-	}
-	return nil
-}
-
 // Undeploy handles POST /agents/{agent_id}/undeploy. Takes the currently-
 // deployed version of the agent offline. Returns 409 if nothing is deployed.
 func (h *DeployHandler) Undeploy(w http.ResponseWriter, r *http.Request) {
-	agentID := r.PathValue("agent_id")
+	agentID, ok := resolvePathID(w, r, h.agents, "agent_id")
+	if !ok {
+		return
+	}
 	curID, err := h.versions.CurrentDeployedID(r.Context(), agentID)
 	if err != nil {
 		Error(w, err)

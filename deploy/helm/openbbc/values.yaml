@@ -14,6 +14,16 @@ hostAliases: []
 #    hostnames: ["llm-gateway.example.com"]
 
 # ---------------------------------------------------------------------------
+# Declarative seed: agents / versions / MCP backends imported by open-bbcd at
+# boot (SEED_PATH). See README "Seeding agents". ${VAR} placeholders in the
+# files are resolved from the Secret named by openbbcd.envFromSecret.
+# ---------------------------------------------------------------------------
+seed:
+  enabled: false
+  files: {}              # filename -> YAML string; rendered into a ConfigMap
+  existingConfigMap: ""  # or mount an operator-managed ConfigMap instead
+
+# ---------------------------------------------------------------------------
 # open-bbcd: the Go service (backoffice UI + REST API + deployed agent runtime)
 # ---------------------------------------------------------------------------
 openbbcd:
@@ -81,6 +91,12 @@ openbbcd:
       periodSeconds: 10
       timeoutSeconds: 3
       failureThreshold: 3
+    # Holds liveness/readiness off until /health first succeeds (migrations +
+    # seed import run before the server listens). Budget = failureThreshold *
+    # periodSeconds (default 300s).
+    startup:
+      failureThreshold: 30
+      periodSeconds: 10
 
   podAnnotations: {}
   nodeSelector: {}

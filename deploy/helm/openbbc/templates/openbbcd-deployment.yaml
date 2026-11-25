@@ -19,9 +19,14 @@ spec:
     metadata:
       labels:
         {{- include "openbbc.selectorLabels" (dict "root" . "component" "openbbcd") | nindent 8 }}
-      {{- with .Values.openbbcd.podAnnotations }}
+      {{- if or .Values.openbbcd.podAnnotations (and .Values.seed.enabled .Values.seed.files (not .Values.seed.existingConfigMap)) }}
       annotations:
+        {{- with .Values.openbbcd.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if and .Values.seed.enabled .Values.seed.files (not .Values.seed.existingConfigMap) }}
+        checksum/seed: {{ toYaml .Values.seed.files | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
@@ -55,6 +60,18 @@ spec:
                 secretKeyRef:
                   name: {{ include "openbbc.databaseSecretName" . }}
                   key: {{ include "openbbc.databaseSecretKey" . }}
+            {{- if .Values.seed.enabled }}
+            - name: SEED_PATH
+              value: /etc/openbbc/seed
+            {{- end }}
+          # Startup probe: liveness is held off until /health first succeeds, so it
+          # can't kill the pod during migrations + seed import at boot.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: {{ .Values.openbbcd.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.openbbcd.probes.startup.failureThreshold }}
           livenessProbe:
             httpGet:
               path: /health
@@ -71,8 +88,20 @@ spec:
             periodSeconds: {{ .Values.openbbcd.probes.readiness.periodSeconds }}
             timeoutSeconds: {{ .Values.openbbcd.probes.readiness.timeoutSeconds }}
             failureThreshold: {{ .Values.openbbcd.probes.readiness.failureThreshold }}
+          {{- if .Values.seed.enabled }}
+          volumeMounts:
+            - name: seed
+              mountPath: /etc/openbbc/seed
+              readOnly: true
+          {{- end }}
           resources:
             {{- toYaml .Values.openbbcd.resources | nindent 12 }}
+      {{- if .Values.seed.enabled }}
+      volumes:
+        - name: seed
+          configMap:
+            name: {{ default (printf "%s-seed" (include "openbbc.fullname" .)) .Values.seed.existingConfigMap }}
+      {{- end }}
       {{- with .Values.openbbcd.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

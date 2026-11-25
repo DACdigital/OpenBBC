@@ -31,6 +31,18 @@ func (s *stubDeployedAgentReader) CurrentDeployedID(ctx context.Context, agentID
 	return s.deployedID, s.err
 }
 
+// stubResolver is an identity idResolver that, like the repository, rejects
+// refs that are neither UUID-shaped nor static IDs worth looking up: the unit
+// stubs only know UUID agent ids, so non-UUIDs are a miss (404).
+type stubResolver struct{}
+
+func (stubResolver) ResolveID(ctx context.Context, ref string) (string, error) {
+	if !validUUID(ref) {
+		return "", types.ErrNotFound
+	}
+	return ref, nil
+}
+
 // Real UUID fixtures: end-user deployed routes reject non-UUID path ids.
 const (
 	testAgentID   = "11111111-1111-4111-8111-111111111111"
@@ -126,7 +138,7 @@ func (s *stubDeployedStore) LoadMessages(ctx context.Context, sessionID string) 
 func newDeployedMux(ar DeployedAgentReader, ds DeployedStore, orch TurnRunner, tf transport.Factory) *http.ServeMux {
 	// chat.ChatStore is not used at the handler layer (only constructed-into the orchestrator).
 	// We can pass nil here for tests.
-	h := NewDeployedHandler(ar, ds, nil, orch, tf, testLogger())
+	h := NewDeployedHandler(ar, stubResolver{}, ds, nil, orch, tf, testLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions", h.CreateSession)
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions", h.ListSessions)
@@ -314,7 +326,7 @@ func TestDeployedTurn_ArtifactOnly_Accepted(t *testing.T) {
 func TestDeployedArtifactRoutes_NoPatternConflict(t *testing.T) {
 	d := newDeployedHarness(t, "v1")
 	ds := newStubDeployedStore()
-	h := NewDeployedHandler(&stubDeployedAgentReader{deployedID: "v1"}, ds, nil, &stubTurnRunner{}, jsonl.NewFactory(), testLogger())
+	h := NewDeployedHandler(&stubDeployedAgentReader{deployedID: "v1"}, stubResolver{}, ds, nil, &stubTurnRunner{}, jsonl.NewFactory(), testLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions", h.CreateSession)
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions", h.ListSessions)
@@ -324,7 +336,7 @@ func TestDeployedArtifactRoutes_NoPatternConflict(t *testing.T) {
 	mux.HandleFunc("POST /deployed/{agent_id}/sessions/{session_id}/turn", h.Turn)
 	mux.HandleFunc("GET /deployed/{agent_id}/sessions/{root_id}/children/{child_id}", h.GetChildSession)
 	sessions := newStubDeployedStore()
-	ah := NewDeployedArtifactHandler(&stubDeployedAgentReader{deployedID: "v1"}, sessions, d.rows, buildRegistry(t, d.store), 1, 10, nil)
+	ah := NewDeployedArtifactHandler(&stubDeployedAgentReader{deployedID: "v1"}, stubResolver{}, sessions, d.rows, buildRegistry(t, d.store), 1, 10, nil)
 	ah.Register(mux) // panics on conflict
 }
 

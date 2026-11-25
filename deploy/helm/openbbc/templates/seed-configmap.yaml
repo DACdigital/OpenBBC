@@ -1,0 +1,16 @@
+{{- if and .Values.seed.enabled (not .Values.seed.files) (not .Values.seed.existingConfigMap) }}
+{{- fail "seed.enabled=true needs seed.files or seed.existingConfigMap" }}
+{{- end }}
+{{- if and .Values.seed.enabled (not .Values.seed.existingConfigMap) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openbbc.fullname" . }}-seed
+  labels:
+    {{- include "openbbc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openbbcd
+data:
+  {{- range $name, $content := .Values.seed.files }}
+  {{ $name | quote }}: {{ $content | quote }}
+  {{- end }}
+{{- end }}

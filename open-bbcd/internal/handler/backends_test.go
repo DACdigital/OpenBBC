@@ -15,6 +15,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/DACdigital/OpenBBC/open-bbcd/internal/repository"
+	"github.com/DACdigital/OpenBBC/open-bbcd/internal/types"
 	"github.com/DACdigital/OpenBBC/open-bbcd/web"
 )
 
@@ -545,5 +546,55 @@ func TestBackendsHandler_Delete_InUse_409(t *testing.T) {
 
 	if delW.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body = %s", delW.Code, delW.Body.String())
+	}
+}
+
+func TestBackendsHandler_ManagedBackend_Locked(t *testing.T) {
+	db := openHandlerTestDB(t)
+	h := newTestBackendsHandler(t, db)
+	repo := repository.NewToolBackendRepository(db)
+	be := &types.ToolBackend{Name: "managed", Kind: types.ToolBackendKindHTTPEndpoint,
+		Config: json.RawMessage(`{"base_url":"https://m.example.com"}`)}
+	if err := repo.Create(context.Background(), be); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE tool_backends SET managed_by_seed = true WHERE id = $1`, be.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"name": {"hacked"}, "base_url": {"https://x.example.com"}}
+	req := httptest.NewRequest(http.MethodPost, "/mcp/"+be.ID, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", be.ID)
+	w := httptest.NewRecorder()
+	h.Update(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("Update status = %d, want 409", w.Code)
+	}
+
+	dreq := httptest.NewRequest(http.MethodPost, "/mcp/"+be.ID+"/delete", nil)
+	dreq.SetPathValue("id", be.ID)
+	dw := httptest.NewRecorder()
+	h.Delete(dw, dreq)
+	if dw.Code != http.StatusConflict {
+		t.Fatalf("Delete status = %d, want 409", dw.Code)
+	}
+
+	// List and edit pages show the badge; edit hides Save/Delete.
+	lw := httptest.NewRecorder()
+	h.List(lw, httptest.NewRequest(http.MethodGet, "/mcp", nil))
+	if !strings.Contains(lw.Body.String(), "managed by seed file") {
+		t.Errorf("list missing badge")
+	}
+	ereq := httptest.NewRequest(http.MethodGet, "/mcp/"+be.ID, nil)
+	ereq.SetPathValue("id", be.ID)
+	ew := httptest.NewRecorder()
+	h.Edit(ew, ereq)
+	body := ew.Body.String()
+	if !strings.Contains(body, "managed by seed file") {
+		t.Errorf("edit missing badge")
+	}
+	if strings.Contains(body, "Delete backend") || strings.Contains(body, `class="btn-primary">Save`) {
+		t.Errorf("edit should hide Save/Delete controls")
 	}
 }

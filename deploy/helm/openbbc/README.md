@@ -119,10 +119,79 @@ password. Pin it explicitly for reproducible dry-runs.
 | `aikdmRunner.cronjobs.alphas.schedule` | `*/5 * * * *` | One aikdm LLM call (~30–60s) per finalized version. |
 | `aikdmRunner.cronjobs.evals.schedule` | `*/10 * * * *` | Evals are seconds-per-run. |
 | `aikdmRunner.cronjobs.trainings.schedule` | `*/15 * * * *` | Trainings are minutes-per-epoch. |
+| `seed.enabled` | `false` | Mount a seed ConfigMap at `/etc/openbbc/seed` and set `SEED_PATH`. Needs `seed.files` or `seed.existingConfigMap` (rendering fails otherwise). See "Seeding agents". |
+| `seed.files` | `{}` | filename -> YAML string, rendered into `<release>-openbbc-seed`. Changes roll the pod. |
+| `seed.existingConfigMap` | `""` | Mount an operator-managed ConfigMap instead (needs a manual `kubectl rollout restart`). |
+| `openbbcd.probes.startup` | `failureThreshold: 30`, `periodSeconds: 10` | Startup probe on `/health`; always rendered. |
 | `postgres.enabled` | `true` | For prod, set `false` and use `externalDatabase.url`. |
 | `postgres.auth.password` | `""` | Empty → random on first install, kept via `helm.sh/resource-policy: keep`. |
 | `externalDatabase.url` | `""` | e.g. `postgres://.../openbbcd?sslmode=require`. |
 | `externalDatabase.existingSecret` | `""` | Alternative: reference a pre-existing Secret with key `DATABASE_URL`. |
+
+---
+
+## Seeding agents
+
+open-bbcd can import agents, versions and MCP backends from YAML at boot (after
+migrations, before it serves). The chart wires this up through the `seed:` values.
+
+1. **Export locally** from a running open-bbcd to an `openbbc-seed-v1` file: use the
+   **Export** button on the backoffice version page, or call the API directly:
+
+   ```bash
+   curl -si -X POST http://localhost:8080/agent_versions/<version_id>/export \
+     -H 'Content-Type: application/json' \
+     -d '{"static_ids":{...},"deploy":"if_none"}'
+   ```
+
+   Secrets in the export are `${VAR}` placeholders, not values. The response header
+   `X-Seed-Env-Vars` lists the `${VAR}` names that must be set in the
+   `openbbcd.envFromSecret` Secret (step 3). In CI, run
+   `open-bbcd seed validate --no-env <file>` to check the file and list the variables
+   it needs.
+2. **Put the file in values** under `seed.files` (filename -> YAML string) and enable it:
+
+   ```bash
+   helm upgrade --install openbbc deploy/helm/openbbc -n openbbc \
+     --set seed.enabled=true \
+     --set-file 'seed.files.agents\.yaml'=./agents.yaml
+   ```
+
+   The chart renders a ConfigMap `<release>-openbbc-seed`, mounts it read-only at
+   `/etc/openbbc/seed` and sets `SEED_PATH=/etc/openbbc/seed`.
+3. **Put the `${VAR}` values in the `openbbcd.envFromSecret` Secret** (the existing knob;
+   there is no separate seed Secret). Create that Secret before installing.
+4. **Install.** A `checksum/seed` pod annotation over `seed.files` rolls the pod whenever
+   the seed changes.
+
+To manage the ConfigMap yourself, set `seed.existingConfigMap=<name>` instead of
+`seed.files`. The chart can't checksum a ConfigMap it doesn't own, so after editing it run
+`kubectl -n openbbc rollout restart deploy/<release>-openbbc-openbbcd`.
+
+A `startupProbe` on `/health` (`openbbcd.probes.startup`, default `failureThreshold: 30`,
+`periodSeconds: 10`, i.e. 300s) is always rendered, so liveness can't kill the pod while
+migrations and the seed import run. Raise it for large seeds.
+
+Sharp edges:
+
+- **`force` re-pins the deployed version on every restart.** Each time the pod starts, a
+  version marked `force` is deployed again unless it is already the deployed one, demoting
+  whatever the backoffice deployed since. It only changes which version is deployed; it
+  does not revert backoffice edits to agents or versions.
+- **Backend takeover by name.** A seeded backend of any kind (`mcp_client` or
+  `http_endpoint`) takes over an existing backend with the same name: its config is
+  replaced from the file on every boot, and it is marked seed-managed (read-only in the
+  backoffice).
+- **Boot fails, nothing is imported** when a `${VAR}` has no key in the Secret, when a
+  deploy the seed performs hits an endpoint tool with no backend wired, or when a version's
+  static ID already exists with different content and the file marks it for deploy
+  (`if_none` or `force`). New content needs a new static ID.
+- **Default static IDs can collide across clusters.** The export defaults to `<agent>` and
+  `<agent>_v<N>`, which another cluster may already use for something else. Choose explicit
+  static IDs in the export dialog (or `static_ids`) for anything you ship to clients.
+- **URLs are exported as-is.** Backend URLs reach the target environment unchanged; edit
+  them in the seed file if staging and production differ.
+- Resources removed from the seed are never deleted on boot.
 
 ---
 

@@ -129,7 +129,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 			cancel()
 			artifactRegistry = reg
 			artifactHandler = NewArtifactHandler(chatRepo, chatRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
-			deployedArtifactHandler = NewDeployedArtifactHandler(versionRepo, deployedRepo, deployedRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
+			deployedArtifactHandler = NewDeployedArtifactHandler(versionRepo, agentRepo, deployedRepo, deployedRepo, reg, cfg.Artifacts.MaxUploadMB, cfg.Artifacts.MaxPending, logger)
 			logger.Info("artifacts: registry hydrated",
 				slog.Int("stores", len(reg.IDs())),
 				slog.String("default", reg.DefaultID()),
@@ -151,6 +151,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 		fatal("init configurator handler", err)
 	}
 	configuratorHandler.WithSubAgents(repository.NewSubAgentRepository(db))
+	configuratorHandler.WithSeedExportPreview(repository.NewSeedRepository(db))
 
 	agentDetailHandler, err := NewAgentDetailHandler(
 		&agentDetailStoreAdapter{agents: agentRepo, versions: versionRepo},
@@ -262,9 +263,9 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 			WithArtifactUploader(artifactUploader{registry: artifactRegistry})
 	}
 
-	deployedHandler := NewDeployedHandler(versionRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger).
+	deployedHandler := NewDeployedHandler(versionRepo, agentRepo, deployedRepo, deployedChatStore, deployedOrchestrator, transportFactory, logger).
 		WithClientContextMaxBytes(cfg.Chat.ClientContextMaxBytes)
-	deployHandler := NewDeployHandler(agentRepo, versionRepo, agentWiringRepo)
+	deployHandler := NewDeployHandler(agentRepo, versionRepo)
 
 	mux := http.NewServeMux()
 
@@ -297,6 +298,7 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	mux.HandleFunc("POST /agent_versions/{version_id}/architecture/mcp/notes", configuratorHandler.UpdateAllMCPNotes)
 	mux.HandleFunc("GET /agent_versions/{version_id}/delete-confirm", configuratorHandler.DeleteConfirm)
 	mux.HandleFunc("POST /agent_versions/{version_id}/delete", configuratorHandler.Delete)
+	mux.HandleFunc("GET /agent_versions/{version_id}/export-modal", configuratorHandler.ExportModal)
 	// Convenience alias under the new top-level "MCP" version tab.
 	mux.HandleFunc("GET /agent_versions/{version_id}/configure/mcp", configuratorHandler.MCPSubtab)
 	// Agents tab: agent tool toggle + sub-agent bindings. Writes answer with
@@ -382,6 +384,10 @@ func newAPI(db *sql.DB, cfg *config.Config, logger *slog.Logger, llmClient llm.L
 	// to find PENDING versions awaiting bundle generation).
 	agentVersionHandler := NewAgentVersionHandler(versionRepo)
 	mux.HandleFunc("GET /agent_versions.json", agentVersionHandler.ListJSON)
+
+	// Declarative seed export (static IDs accepted in the path).
+	seedExportHandler := NewSeedExportHandler(versionRepo, repository.NewSeedRepository(db))
+	mux.HandleFunc("POST /agent_versions/{version_id}/export", seedExportHandler.Export)
 
 	// Evals — JSON script surface.
 	mux.HandleFunc("POST /agent_versions/{version_id}/evals", evalHandler.Create)

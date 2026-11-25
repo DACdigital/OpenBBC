@@ -17,12 +17,16 @@ Splits the bundle into:
     agent_versions.prompts ← main_prompt + per-skill prompts
 
 The split must match types.SplitBundle in open-bbcd (kept in lockstep).
-Sets agents.finalized_at = now() on first land. Sets the version's status
+Sets agents.architecture and agents.finalized_at = now() on first land. Sets the version's status
 to 'READY'.
 
-Without --force, refuses to re-land when prompts have already been written
-on this version (avoids accidental overwrites of edited prompts). With
---force, overwrites unconditionally (dev escape hatch).
+Without --force, lands only on a PENDING version and refuses to re-land when
+prompts have already been written on it (avoids accidental overwrites of
+edited prompts). With --force, also accepts an INITIALIZING version and
+overwrites prompts unconditionally (dev escape hatch). Any other status is
+refused, even with --force: versions are immutable once they leave
+INITIALIZING/DRAFT. agents.architecture is never rewritten once finalized_at
+is set.
 """
 
 import argparse
@@ -70,7 +74,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version-id", required=True, help="UUID of the agent_versions row to seed")
     p.add_argument("--bundle", required=True, help="Path to bundle YAML file")
-    p.add_argument("--force", action="store_true", help="Overwrite even when prompts already set")
+    p.add_argument("--force", action="store_true", help="Also accept INITIALIZING versions and overwrite prompts already set")
     args = p.parse_args()
 
     dsn = os.environ.get("DATABASE_URL")
@@ -94,32 +98,50 @@ def main() -> int:
 
     try:
         with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-            # Resolve the version → agent and check whether prompts are
-            # already populated. The check mirrors types.SplitBundle's
-            # contract enforced by AgentVersionRepository.LandBundle in Go.
+            # Resolve the version → agent and check status + prompts. The
+            # rules mirror AgentVersionRepository.LandBundle in Go: lock the
+            # agent row first, then the version row (global lock order).
             cur.execute(
-                "SELECT agent_id::text, "
-                "(prompts IS NULL OR prompts::text = '{}'::jsonb::text) "
-                "FROM agent_versions WHERE id = %s::uuid",
+                "SELECT agent_id::text FROM agent_versions WHERE id = %s::uuid",
                 (args.version_id,),
             )
             row = cur.fetchone()
             if not row:
                 print("error: version not found", file=sys.stderr)
                 return 1
-            agent_id, prompts_empty = row
+            (agent_id,) = row
+            cur.execute(
+                "SELECT finalized_at IS NOT NULL FROM agents WHERE id = %s::uuid FOR UPDATE",
+                (agent_id,),
+            )
+            (finalized,) = cur.fetchone()
+            cur.execute(
+                "SELECT status, (prompts IS NULL OR prompts::text = '{}'::jsonb::text) "
+                "FROM agent_versions WHERE id = %s::uuid FOR UPDATE",
+                (args.version_id,),
+            )
+            status, prompts_empty = cur.fetchone()
+            allowed = ("INITIALIZING", "PENDING") if args.force else ("PENDING",)
+            if status not in allowed:
+                print(
+                    f"error: version is {status}; landing requires "
+                    f"{' or '.join(allowed)} (versions are immutable once they "
+                    "leave INITIALIZING/DRAFT)",
+                    file=sys.stderr,
+                )
+                return 1
             if not prompts_empty and not args.force:
                 print("error: prompts already set; use --force to overwrite", file=sys.stderr)
                 return 1
 
-            # Architecture is frozen on first land; finalized_at is stamped
-            # iff null. Re-landing with --force re-stamps architecture and
-            # leaves finalized_at unchanged (still the first-land time).
-            cur.execute(
-                "UPDATE agents SET architecture = %s::jsonb, "
-                "finalized_at = COALESCE(finalized_at, now()) WHERE id = %s::uuid",
-                (arch_json, agent_id),
-            )
+            # Architecture is frozen on first land: written and finalized_at
+            # stamped only while finalized_at is null, even with --force.
+            if not finalized:
+                cur.execute(
+                    "UPDATE agents SET architecture = %s::jsonb, "
+                    "finalized_at = now() WHERE id = %s::uuid",
+                    (arch_json, agent_id),
+                )
             cur.execute(
                 "UPDATE agent_versions SET prompts = %s::jsonb, status = 'READY', "
                 "updated_at = now() WHERE id = %s::uuid",
